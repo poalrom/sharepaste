@@ -1,8 +1,6 @@
-//! Sharepaste desktop client library crate.
-//!
-//! Houses the Rust core (`core::*`) plus the Tauri command + event surface so
-//! integration tests can use it without going through the binary.
-
+pub mod config;
+pub mod errors;
+pub mod logging;
 pub mod core;
 
 pub fn run() {
