@@ -5,3 +5,8 @@ coverage/
 .env
 .env.*
 .superpowers/
+clients/desktop/src-tauri/target/
+clients/desktop/src-tauri/gen/
+clients/desktop/ui/dist/
+clients/desktop/ui/node_modules/
+clients/desktop/node_modules/
