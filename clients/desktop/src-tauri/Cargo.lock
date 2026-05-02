@@ -3690,6 +3690,8 @@ dependencies = [
  "async-trait",
  "chacha20poly1305",
  "clipboard-master",
+ "core-foundation 0.10.1",
+ "core-graphics",
  "data-encoding",
  "dirs 5.0.1",
  "eventsource-stream",

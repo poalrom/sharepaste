@@ -1,8 +1,8 @@
-import { useStatusStore, useUiStore } from "../store";
+import { useStatusStore } from "../store";
+import { cmd } from "../ipc/commands";
 
 export default function Footer({ activeUserId }: { activeUserId: string }) {
   const status = useStatusStore((s) => s.byUser[activeUserId]);
-  const setModal = useUiStore((s) => s.setModal);
   const stateText = status?.state ?? "Disconnected";
   const pending = status?.pending ?? 0;
   return (
@@ -13,8 +13,8 @@ export default function Footer({ activeUserId }: { activeUserId: string }) {
         {status?.last_error ? <span className="ml-2 text-red-400">· {status.last_error}</span> : null}
       </span>
       <span className="space-x-2">
-        <button onClick={() => setModal("accounts")} className="hover:underline">Accounts</button>
-        <button onClick={() => setModal("settings")} className="hover:underline">Settings</button>
+        <button onClick={() => cmd.openModal("accounts")} className="hover:underline">Accounts</button>
+        <button onClick={() => cmd.openModal("settings")} className="hover:underline">Settings</button>
       </span>
     </div>
   );

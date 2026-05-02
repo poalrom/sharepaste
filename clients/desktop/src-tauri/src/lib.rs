@@ -18,7 +18,7 @@ use crate::state::AppState;
 use std::sync::Arc;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
@@ -44,6 +44,9 @@ pub fn launch() {
             build_tray(app, app_state.clone())?;
             build_popover_window(app)?;
             spawn_sync_for_existing_accounts(app.handle().clone(), app_state.clone());
+            #[cfg(target_os = "macos")]
+            spawn_clipboard_capture(app.handle().clone(), app_state.clone());
+            register_initial_hotkey(app.handle().clone(), app_state.clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -63,6 +66,8 @@ pub fn launch() {
             commands::get_settings,
             commands::update_settings,
             commands::get_status,
+            commands::open_modal,
+            commands::hide_popover,
         ])
         .run(tauri::generate_context!())
         .expect("run tauri");
@@ -81,7 +86,7 @@ fn build_tray(app: &mut tauri::App, _state: Arc<AppState>) -> tauri::Result<()> 
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
-                let _ = toggle_popover(app);
+                let _ = toggle_popover(app, None);
             }
             "pair" => {
                 let _ = open_modal(app, "pairing");
@@ -95,43 +100,85 @@ fn build_tray(app: &mut tauri::App, _state: Arc<AppState>) -> tauri::Result<()> 
             _ => {}
         })
         .on_tray_icon_event(|tray, ev| {
-            if matches!(
-                ev,
-                TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                rect,
+                ..
+            } = ev
+            {
+                let app = tray.app_handle();
+                if let Some(state) = app.try_state::<Arc<AppState>>() {
+                    *state.last_tray_rect.lock() = Some(rect);
                 }
-            ) {
-                let _ = toggle_popover(tray.app_handle());
+                let _ = toggle_popover(app, Some(rect));
             }
         })
         .build(app)?;
     Ok(())
 }
 
+const POPOVER_W: f64 = 360.0;
+const POPOVER_H: f64 = 480.0;
+
 fn build_popover_window(app: &mut tauri::App) -> tauri::Result<()> {
-    let _ = WebviewWindowBuilder::new(app, "popover", WebviewUrl::App("popover.html".into()))
+    let win = WebviewWindowBuilder::new(app, "popover", WebviewUrl::App("popover.html".into()))
         .title("sharepaste")
-        .inner_size(360.0, 480.0)
+        .inner_size(POPOVER_W, POPOVER_H)
         .resizable(false)
         .decorations(false)
         .always_on_top(true)
         .visible(false)
         .skip_taskbar(true)
         .build()?;
+    let win_clone = win.clone();
+    win.on_window_event(move |ev| {
+        if let WindowEvent::Focused(false) = ev {
+            let _ = win_clone.hide();
+        }
+    });
     Ok(())
 }
 
-fn toggle_popover(app: &tauri::AppHandle) -> tauri::Result<()> {
-    if let Some(win) = app.get_webview_window("popover") {
-        if win.is_visible().unwrap_or(false) {
-            win.hide()?;
-        } else {
-            win.show()?;
-            win.set_focus()?;
+fn toggle_popover(app: &tauri::AppHandle, tray_rect: Option<tauri::Rect>) -> tauri::Result<()> {
+    let Some(win) = app.get_webview_window("popover") else {
+        return Ok(());
+    };
+    if win.is_visible().unwrap_or(false) {
+        win.hide()?;
+        return Ok(());
+    }
+    let rect = tray_rect
+        .or_else(|| {
+            app.try_state::<Arc<AppState>>()
+                .and_then(|s| *s.last_tray_rect.lock())
+        })
+        .or_else(query_tray_rect);
+    if let Some(rect) = rect {
+        if let Ok(scale) = win.scale_factor() {
+            let pos = rect.position.to_physical::<f64>(scale);
+            let size = rect.size.to_physical::<f64>(scale);
+            let popover_w_phys = POPOVER_W * scale;
+            let x_phys = pos.x + (size.width / 2.0) - (popover_w_phys / 2.0);
+            let y_phys = pos.y + size.height + 4.0;
+            // Move the underlying NSWindow synchronously via
+            // `setFrameTopLeftPoint:` so the move lands before the next
+            // paint. Tauri's set_position dispatches through wry's event
+            // loop and races with show(), causing a one-frame flash at
+            // the previous default location (center of screen).
+            #[cfg(target_os = "macos")]
+            {
+                let x_logical = x_phys / scale;
+                let y_logical = y_phys / scale;
+                set_ns_window_top_left(&win, x_logical, y_logical);
+            }
+            // Also call Tauri's set_position so wry's cached position
+            // matches the actual frame on subsequent operations.
+            let _ = win.set_position(PhysicalPosition::new(x_phys, y_phys));
         }
     }
+    win.show()?;
+    win.set_focus()?;
     Ok(())
 }
 
@@ -318,7 +365,9 @@ pub async fn spawn_sync(app: tauri::AppHandle, state: Arc<AppState>, user_id: St
     let app_for_upload = app.clone();
     let cancel3 = cancel.clone();
     let user_id2 = user_id.clone();
+    let state_for_upload = state.clone();
     tauri::async_runtime::spawn(async move {
+        let state = state_for_upload;
         use crate::core::sync::uploader::{UploadTransport, Uploader, UploaderEvents};
         struct ServerUpload(crate::core::http::ServerClient);
         #[async_trait::async_trait]
@@ -353,6 +402,9 @@ pub async fn spawn_sync(app: tauri::AppHandle, state: Arc<AppState>, user_id: St
             }),
         };
         let trigger = std::sync::Arc::new(tokio::sync::Notify::new());
+        state.upload_triggers
+            .lock()
+            .insert(user_id2.clone(), trigger.clone());
         let up = Uploader {
             user_id: user_id2.clone(),
             conn: conn_for_upload,
@@ -364,6 +416,187 @@ pub async fn spawn_sync(app: tauri::AppHandle, state: Arc<AppState>, user_id: St
         trigger.notify_one();
         up.run(cancel3).await;
     });
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_clipboard_capture(app: tauri::AppHandle, state: Arc<AppState>) {
+    use crate::core::capture::filter::{evaluate, CaptureContext, FilterDecision, PasteboardSniff};
+    use crate::core::capture::macos::{frontmost_bundle_id, NSPasteboardSniffer};
+    use crate::core::capture::watcher;
+
+    let (tx, mut rx) = mpsc::channel::<crate::core::capture::watcher::ClipboardEvent>(32);
+    let watcher_cancel = CancellationToken::new();
+    if let Err(e) = watcher::spawn(tx, watcher_cancel.clone()) {
+        tracing::error!(err = %e, "clipboard watcher failed to start");
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        let sniffer = NSPasteboardSniffer::new();
+        while let Some(_ev) = rx.recv().await {
+            let Some(user_id) = state.registry.active_user_id() else {
+                continue;
+            };
+            let settings = {
+                let conn = state.conn.lock().await;
+                match crate::core::storage::settings::load(&conn) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!(err = %e, "load settings");
+                        continue;
+                    }
+                }
+            };
+            let frontmost = frontmost_bundle_id();
+            let last_self = state.last_self_write.lock().clone();
+            let last_self_ref = last_self
+                .as_ref()
+                .map(|(t, s)| (*t, s.as_str()));
+            let ctx = CaptureContext {
+                capture_enabled: settings.capture_enabled,
+                deny_list: &settings.deny_list,
+                frontmost_bundle_id: frontmost.as_deref(),
+                last_self_write: last_self_ref,
+            };
+            let decision = evaluate(&ctx, &sniffer as &dyn PasteboardSniff, std::time::Instant::now());
+            let text = match decision {
+                FilterDecision::Capture(t) => t,
+                FilterDecision::Skip(reason) => {
+                    tracing::debug!(?reason, "clipboard skip");
+                    continue;
+                }
+            };
+            let m = match state.registry.load_active_membership(&user_id).await {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!(err = %e, "no active membership for capture");
+                    continue;
+                }
+            };
+            let ciphertext = match crate::core::crypto::encrypt(&m.user_key, &user_id, text.as_bytes()) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(err = %e, "encrypt failed");
+                    continue;
+                }
+            };
+            {
+                let conn = state.conn.lock().await;
+                if let Err(e) = crate::core::storage::pending::enqueue(
+                    &conn,
+                    &user_id,
+                    &ciphertext,
+                    now_ms(),
+                ) {
+                    tracing::warn!(err = %e, "enqueue failed");
+                    continue;
+                }
+                let count = crate::core::storage::pending::count(&conn, &user_id).unwrap_or(0);
+                let _ = app.emit(
+                    PENDING_COUNT,
+                    PendingCount {
+                        user_id: user_id.clone(),
+                        count,
+                    },
+                );
+            }
+            if let Some(trigger) = state.upload_triggers.lock().get(&user_id).cloned() {
+                trigger.notify_one();
+            } else {
+                tracing::warn!(%user_id, "no uploader trigger registered");
+            }
+        }
+        let _ = watcher_cancel;
+    });
+}
+
+fn register_initial_hotkey(app: tauri::AppHandle, state: Arc<AppState>) {
+    tauri::async_runtime::spawn(async move {
+        let hotkey = {
+            let conn = state.conn.lock().await;
+            crate::core::storage::settings::load(&conn)
+                .map(|s| s.hotkey)
+                .unwrap_or(None)
+        };
+        if let Some(h) = hotkey {
+            if let Err(e) = apply_hotkey(&app, Some(&h)) {
+                tracing::warn!(err = %e, hotkey = %h, "register global shortcut failed");
+            }
+        }
+    });
+}
+
+pub fn apply_hotkey(app: &tauri::AppHandle, hotkey: Option<&str>) -> tauri::Result<()> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutEvent, ShortcutState};
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    let Some(h) = hotkey else { return Ok(()) };
+    if h.trim().is_empty() {
+        return Ok(());
+    }
+    gs.on_shortcut(h, |app: &tauri::AppHandle, _shortcut, event: ShortcutEvent| {
+        if event.state() == ShortcutState::Pressed {
+            let app_clone = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                let _ = toggle_popover(&app_clone, None);
+            });
+        }
+    })
+    .map_err(|e| {
+        tauri::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("register shortcut: {e}"),
+        ))
+    })?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn query_tray_rect() -> Option<tauri::Rect> {
+    crate::core::capture::macos::find_tray_rect()
+}
+
+#[cfg(target_os = "macos")]
+fn set_ns_window_top_left(win: &tauri::WebviewWindow, x_logical: f64, y_logical: f64) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use objc2::Encode;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct NSPoint {
+        x: f64,
+        y: f64,
+    }
+    unsafe impl Encode for NSPoint {
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
+            "CGPoint",
+            &[objc2::Encoding::Double, objc2::Encoding::Double],
+        );
+    }
+
+    let Ok(raw) = win.ns_window() else { return };
+    if raw.is_null() {
+        return;
+    }
+    // setFrameTopLeftPoint takes a screen point in logical coordinates with
+    // y measured from the bottom of the screen. We were given a top-left
+    // (Tauri-style) y; convert by flipping against the primary screen.
+    use objc2_app_kit::NSScreen;
+    use objc2_foundation::MainThreadMarker;
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Some(screen) = NSScreen::mainScreen(mtm) else { return };
+    let screen_h = screen.frame().size.height;
+    let cocoa_y = screen_h - y_logical;
+    let p = NSPoint { x: x_logical, y: cocoa_y };
+    let ns_window = raw as *mut AnyObject;
+    unsafe {
+        let _: () = msg_send![ns_window, setFrameTopLeftPoint: p];
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn query_tray_rect() -> Option<tauri::Rect> {
+    None
 }
 
 fn now_ms() -> i64 {

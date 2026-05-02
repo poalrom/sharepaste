@@ -23,4 +23,7 @@ export const cmd = {
   updateSettings:      (patch: Partial<Settings>): Promise<Settings> => tauri.invoke("update_settings", { patch }),
   getStatus:           (args: { user_id: string }) =>
                          tauri.invoke<{ state: ConnectionState; pending_count: number; last_error?: string }>("get_status", { args }),
+  openModal:           (kind: "pairing" | "settings" | "accounts") =>
+                         tauri.invoke<void>("open_modal", { args: { kind } }),
+  hidePopover:         () => tauri.invoke<void>("hide_popover"),
 };
