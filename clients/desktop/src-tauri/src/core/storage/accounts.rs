@@ -54,10 +54,13 @@ pub fn find(conn: &Connection, user_id: &str) -> Result<Option<Account>, AppErro
 }
 
 pub fn set_last_seen(conn: &Connection, user_id: &str, last_seen_id: i64) -> Result<(), AppError> {
-    conn.execute(
+    let n = conn.execute(
         "UPDATE accounts SET last_seen_id = ?2 WHERE user_id = ?1",
         params![user_id, last_seen_id],
     )?;
+    if n == 0 {
+        return Err(AppError::NotFound(format!("account {user_id}")));
+    }
     Ok(())
 }
 
@@ -119,5 +122,15 @@ mod tests {
         upsert(&c, &acct("u")).unwrap();
         assert_eq!(delete(&c, "u").unwrap(), 1);
         assert_eq!(delete(&c, "u").unwrap(), 0);
+    }
+
+    #[test]
+    fn set_last_seen_returns_not_found_when_missing() {
+        let c = open_in_memory().unwrap();
+        let err = set_last_seen(&c, "ghost", 7).unwrap_err();
+        match err {
+            AppError::NotFound(msg) => assert!(msg.contains("ghost"), "got: {msg}"),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
     }
 }
