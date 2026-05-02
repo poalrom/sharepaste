@@ -1,5 +1,5 @@
 use crate::errors::AppError;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -25,8 +25,10 @@ const KEY: &str = "settings";
 
 pub fn load(conn: &Connection) -> Result<Settings, AppError> {
     let json: Option<String> = conn
-        .query_row("SELECT value FROM settings WHERE key = ?1", params![KEY], |r| r.get(0))
-        .ok();
+        .query_row("SELECT value FROM settings WHERE key = ?1", params![KEY], |r| {
+            r.get::<_, String>(0)
+        })
+        .optional()?;
     match json {
         Some(j) => serde_json::from_str(&j).map_err(|e| AppError::Storage(e.to_string())),
         None => Ok(Settings::default()),
