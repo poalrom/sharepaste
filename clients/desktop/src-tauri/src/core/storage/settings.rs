@@ -1,1 +1,69 @@
-// implemented in Task 6
+use crate::errors::AppError;
+use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Settings {
+    pub capture_enabled: bool,
+    pub deny_list: Vec<String>,
+    pub autostart: bool,
+    pub hotkey: Option<String>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            capture_enabled: true,
+            deny_list: vec!["com.1password.1password".into(), "com.bitwarden.desktop".into()],
+            autostart: false,
+            hotkey: None,
+        }
+    }
+}
+
+const KEY: &str = "settings";
+
+pub fn load(conn: &Connection) -> Result<Settings, AppError> {
+    let json: Option<String> = conn
+        .query_row("SELECT value FROM settings WHERE key = ?1", params![KEY], |r| r.get(0))
+        .ok();
+    match json {
+        Some(j) => serde_json::from_str(&j).map_err(|e| AppError::Storage(e.to_string())),
+        None => Ok(Settings::default()),
+    }
+}
+
+pub fn save(conn: &Connection, s: &Settings) -> Result<(), AppError> {
+    let j = serde_json::to_string(s).map_err(|e| AppError::Storage(e.to_string()))?;
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params![KEY, j],
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::storage::open_in_memory;
+
+    #[test]
+    fn load_returns_default_when_unset() {
+        let c = open_in_memory().unwrap();
+        let s = load(&c).unwrap();
+        assert!(s.capture_enabled);
+        assert!(!s.autostart);
+        assert!(s.hotkey.is_none());
+    }
+
+    #[test]
+    fn save_then_load_round_trips() {
+        let c = open_in_memory().unwrap();
+        let mut s = Settings::default();
+        s.capture_enabled = false;
+        s.hotkey = Some("Cmd+Shift+V".into());
+        save(&c, &s).unwrap();
+        assert_eq!(load(&c).unwrap(), s);
+    }
+}
