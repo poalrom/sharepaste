@@ -17,7 +17,7 @@ use crate::events::{
 use crate::state::AppState;
 use std::sync::Arc;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
-use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -99,6 +99,7 @@ fn build_tray(app: &mut tauri::App, _state: Arc<AppState>) -> tauri::Result<()> 
                 ev,
                 TrayIconEvent::Click {
                     button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
                     ..
                 }
             ) {
