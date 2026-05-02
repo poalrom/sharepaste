@@ -10,22 +10,7 @@
     "beforeBuildCommand": "npm --prefix ui run build"
   },
   "app": {
-    "windows": [
-      {
-        "label": "popover",
-        "url": "popover.html",
-        "title": "sharepaste",
-        "width": 360,
-        "height": 480,
-        "resizable": false,
-        "decorations": false,
-        "transparent": false,
-        "alwaysOnTop": true,
-        "visible": false,
-        "skipTaskbar": true,
-        "focus": true
-      }
-    ],
+    "windows": [],
     "macOSPrivateApi": true,
     "trayIcon": {
       "iconPath": "icons/tray-template.png",
@@ -36,7 +21,7 @@
   "bundle": {
     "active": true,
     "targets": ["app", "dmg"],
-    "icon": ["icons/icon.png", "icons/icon.icns"],
+    "icon": ["icons/icon.png"],
     "macOS": {
       "minimumSystemVersion": "12.0",
       "frameworks": [],
@@ -48,8 +33,5 @@
     "shortDescription": "End-to-end-encrypted clipboard sync",
     "longDescription": "Self-hosted clipboard sync with per-user encryption."
   },
-  "plugins": {
-    "autostart": { "enabled": true },
-    "global-shortcut": { "enabled": true }
-  }
+  "plugins": {}
 }
