@@ -3,4 +3,4 @@ pub mod uploader;
 pub mod decryptor;
 pub mod state;
 
-pub use state::{ConnectionState, SyncTask};
+pub use state::{BackoffPlan, ConnectionState};
