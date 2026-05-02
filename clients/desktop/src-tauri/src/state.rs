@@ -5,6 +5,7 @@ use parking_lot::Mutex;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 pub struct SyncSlot {
@@ -18,7 +19,9 @@ pub struct AppState {
     pub keychain: Arc<dyn Keychain>,
     pub registry: Arc<AccountRegistry>,
     pub sync_tasks: Mutex<HashMap<String, SyncSlot>>,
+    pub upload_triggers: Mutex<HashMap<String, Arc<Notify>>>,
     pub last_self_write: Mutex<Option<(std::time::Instant, String)>>,
+    pub last_tray_rect: Mutex<Option<tauri::Rect>>,
 }
 
 impl AppState {
@@ -34,7 +37,9 @@ impl AppState {
             keychain,
             registry,
             sync_tasks: Mutex::new(HashMap::new()),
+            upload_triggers: Mutex::new(HashMap::new()),
             last_self_write: Mutex::new(None),
+            last_tray_rect: Mutex::new(None),
         }
     }
 }

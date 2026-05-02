@@ -15,7 +15,7 @@ use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use zeroize::Zeroizing;
 
 #[derive(Serialize)]
@@ -106,6 +106,7 @@ pub async fn pair_with_invite(
         },
     )
     .ok();
+    activate_and_sync(&app, state.inner(), &claimed.user_id).await;
     Ok(PairWithInviteResp {
         user_id: claimed.user_id,
         device_id: claimed.device_id,
@@ -271,6 +272,7 @@ pub async fn pair_with_code(
         },
     )
     .ok();
+    activate_and_sync(&app, state.inner(), &pair_payload.user_id).await;
 
     Ok(PairWithCodeResp {
         user_id: pair_payload.user_id,
@@ -477,29 +479,43 @@ pub async fn get_settings(
 pub async fn update_settings(
     patch: serde_json::Value,
     state: State<'_, Arc<AppState>>,
+    app: AppHandle,
 ) -> Result<settings::Settings, AppError> {
-    let conn = state.conn.lock().await;
-    let mut s = settings::load(&conn)?;
-    if let Some(v) = patch.get("capture_enabled").and_then(|v| v.as_bool()) {
-        s.capture_enabled = v;
+    let mut hotkey_changed: Option<Option<String>> = None;
+    let s = {
+        let conn = state.conn.lock().await;
+        let mut s = settings::load(&conn)?;
+        if let Some(v) = patch.get("capture_enabled").and_then(|v| v.as_bool()) {
+            s.capture_enabled = v;
+        }
+        if let Some(arr) = patch.get("deny_list").and_then(|v| v.as_array()) {
+            s.deny_list = arr
+                .iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect();
+        }
+        if let Some(v) = patch.get("autostart").and_then(|v| v.as_bool()) {
+            s.autostart = v;
+        }
+        if let Some(v) = patch.get("hotkey") {
+            let new_hotkey = if v.is_null() {
+                None
+            } else {
+                v.as_str().map(String::from)
+            };
+            if new_hotkey != s.hotkey {
+                hotkey_changed = Some(new_hotkey.clone());
+            }
+            s.hotkey = new_hotkey;
+        }
+        settings::save(&conn, &s)?;
+        s
+    };
+    if let Some(new_hotkey) = hotkey_changed {
+        if let Err(e) = crate::apply_hotkey(&app, new_hotkey.as_deref()) {
+            tracing::warn!(err = %e, "re-register hotkey failed");
+        }
     }
-    if let Some(arr) = patch.get("deny_list").and_then(|v| v.as_array()) {
-        s.deny_list = arr
-            .iter()
-            .filter_map(|x| x.as_str().map(String::from))
-            .collect();
-    }
-    if let Some(v) = patch.get("autostart").and_then(|v| v.as_bool()) {
-        s.autostart = v;
-    }
-    if let Some(v) = patch.get("hotkey") {
-        s.hotkey = if v.is_null() {
-            None
-        } else {
-            v.as_str().map(String::from)
-        };
-    }
-    settings::save(&conn, &s)?;
     Ok(s)
 }
 
@@ -528,6 +544,53 @@ pub async fn get_status(
         pending_count: count,
         last_error: None,
     })
+}
+
+#[derive(Deserialize)]
+pub struct OpenModalArgs {
+    pub kind: String,
+}
+
+#[tauri::command]
+pub async fn open_modal(app: AppHandle, args: OpenModalArgs) -> Result<(), AppError> {
+    let kind = args.kind;
+    if !matches!(kind.as_str(), "pairing" | "settings" | "accounts") {
+        return Err(AppError::BadInput(format!("unknown modal kind: {kind}")));
+    }
+    let label = format!("modal-{kind}");
+    if let Some(existing) = app.get_webview_window(&label) {
+        existing
+            .set_focus()
+            .map_err(|e| AppError::BadInput(e.to_string()))?;
+        return Ok(());
+    }
+    let url = format!("modal.html?kind={kind}");
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
+        .title("sharepaste")
+        .inner_size(420.0, 520.0)
+        .resizable(false)
+        .build()
+        .map_err(|e| AppError::BadInput(e.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hide_popover(app: AppHandle) -> Result<(), AppError> {
+    if let Some(win) = app.get_webview_window("popover") {
+        win.hide().map_err(|e| AppError::BadInput(e.to_string()))?;
+    }
+    Ok(())
+}
+
+async fn activate_and_sync(app: &AppHandle, state: &Arc<AppState>, user_id: &str) {
+    state.registry.set_active(Some(user_id.to_string()));
+    let _ = app.emit(
+        ACTIVE_CHANGED,
+        crate::events::ActiveChanged {
+            user_id: Some(user_id.to_string()),
+        },
+    );
+    crate::spawn_sync(app.clone(), Arc::clone(state), user_id.to_string()).await;
 }
 
 fn now_ms() -> i64 {

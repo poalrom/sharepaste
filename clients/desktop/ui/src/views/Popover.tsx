@@ -5,6 +5,7 @@ import { events } from "../ipc/events";
 import HistoryList from "./HistoryList";
 import Search from "./Search";
 import Footer from "./Footer";
+import PairingModal from "../modals/PairingModal";
 
 export default function Popover() {
   const accounts = useAccountsStore((s) => s.accounts);
@@ -14,6 +15,31 @@ export default function Popover() {
   const addEntry = useHistoryStore((s) => s.add);
   const removeEntry = useHistoryStore((s) => s.remove);
   const setStatus = useStatusStore((s) => s.set);
+  const modal = useUiStore((s) => s.modal);
+  const setModal = useUiStore((s) => s.setModal);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      if (useUiStore.getState().modal !== null) {
+        setModal(null);
+      } else {
+        cmd.hidePopover().catch((err) => console.error("hide failed", err));
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [setModal]);
+
+  useEffect(() => {
+    const onBlur = () => {
+      useUiStore.getState().setSearch("");
+      useUiStore.getState().setSelectedIndex(0);
+    };
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
+  }, []);
 
   useEffect(() => {
     let unsub: Array<() => void> = [];
@@ -37,9 +63,20 @@ export default function Popover() {
       unsub.push(await events.onPendingCount(({ user_id, count }) => {
         setStatus(user_id, { pending: count });
       }));
+      unsub.push(await events.onAccountAdded(() => {
+        cmd.listAccounts().then(hydrateAccounts);
+      }));
     })();
     return () => unsub.forEach((u) => u());
   }, [addEntry, hydrateAccounts, hydrateHistory, removeEntry, setStatus]);
+
+  if (modal === "pairing") {
+    return (
+      <div className="flex h-full flex-col">
+        <PairingModal onClose={() => setModal(null)} />
+      </div>
+    );
+  }
 
   if (accounts.length === 0) {
     return (
@@ -47,7 +84,7 @@ export default function Popover() {
         <div className="font-semibold">No accounts paired yet.</div>
         <button
           className="rounded bg-blue-600 px-3 py-1.5 text-white hover:bg-blue-500"
-          onClick={() => useUiStore.getState().setModal("pairing")}
+          onClick={() => setModal("pairing")}
         >
           Pair a device
         </button>

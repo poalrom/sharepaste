@@ -5,7 +5,8 @@ import type { AppErrorPayload } from "../types";
 
 type Step = "chooser" | "invite" | "code" | "show-code";
 
-export default function PairingModal() {
+export default function PairingModal({ onClose }: { onClose?: () => void } = {}) {
+  const close = onClose ?? (() => window.close());
   const [step, setStep] = useState<Step>("chooser");
   const [serverUrl, setServerUrl] = useState("https://");
   const [token, setToken] = useState("");
@@ -24,11 +25,11 @@ export default function PairingModal() {
         setExpiresAt(expires_at);
         setStep("show-code");
       }));
-      unsubs.push(await events.onPairClaimed(() => { setError(undefined); window.close(); }));
+      unsubs.push(await events.onPairClaimed(() => { setError(undefined); close(); }));
       unsubs.push(await events.onPairExpired(() => setError("Pair code expired or already used. Generate a new one.")));
     })();
     return () => unsubs.forEach((u) => u());
-  }, []);
+  }, [close]);
 
   const handle = async (fn: () => Promise<unknown>) => {
     setBusy(true); setError(undefined);
@@ -62,7 +63,7 @@ export default function PairingModal() {
           e.preventDefault();
           handle(async () => {
             await cmd.pairWithInvite({ server_url: serverUrl, token, device_label: label });
-            window.close();
+            close();
           });
         }}
       >
@@ -98,7 +99,7 @@ export default function PairingModal() {
           e.preventDefault();
           handle(async () => {
             await cmd.pairWithCode({ code, device_label: label });
-            window.close();
+            close();
           });
         }}
       >

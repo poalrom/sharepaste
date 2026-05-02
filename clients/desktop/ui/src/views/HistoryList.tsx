@@ -27,7 +27,14 @@ export default function HistoryList() {
         setSelectedIndex(Math.max(0, selectedIndex - 1));
       } else if (e.key === "Enter") {
         const target = filtered[selectedIndex];
-        if (target) await cmd.copyToClipboard({ user_id: target.user_id, entry_id: target.id });
+        if (target) {
+          try {
+            await cmd.copyToClipboard({ user_id: target.user_id, entry_id: target.id });
+            await cmd.hidePopover();
+          } catch (err) {
+            console.error("copy failed", err);
+          }
+        }
       }
     };
     window.addEventListener("keydown", handler);
