@@ -1,3 +1,3 @@
 fn main() {
-    sharepaste_desktop_lib::run();
+    sharepaste_desktop_lib::launch();
 }
