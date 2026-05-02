@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import 'dotenv/config';
 import { Command } from "commander";
 import { runUserCreate, runUserList, runUserDelete } from "./cli/user.js";
 import { runDeviceList, runDeviceRevoke } from "./cli/device.js";
