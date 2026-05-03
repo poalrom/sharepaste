@@ -8,6 +8,7 @@ let invoke: ReturnType<typeof vi.fn<Invoker>>;
 
 beforeEach(() => {
   invoke = vi.fn(async (cmd) => {
+    if (cmd === "list_accounts") return [];
     if (cmd === "pair_start") return { code: "ABCDE FGHIJ", expires_at: Date.now() + 120_000 };
     return { user_id: "u", device_id: "d" };
   }) as ReturnType<typeof vi.fn<Invoker>>;
@@ -69,6 +70,29 @@ describe("PairingModal", () => {
     });
     expect(await screen.findByTestId("shortcode")).toHaveTextContent("ABCDE FGHIJ");
     expect(screen.getByTestId("countdown")).toBeInTheDocument();
+  });
+
+  it("hydrates accounts on mount before starting pairing from an existing account", async () => {
+    invoke.mockImplementation(async (cmd) => {
+      if (cmd === "list_accounts") {
+        return [
+          { user_id: "u-hydrated", device_id: "d1", label: "Laptop", server_url: "https://srv", status: "Online", pending: 0 },
+        ];
+      }
+      if (cmd === "pair_start") return { code: "VWXYZ 23456", expires_at: Date.now() + 120_000 };
+      return { user_id: "u", device_id: "d" };
+    });
+
+    render(<PairingModal />);
+    const showCode = screen.getByTestId("choose-show-code");
+
+    await waitFor(() => expect(showCode).toBeEnabled());
+    fireEvent.click(showCode);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("pair_start", { args: { user_id: "u-hydrated" } });
+    });
+    expect(await screen.findByTestId("shortcode")).toHaveTextContent("VWXYZ 23456");
   });
 
   it("shows a chooser error when starting pairing fails", async () => {

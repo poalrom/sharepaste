@@ -9,6 +9,8 @@ type Step = "chooser" | "invite" | "code" | "show-code";
 export default function PairingModal({ onClose }: { onClose?: () => void } = {}) {
   const close = onClose ?? (() => window.close());
   const activeUserId = useAccountsStore((s) => s.active);
+  const accountCount = useAccountsStore((s) => s.accounts.length);
+  const hydrateAccounts = useAccountsStore((s) => s.hydrate);
   const [step, setStep] = useState<Step>("chooser");
   const [serverUrl, setServerUrl] = useState("https://");
   const [token, setToken] = useState("");
@@ -32,6 +34,20 @@ export default function PairingModal({ onClose }: { onClose?: () => void } = {})
     })();
     return () => unsubs.forEach((u) => u());
   }, [close]);
+
+  useEffect(() => {
+    if (activeUserId && accountCount > 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const accs = await cmd.listAccounts();
+        if (!cancelled && !useAccountsStore.getState().active) hydrateAccounts(accs);
+      } catch (e) {
+        if (!cancelled) setError(messageOf(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [accountCount, activeUserId, hydrateAccounts]);
 
   const handle = async (fn: () => Promise<unknown>) => {
     setBusy(true); setError(undefined);
