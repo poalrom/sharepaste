@@ -33,6 +33,14 @@ describe("accounts store", () => {
     expect(useAccountsStore.getState().active).toBe("a");
   });
 
+  it("hydrate prefers the backend-active account over the first disconnected row", () => {
+    useAccountsStore.getState().hydrate([
+      { user_id: "oldest", device_id: "d1", label: "Oldest", server_url: "https://s", status: "Disconnected", pending: 0 },
+      { user_id: "active", device_id: "d2", label: "Active", server_url: "https://s", status: "Connecting", pending: 0 },
+    ]);
+    expect(useAccountsStore.getState().active).toBe("active");
+  });
+
   it("removing active falls back to next account", () => {
     useAccountsStore.getState().hydrate([
       { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Online", pending: 0 },

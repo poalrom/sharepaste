@@ -95,6 +95,29 @@ describe("PairingModal", () => {
     expect(await screen.findByTestId("shortcode")).toHaveTextContent("VWXYZ 23456");
   });
 
+  it("starts pairing for the backend-active account after hydrating multiple accounts", async () => {
+    invoke.mockImplementation(async (cmd) => {
+      if (cmd === "list_accounts") {
+        return [
+          { user_id: "u-oldest", device_id: "d1", label: "Oldest", server_url: "https://srv", status: "Disconnected", pending: 0 },
+          { user_id: "u-active", device_id: "d2", label: "Active", server_url: "https://srv", status: "Connecting", pending: 0 },
+        ];
+      }
+      if (cmd === "pair_start") return { code: "LMNOP 78901", expires_at: Date.now() + 120_000 };
+      return { user_id: "u", device_id: "d" };
+    });
+
+    render(<PairingModal />);
+    const showCode = screen.getByTestId("choose-show-code");
+
+    await waitFor(() => expect(showCode).toBeEnabled());
+    fireEvent.click(showCode);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("pair_start", { args: { user_id: "u-active" } });
+    });
+  });
+
   it("shows a chooser error when starting pairing fails", async () => {
     invoke.mockImplementationOnce(async () => {
       throw { kind: "Network", message: "server unavailable" };
