@@ -13,7 +13,10 @@ export type AccountsState = {
 export const useAccountsStore = create<AccountsState>((set) => ({
   accounts: [],
   active: undefined,
-  hydrate: (rows) => set({ accounts: rows, active: rows[0]?.user_id }),
+  hydrate: (rows) => set({
+    accounts: rows,
+    active: (rows.find((a) => a.status !== "Disconnected") ?? rows[0])?.user_id,
+  }),
   upsert: (a) => set((s) => {
     const without = s.accounts.filter((x) => x.user_id !== a.user_id);
     return { accounts: [...without, a] };
