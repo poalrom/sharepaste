@@ -46,9 +46,9 @@ export default function Popover() {
     (async () => {
       const accs = await cmd.listAccounts();
       hydrateAccounts(accs);
-      const first = accs[0];
-      if (first) {
-        const rows = await cmd.listHistory({ user_id: first.user_id, limit: 100 });
+      const activeUserId = useAccountsStore.getState().active;
+      if (activeUserId) {
+        const rows = await cmd.listHistory({ user_id: activeUserId, limit: 100 });
         hydrateHistory(rows);
       }
       unsub.push(await events.onEntryAdded(({ user_id, entry }) => {
