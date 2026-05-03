@@ -2,16 +2,30 @@
 
 Self-hosted, end-to-end encrypted clipboard sync. Server only sees ciphertext.
 
-## Quick start
+## Layout
 
-```bash
-docker run -d --name sharepaste \
-  -v sp-data:/var/lib/sharepaste \
-  -p 8443:8443 \
-  sharepaste:latest
+```
+server/        # Node server + operator CLI (build context for Docker)
+clients/       # Client apps (desktop Tauri app)
+db/            # SQLite host volume mounted into the container
+docker-compose.yml
 ```
 
-Operate behind a reverse proxy that terminates TLS (Caddy, nginx).
+## Quick start (docker compose)
+
+```bash
+docker compose up -d --build
+```
+
+Mounts `./db` → `/var/lib/sharepaste` inside the container. SQLite file lives at `./db/db.sqlite`. Operate behind a reverse proxy that terminates TLS (Caddy, nginx).
+
+## Local dev (no docker)
+
+```bash
+cd server
+npm install
+npm start -- serve   # uses DB_PATH from server/.env (defaults to ../db/db.sqlite)
+```
 
 ## Operator CLI
 
@@ -31,7 +45,7 @@ docker exec sharepaste sharepaste device revoke <device_id>
 docker exec sharepaste sharepaste entry purge --user <user_id>
 ```
 
-The `--db` flag overrides the DB path; default is `/var/lib/sharepaste/sharepaste.sqlite`.
+The `--db` flag overrides the DB path; in the compose container it defaults to `/var/lib/sharepaste/db.sqlite` (mounted from `./db`).
 
 ## Wire protocol
 
@@ -48,7 +62,7 @@ All authenticated endpoints take `Authorization: Bearer <device_token>`.
 ## Tests
 
 ```bash
-npm test
+cd server && npm test
 ```
 
 Real Fastify + real SQLite tempfiles. No HTTP mocks.
