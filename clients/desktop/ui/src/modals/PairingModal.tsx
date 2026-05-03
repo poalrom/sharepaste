@@ -1,12 +1,14 @@
 import { useState, useEffect } from "react";
 import { cmd } from "../ipc/commands";
 import { events } from "../ipc/events";
+import { useAccountsStore } from "../store/accounts";
 import type { AppErrorPayload } from "../types";
 
 type Step = "chooser" | "invite" | "code" | "show-code";
 
 export default function PairingModal({ onClose }: { onClose?: () => void } = {}) {
   const close = onClose ?? (() => window.close());
+  const activeUserId = useAccountsStore((s) => s.active);
   const [step, setStep] = useState<Step>("chooser");
   const [serverUrl, setServerUrl] = useState("https://");
   const [token, setToken] = useState("");
@@ -38,7 +40,18 @@ export default function PairingModal({ onClose }: { onClose?: () => void } = {})
     finally { setBusy(false); }
   };
 
+  const startShowCode = () => {
+    if (!activeUserId) return;
+    handle(async () => {
+      const started = await cmd.pairStart({ user_id: activeUserId });
+      setShortcode(started.code);
+      setExpiresAt(started.expires_at);
+      setStep("show-code");
+    });
+  };
+
   if (step === "chooser") {
+    const showCodeDisabled = busy || !activeUserId;
     return (
       <div className="flex flex-col gap-4 p-6">
         <h1 className="text-base font-semibold">How are you pairing?</h1>
@@ -50,6 +63,18 @@ export default function PairingModal({ onClose }: { onClose?: () => void } = {})
           <div className="font-semibold">I have a pair code</div>
           <div className="text-xs text-zinc-400">Another of my devices is showing a short code.</div>
         </button>
+        <button
+          data-testid="choose-show-code"
+          disabled={showCodeDisabled}
+          className="rounded border border-zinc-700 p-3 text-left hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+          onClick={startShowCode}
+        >
+          <div className="font-semibold">I want to pair another device</div>
+          <div className="text-xs text-zinc-400">
+            {activeUserId ? "Show a short code from this account." : "Pair this device first before showing a code."}
+          </div>
+        </button>
+        {error && <div className="text-xs text-red-400">{error}</div>}
       </div>
     );
   }
