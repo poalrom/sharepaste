@@ -4,7 +4,6 @@ use crate::core::keychain::{token_account, user_key_account, Keychain};
 use crate::core::storage::accounts::{upsert as upsert_account, Account};
 use crate::errors::AppError;
 use rusqlite::Connection;
-use zeroize::Zeroizing;
 
 pub struct ClaimedAccount {
     pub user_id: String,
