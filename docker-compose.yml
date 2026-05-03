@@ -1,0 +1,12 @@
+services:
+  sharepaste:
+    build: ./server
+    image: sharepaste:latest
+    container_name: sharepaste
+    restart: unless-stopped
+    environment:
+      DB_PATH: /var/lib/sharepaste/db.sqlite
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./db:/var/lib/sharepaste

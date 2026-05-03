@@ -10,7 +10,7 @@ unsigned `.app` and `.dmg`. Spec lives at
 - Rust stable (`rustup` will pick up `rust-toolchain.toml`)
 - Node 20+
 - Xcode command-line tools (`xcode-select --install`)
-- A running sharepaste server (see top-level repo README; for dev, `npx tsx src/index.ts serve`)
+- A running sharepaste server (see top-level repo README; for dev, `cd server && npx tsx src/index.ts serve`)
 
 ## Dev workflow
 
