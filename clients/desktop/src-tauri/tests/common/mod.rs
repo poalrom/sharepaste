@@ -1,16 +1,19 @@
-use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SERVER_URL: &str = "http://127.0.0.1:8443";
-const SERVER_DB: &str = "/Users/poalrom/private/sharepaste/db/db.sqlite";
+// Path inside the `sharepaste` Docker container; the host bind-mounts
+// ./db/db.sqlite to this path. The CLI must run *inside* the container so
+// it shares better-sqlite3's WAL state with the running server — running
+// from the host raced and produced FK / "invite not found" errors.
+const SERVER_DB_IN_CONTAINER: &str = "/var/lib/sharepaste/db.sqlite";
+const SERVER_CONTAINER: &str = "sharepaste";
 
 static NONCE: AtomicU64 = AtomicU64::new(0);
 
 pub struct TestServer {
     pub url: String,
-    pub db_path: String,
 }
 
 pub fn start() -> TestServer {
@@ -37,16 +40,7 @@ pub fn start() -> TestServer {
         .expect("server not reachable at 127.0.0.1:8443; start sharepaste serve first");
     TestServer {
         url: SERVER_URL.into(),
-        db_path: SERVER_DB.into(),
     }
-}
-
-fn workspace_root() -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.pop(); // src-tauri -> desktop
-    p.pop(); // desktop -> clients
-    p.pop(); // clients -> sharepaste
-    p
 }
 
 fn unique_username(prefix: &str) -> String {
@@ -58,27 +52,20 @@ fn unique_username(prefix: &str) -> String {
     format!("{prefix}-{now}-{nonce}")
 }
 
-pub fn create_invite(server: &TestServer, prefix: &str) -> (String, String) {
+pub fn create_invite(_server: &TestServer, prefix: &str) -> (String, String) {
     let username = unique_username(prefix);
-    let server_dir = workspace_root();
-    // The server pins Node via .node-version (currently 25); the native
-    // better-sqlite3 binding is compiled against that ABI. Run the CLI
-    // through `fnm exec` so it picks up the pinned Node regardless of the
-    // shell's currently-active version.
-    let out = Command::new("fnm")
+    let out = Command::new("docker")
         .arg("exec")
-        .arg("--")
-        .arg("npx")
-        .arg("tsx")
-        .arg(server_dir.join("src/index.ts"))
+        .arg(SERVER_CONTAINER)
+        .arg("node")
+        .arg("/app/dist/src/index.js")
         .arg("user")
         .arg("create")
         .arg("--db")
-        .arg(&server.db_path)
+        .arg(SERVER_DB_IN_CONTAINER)
         .arg(&username)
-        .current_dir(&server_dir)
         .output()
-        .expect("spawn fnm exec npx tsx user create");
+        .expect("spawn docker exec sharepaste user create");
     if !out.status.success() {
         panic!(
             "user create failed: stderr={}",
