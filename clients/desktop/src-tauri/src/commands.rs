@@ -418,12 +418,9 @@ pub async fn copy_to_clipboard(
         entries_cache::get_full(&conn, &args.user_id, args.entry_id)?
             .ok_or_else(|| AppError::NotFound("plaintext unavailable".into()))?
     };
-    #[cfg(target_os = "macos")]
-    {
-        let mut cb = arboard::Clipboard::new().map_err(|e| AppError::Storage(e.to_string()))?;
-        cb.set_text(plaintext.clone())
-            .map_err(|e| AppError::Storage(e.to_string()))?;
-    }
+    let mut cb = arboard::Clipboard::new().map_err(|e| AppError::Storage(e.to_string()))?;
+    cb.set_text(plaintext.clone())
+        .map_err(|e| AppError::Storage(e.to_string()))?;
     *state.last_self_write.lock() = Some((Instant::now(), plaintext));
     Ok(())
 }
