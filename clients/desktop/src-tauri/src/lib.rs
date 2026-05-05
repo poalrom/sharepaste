@@ -18,7 +18,7 @@ use crate::state::AppState;
 use std::sync::Arc;
 use tauri::menu::{ContextMenu, MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
-use tauri::{Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{Emitter, Manager, Monitor, PhysicalPosition, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
@@ -138,6 +138,13 @@ fn build_tray(app: &mut tauri::App, _state: Arc<AppState>) -> tauri::Result<()> 
 
 const POPOVER_W: f64 = 360.0;
 const POPOVER_H: f64 = 480.0;
+const POPOVER_GAP: f64 = 4.0;
+
+#[derive(Clone, Copy)]
+enum PopoverPlacement {
+    PreferTray,
+    Fallback,
+}
 
 fn build_popover_window(app: &mut tauri::App) -> tauri::Result<()> {
     let win = WebviewWindowBuilder::new(app, "popover", WebviewUrl::App("popover.html".into()))
@@ -159,6 +166,14 @@ fn build_popover_window(app: &mut tauri::App) -> tauri::Result<()> {
 }
 
 fn toggle_popover(app: &tauri::AppHandle, tray_rect: Option<tauri::Rect>) -> tauri::Result<()> {
+    toggle_popover_with_placement(app, PopoverPlacement::PreferTray, tray_rect)
+}
+
+fn toggle_popover_with_placement(
+    app: &tauri::AppHandle,
+    placement: PopoverPlacement,
+    tray_rect: Option<tauri::Rect>,
+) -> tauri::Result<()> {
     let Some(win) = app.get_webview_window("popover") else {
         return Ok(());
     };
@@ -166,38 +181,229 @@ fn toggle_popover(app: &tauri::AppHandle, tray_rect: Option<tauri::Rect>) -> tau
         win.hide()?;
         return Ok(());
     }
-    let rect = tray_rect
-        .or_else(|| {
-            app.try_state::<Arc<AppState>>()
-                .and_then(|s| *s.last_tray_rect.lock())
-        })
-        .or_else(query_tray_rect);
-    if let Some(rect) = rect {
-        if let Ok(scale) = win.scale_factor() {
+    let cached_rect = if matches!(placement, PopoverPlacement::PreferTray) {
+        app.try_state::<Arc<AppState>>()
+            .and_then(|s| *s.last_tray_rect.lock())
+    } else {
+        None
+    };
+    let queried_rect = if matches!(placement, PopoverPlacement::PreferTray)
+        && tray_rect.is_none()
+        && cached_rect.is_none()
+    {
+        query_tray_rect()
+    } else {
+        None
+    };
+    let rect = select_popover_tray_rect(placement, tray_rect, cached_rect, queried_rect);
+    if let Ok(scale) = win.scale_factor() {
+        if let Some(rect) = rect {
             let pos = rect.position.to_physical::<f64>(scale);
             let size = rect.size.to_physical::<f64>(scale);
             let popover_w_phys = POPOVER_W * scale;
-            let x_phys = pos.x + (size.width / 2.0) - (popover_w_phys / 2.0);
-            let y_phys = pos.y + size.height + 4.0;
-            // Move the underlying NSWindow synchronously via
-            // `setFrameTopLeftPoint:` so the move lands before the next
-            // paint. Tauri's set_position dispatches through wry's event
-            // loop and races with show(), causing a one-frame flash at
-            // the previous default location (center of screen).
-            #[cfg(target_os = "macos")]
-            {
-                let x_logical = x_phys / scale;
-                let y_logical = y_phys / scale;
-                set_ns_window_top_left(&win, x_logical, y_logical);
-            }
-            // Also call Tauri's set_position so wry's cached position
-            // matches the actual frame on subsequent operations.
-            let _ = win.set_position(PhysicalPosition::new(x_phys, y_phys));
+            let popover_h_phys = POPOVER_H * scale;
+            let (work_x, work_y, work_w, work_h) = monitor_work_area_for_tray(
+                &win,
+                pos.x + (size.width / 2.0),
+                pos.y + (size.height / 2.0),
+            )
+            .unwrap_or((0.0, 0.0, f64::MAX / 4.0, f64::MAX / 4.0));
+            let popover_pos = calculate_popover_position(
+                pos.x,
+                pos.y,
+                size.width,
+                size.height,
+                popover_w_phys,
+                popover_h_phys,
+                work_x,
+                work_y,
+                work_w,
+                work_h,
+            );
+            set_popover_position(&win, popover_pos, scale);
+        } else if let Some(popover_pos) = fallback_popover_position(&win, scale) {
+            set_popover_position(&win, popover_pos, scale);
         }
     }
     win.show()?;
     win.set_focus()?;
     Ok(())
+}
+
+fn select_popover_tray_rect(
+    placement: PopoverPlacement,
+    explicit_rect: Option<tauri::Rect>,
+    cached_rect: Option<tauri::Rect>,
+    queried_rect: Option<tauri::Rect>,
+) -> Option<tauri::Rect> {
+    match placement {
+        PopoverPlacement::PreferTray => explicit_rect.or(cached_rect).or(queried_rect),
+        PopoverPlacement::Fallback => None,
+    }
+}
+
+fn set_popover_position(
+    win: &tauri::WebviewWindow,
+    popover_pos: PhysicalPosition<f64>,
+    _scale: f64,
+) {
+    // Move the underlying NSWindow synchronously via `setFrameTopLeftPoint:`
+    // so the move lands before the next paint. Tauri's set_position dispatches
+    // through wry's event loop and races with show(), causing a one-frame flash
+    // at the previous default location (center of screen).
+    #[cfg(target_os = "macos")]
+    {
+        let x_logical = popover_pos.x / _scale;
+        let y_logical = popover_pos.y / _scale;
+        set_ns_window_top_left(win, x_logical, y_logical);
+    }
+    // Also call Tauri's set_position so wry's cached position matches the
+    // actual frame on subsequent operations.
+    let _ = win.set_position(popover_pos);
+}
+
+fn calculate_popover_position(
+    tray_x: f64,
+    tray_y: f64,
+    tray_w: f64,
+    tray_h: f64,
+    popover_w: f64,
+    popover_h: f64,
+    work_x: f64,
+    work_y: f64,
+    work_w: f64,
+    work_h: f64,
+) -> PhysicalPosition<f64> {
+    let work_right = work_x + work_w;
+    let work_bottom = work_y + work_h;
+    let x = clamp_to_range(
+        tray_x + (tray_w / 2.0) - (popover_w / 2.0),
+        work_x,
+        work_right - popover_w,
+    );
+    let below_y = tray_y + tray_h + POPOVER_GAP;
+    let above_y = tray_y - popover_h - POPOVER_GAP;
+    let y = if below_y + popover_h <= work_bottom {
+        below_y
+    } else if above_y >= work_y {
+        above_y
+    } else {
+        clamp_to_range(below_y, work_y, work_bottom - popover_h)
+    };
+
+    PhysicalPosition::new(x, y)
+}
+
+fn clamp_to_range(value: f64, min: f64, max: f64) -> f64 {
+    if max < min {
+        min
+    } else {
+        value.clamp(min, max)
+    }
+}
+
+fn monitor_work_area_for_tray(
+    win: &tauri::WebviewWindow,
+    tray_center_x: f64,
+    tray_center_y: f64,
+) -> Option<(f64, f64, f64, f64)> {
+    let monitors = win.available_monitors().ok()?;
+    monitors
+        .iter()
+        .find(|m| monitor_contains(m, tray_center_x, tray_center_y))
+        .or_else(|| monitors.first())
+        .map(monitor_work_area)
+}
+
+fn monitor_contains(monitor: &Monitor, x: f64, y: f64) -> bool {
+    let position = monitor.position();
+    let size = monitor.size();
+    let left = position.x as f64;
+    let top = position.y as f64;
+    let right = left + size.width as f64;
+    let bottom = top + size.height as f64;
+    x >= left && x <= right && y >= top && y <= bottom
+}
+
+fn monitor_work_area(monitor: &Monitor) -> (f64, f64, f64, f64) {
+    let area = monitor.work_area();
+    (
+        area.position.x as f64,
+        area.position.y as f64,
+        area.size.width as f64,
+        area.size.height as f64,
+    )
+}
+
+fn fallback_popover_position(
+    win: &tauri::WebviewWindow,
+    scale: f64,
+) -> Option<PhysicalPosition<f64>> {
+    let monitor = win.current_monitor().ok().flatten().or_else(|| {
+        win.primary_monitor()
+            .ok()
+            .flatten()
+            .or_else(|| win.available_monitors().ok()?.into_iter().next())
+    })?;
+    let monitor_pos = monitor.position();
+    let monitor_size = monitor.size();
+    let area = monitor.work_area();
+    Some(calculate_fallback_popover_position(
+        monitor_pos.x as f64,
+        monitor_pos.y as f64,
+        monitor_size.width as f64,
+        monitor_size.height as f64,
+        area.position.x as f64,
+        area.position.y as f64,
+        area.size.width as f64,
+        area.size.height as f64,
+        POPOVER_W * scale,
+        POPOVER_H * scale,
+    ))
+}
+
+fn calculate_fallback_popover_position(
+    monitor_x: f64,
+    monitor_y: f64,
+    monitor_w: f64,
+    monitor_h: f64,
+    work_x: f64,
+    work_y: f64,
+    work_w: f64,
+    work_h: f64,
+    popover_w: f64,
+    popover_h: f64,
+) -> PhysicalPosition<f64> {
+    let monitor_right = monitor_x + monitor_w;
+    let monitor_bottom = monitor_y + monitor_h;
+    let work_right = work_x + work_w;
+    let work_bottom = work_y + work_h;
+    let bottom_inset = monitor_bottom - work_bottom;
+    let top_inset = work_y - monitor_y;
+    let right_inset = monitor_right - work_right;
+    let left_inset = work_x - monitor_x;
+
+    if bottom_inset >= top_inset && bottom_inset >= right_inset && bottom_inset >= left_inset {
+        PhysicalPosition::new(
+            clamp_to_range(work_right - popover_w - POPOVER_GAP, work_x, work_right - popover_w),
+            clamp_to_range(work_bottom - popover_h - POPOVER_GAP, work_y, work_bottom - popover_h),
+        )
+    } else if top_inset >= right_inset && top_inset >= left_inset {
+        PhysicalPosition::new(
+            clamp_to_range(work_right - popover_w - POPOVER_GAP, work_x, work_right - popover_w),
+            clamp_to_range(work_y + POPOVER_GAP, work_y, work_bottom - popover_h),
+        )
+    } else if right_inset >= left_inset {
+        PhysicalPosition::new(
+            clamp_to_range(work_right - popover_w - POPOVER_GAP, work_x, work_right - popover_w),
+            clamp_to_range(work_bottom - popover_h - POPOVER_GAP, work_y, work_bottom - popover_h),
+        )
+    } else {
+        PhysicalPosition::new(
+            clamp_to_range(work_x + POPOVER_GAP, work_x, work_right - popover_w),
+            clamp_to_range(work_bottom - popover_h - POPOVER_GAP, work_y, work_bottom - popover_h),
+        )
+    }
 }
 
 fn open_modal(app: &tauri::AppHandle, kind: &str) -> tauri::Result<()> {
@@ -615,7 +821,12 @@ pub fn apply_hotkey(app: &tauri::AppHandle, hotkey: Option<&str>) -> tauri::Resu
         if event.state() == ShortcutState::Pressed {
             let app_clone = app.clone();
             let _ = app.run_on_main_thread(move || {
-                let _ = toggle_popover(&app_clone, None);
+                #[cfg(target_os = "windows")]
+                let result =
+                    toggle_popover_with_placement(&app_clone, PopoverPlacement::Fallback, None);
+                #[cfg(not(target_os = "windows"))]
+                let result = toggle_popover(&app_clone, None);
+                let _ = result;
             });
         }
     })
@@ -675,6 +886,47 @@ fn set_ns_window_top_left(win: &tauri::WebviewWindow, x_logical: f64, y_logical:
 #[cfg(not(target_os = "macos"))]
 fn query_tray_rect() -> Option<tauri::Rect> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn positions_popover_above_bottom_tray_and_inside_work_area() {
+        let pos = calculate_popover_position(
+            1260.0, 728.0, 32.0, 32.0, 360.0, 480.0, 0.0, 0.0, 1366.0, 728.0,
+        );
+
+        assert_eq!(pos.x, 1006.0);
+        assert_eq!(pos.y, 244.0);
+    }
+
+    #[test]
+    fn falls_back_to_bottom_right_when_taskbar_reduces_bottom_work_area() {
+        let pos = calculate_fallback_popover_position(
+            0.0, 0.0, 1366.0, 768.0, 0.0, 0.0, 1366.0, 728.0, 360.0, 480.0,
+        );
+
+        assert_eq!(pos.x, 1002.0);
+        assert_eq!(pos.y, 244.0);
+    }
+
+    #[test]
+    fn fallback_placement_ignores_cached_tray_rect() {
+        let explicit_rect = tauri::Rect::default();
+        let cached_rect = tauri::Rect::default();
+        let queried_rect = tauri::Rect::default();
+
+        let rect = select_popover_tray_rect(
+            PopoverPlacement::Fallback,
+            Some(explicit_rect),
+            Some(cached_rect),
+            Some(queried_rect),
+        );
+
+        assert!(rect.is_none());
+    }
 }
 
 fn now_ms() -> i64 {
