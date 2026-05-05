@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { injectForTests } from "../ipc/tauri";
-import SettingsModal from "../modals/SettingsModal";
+import SettingsSection from "../views/sections/SettingsSection";
 
 let invokeMock: ReturnType<typeof vi.fn>;
 
@@ -21,9 +21,9 @@ beforeEach(() => {
   injectForTests(invokeMock as never, (async () => () => {}) as never);
 });
 
-describe("SettingsModal", () => {
+describe("SettingsSection", () => {
   it("toggles capture_enabled and calls update_settings", async () => {
-    render(<SettingsModal />);
+    render(<SettingsSection />);
     const cb = await screen.findByTestId("capture-enabled");
     fireEvent.click(cb);
     await waitFor(() => {
@@ -37,7 +37,7 @@ describe("SettingsModal", () => {
     invokeMock.mockImplementationOnce(async () => ({
       capture_enabled: true, deny_list: ["a", "b"], autostart: false, hotkey: null,
     }));
-    render(<SettingsModal />);
+    render(<SettingsSection />);
     const ta = await screen.findByTestId("deny-list") as HTMLTextAreaElement;
     expect(ta.value).toBe("a\nb");
   });

@@ -39,7 +39,7 @@ beforeEach(() => {
   useAccountsStore.setState({ accounts: [], active: undefined });
   useHistoryStore.setState({ entries: [] });
   useStatusStore.setState({ byUser: {} });
-  useUiStore.setState({ modal: null, search: "", selectedIndex: 0 });
+  useUiStore.setState({ search: "", selectedIndex: 0, mainSection: "accounts" });
 });
 
 describe("Popover", () => {

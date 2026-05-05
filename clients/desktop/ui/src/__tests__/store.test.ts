@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useHistoryStore } from "../store/history";
 import { useAccountsStore } from "../store/accounts";
+import { useUiStore } from "../store/ui";
 
 describe("history store", () => {
   beforeEach(() => useHistoryStore.setState({ entries: [] }));
@@ -57,5 +58,16 @@ describe("accounts store", () => {
     ]);
     useAccountsStore.getState().remove("a");
     expect(useAccountsStore.getState().active).toBeUndefined();
+  });
+});
+
+describe("useUiStore mainSection", () => {
+  it("defaults to 'accounts'", () => {
+    expect(useUiStore.getState().mainSection).toBe("accounts");
+  });
+
+  it("setMainSection updates the field", () => {
+    useUiStore.getState().setMainSection("pairing");
+    expect(useUiStore.getState().mainSection).toBe("pairing");
   });
 });
