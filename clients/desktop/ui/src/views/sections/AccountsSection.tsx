@@ -9,6 +9,7 @@ export default function AccountsSection() {
   const hydrate = useAccountsStore((s) => s.hydrate);
   const removeFromStore = useAccountsStore((s) => s.remove);
   const setActiveInStore = useAccountsStore((s) => s.setActive);
+  const updateStatus = useAccountsStore((s) => s.updateStatus);
   const [confirmingUserId, setConfirmingUserId] = useState<string | undefined>();
   const [error, setError] = useState<string>();
 
@@ -37,13 +38,18 @@ export default function AccountsSection() {
           setActiveInStore(user_id ?? undefined);
         }),
       );
+      unsubs.push(
+        await events.onConnectionState(({ user_id, state }) => {
+          updateStatus(user_id, state);
+        }),
+      );
       return unsubs;
     })();
     return () => {
       cancelled = true;
       subPromise.then((unsubs) => unsubs.forEach((u) => u()));
     };
-  }, [hydrate, removeFromStore, setActiveInStore]);
+  }, [hydrate, removeFromStore, setActiveInStore, updateStatus]);
 
   if (accounts.length === 0) {
     return (
