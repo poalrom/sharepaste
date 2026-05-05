@@ -23,7 +23,11 @@ export const cmd = {
   updateSettings:      (patch: Partial<Settings>): Promise<Settings> => tauri.invoke("update_settings", { patch }),
   getStatus:           (args: { user_id: string }) =>
                          tauri.invoke<{ state: ConnectionState; pending_count: number; last_error?: string }>("get_status", { args }),
-  openModal:           (kind: "pairing" | "settings" | "accounts") =>
-                         tauri.invoke<void>("open_modal", { args: { kind } }),
+  openMainWindow:      (args: { section: "accounts" | "settings" | "pairing" }) =>
+                         tauri.invoke<void>("open_main_window", { args }),
   hidePopover:         () => tauri.invoke<void>("hide_popover"),
+  openSection:         async (section: "accounts" | "settings" | "pairing") => {
+                         await tauri.invoke<void>("open_main_window", { args: { section } });
+                         await tauri.invoke<void>("hide_popover");
+                       },
 };
