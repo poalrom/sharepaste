@@ -15,7 +15,7 @@ use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State};
 use zeroize::Zeroizing;
 
 #[derive(Serialize)]
@@ -596,34 +596,6 @@ pub async fn get_status(
         pending_count: count,
         last_error: None,
     })
-}
-
-#[derive(Deserialize)]
-pub struct OpenModalArgs {
-    pub kind: String,
-}
-
-#[tauri::command]
-pub async fn open_modal(app: AppHandle, args: OpenModalArgs) -> Result<(), AppError> {
-    let kind = args.kind;
-    if !matches!(kind.as_str(), "pairing" | "settings" | "accounts") {
-        return Err(AppError::BadInput(format!("unknown modal kind: {kind}")));
-    }
-    let label = format!("modal-{kind}");
-    if let Some(existing) = app.get_webview_window(&label) {
-        existing
-            .set_focus()
-            .map_err(|e| AppError::BadInput(e.to_string()))?;
-        return Ok(());
-    }
-    let url = format!("modal.html?kind={kind}");
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
-        .title("sharepaste")
-        .inner_size(420.0, 520.0)
-        .resizable(false)
-        .build()
-        .map_err(|e| AppError::BadInput(e.to_string()))?;
-    Ok(())
 }
 
 #[derive(Deserialize)]

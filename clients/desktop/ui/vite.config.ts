@@ -13,8 +13,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         popover: "popover.html",
-        modal: "modal.html",
-        index: "index.html",
         main: "main.html",
       },
     },

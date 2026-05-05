@@ -66,7 +66,6 @@ pub fn launch() {
             commands::get_settings,
             commands::update_settings,
             commands::get_status,
-            commands::open_modal,
             commands::open_main_window,
             commands::hide_popover,
         ])
@@ -409,22 +408,6 @@ fn calculate_fallback_popover_position(
             clamp_to_range(work_bottom - popover_h - POPOVER_GAP, work_y, work_bottom - popover_h),
         )
     }
-}
-
-fn open_modal(app: &tauri::AppHandle, kind: &str) -> tauri::Result<()> {
-    let label = format!("modal-{kind}");
-    if let Some(existing) = app.get_webview_window(&label) {
-        existing.set_focus()?;
-        return Ok(());
-    }
-    let url = format!("modal.html?kind={kind}");
-    let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
-        .title("sharepaste")
-        .inner_size(420.0, 520.0)
-        .resizable(false)
-        .build()?;
-    let _ = win;
-    Ok(())
 }
 
 fn open_main_window_impl(app: &tauri::AppHandle, section: &str) -> tauri::Result<()> {
