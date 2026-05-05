@@ -60,4 +60,4 @@ pub struct DecryptionError { pub user_id: String, pub entry_id: i64 }
 pub struct PairShortcode { pub code: String, pub expires_at: i64 }
 
 #[derive(Serialize, Clone)]
-pub struct PairClaimed { pub user_id: String }
+pub struct PairClaimed { pub user_id: String, pub device_label: Option<String> }

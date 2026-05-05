@@ -49,6 +49,18 @@ describe("AccountsSection", () => {
     expect(screen.queryByTestId("active-badge-u-other")).toBeNull();
   });
 
+  it("renders an Add an account row last and expands pairing content", async () => {
+    render(<AccountsSection />);
+    await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
+    const rows = screen.getAllByRole("listitem");
+    expect(rows[rows.length - 1]).toHaveTextContent("Add an account");
+
+    fireEvent.click(screen.getByTestId("add-account-row"));
+
+    expect(useUiStore.getState().mainSection).toBe("pairing");
+    expect(screen.getByText("How are you pairing?")).toBeInTheDocument();
+  });
+
   it("clicking trash opens an inline confirmation strip below the row", async () => {
     render(<AccountsSection />);
     await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());

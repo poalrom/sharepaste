@@ -51,7 +51,7 @@ export const registerDeviceRoutes = (app: FastifyInstance): void => {
           created_at: now,
           revoked_at: null,
         });
-        app.deps.repo.pairings.markConsumed(pair_id, now);
+        app.deps.repo.pairings.markConsumed(pair_id, now, label);
       });
       tx();
 

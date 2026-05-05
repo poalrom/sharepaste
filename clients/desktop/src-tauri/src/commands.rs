@@ -169,16 +169,17 @@ pub async fn pair_start(
     tokio::spawn(async move {
         loop {
             match server.pair_poll(&pair_id.to_string(), 25_000).await {
-                Ok(p) if p.status == "claimed" => {
+                Ok(p) if p.status == "consumed" => {
                     let _ = app2.emit(
                         crate::events::PAIR_CLAIMED,
                         crate::events::PairClaimed {
                             user_id: user_id.clone(),
+                            device_label: p.device_label,
                         },
                     );
                     return;
                 }
-                Ok(p) if p.status == "consumed" || p.status == "expired" => {
+                Ok(p) if p.status == "expired" => {
                     let _ = app2.emit(crate::events::PAIR_EXPIRED, ());
                     return;
                 }

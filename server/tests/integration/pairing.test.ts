@@ -246,6 +246,34 @@ describe("GET /pair/poll", () => {
     }
   });
 
+  it("returns the paired device label once the slot is consumed", async () => {
+    const { app, repo, close } = await buildTestApp();
+    try {
+      const ctx = await startPair(app, repo);
+      await app.inject({
+        method: "POST",
+        url: "/pair/claim",
+        payload: { pair_id: ctx.pair_id, secret_proof: ctx.secret },
+      });
+      const paired = await app.inject({
+        method: "POST",
+        url: "/devices",
+        payload: { pair_id: ctx.pair_id, secret_proof: ctx.secret, label: "Pixel 9" },
+      });
+      expect(paired.statusCode).toBe(200);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/pair/poll?id=${ctx.pair_id}`,
+        headers: { authorization: `Bearer ${ctx.device_token}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ status: "consumed", device_label: "Pixel 9" });
+    } finally {
+      await close();
+    }
+  });
+
   it("returns waiting before claim", async () => {
     const { app, repo, close } = await buildTestApp();
     try {

@@ -38,8 +38,20 @@ describe("Main shell", () => {
 
   it("clicking a tab updates the active section", () => {
     render(<Main />);
-    fireEvent.click(screen.getByTestId("tab-pairing"));
-    expect(useUiStore.getState().mainSection).toBe("pairing");
+    fireEvent.click(screen.getByTestId("tab-settings"));
+    expect(useUiStore.getState().mainSection).toBe("settings");
+  });
+
+  it("does not render a separate pairing tab", () => {
+    render(<Main />);
+    expect(screen.queryByTestId("tab-pairing")).toBeNull();
+  });
+
+  it("shows pairing routes under the accounts tab", () => {
+    window.history.replaceState({}, "", "/main.html?section=pairing");
+    render(<Main />);
+    expect(screen.getByTestId("tab-accounts")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("How are you pairing?")).toBeInTheDocument();
   });
 
   it("main://navigate event flips the active section", async () => {

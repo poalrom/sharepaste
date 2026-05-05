@@ -28,6 +28,7 @@ export interface PairingRow {
   secret_hash: string;
   encrypted_payload: Buffer | null;
   claimed_by: string | null;
+  paired_device_label: string | null;
   failed_attempts: number;
   consumed_at: number | null;
   expires_at: number;
@@ -117,8 +118,8 @@ export class Repository {
       this.db
         .prepare(
           `INSERT INTO pairings
-           (id, user_id, secret_hash, encrypted_payload, claimed_by, failed_attempts, consumed_at, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+           (id, user_id, secret_hash, encrypted_payload, claimed_by, paired_device_label, failed_attempts, consumed_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           row.id,
@@ -126,6 +127,7 @@ export class Repository {
           row.secret_hash,
           row.encrypted_payload,
           row.claimed_by,
+          row.paired_device_label,
           row.failed_attempts,
           row.consumed_at,
           row.expires_at
@@ -144,10 +146,10 @@ export class Repository {
     setPayload: (id: string, payload: Buffer): void => {
       this.db.prepare("UPDATE pairings SET encrypted_payload = ? WHERE id = ?").run(payload, id);
     },
-    markConsumed: (id: string, at: number): void => {
+    markConsumed: (id: string, at: number, pairedDeviceLabel: string | null = null): void => {
       this.db
-        .prepare("UPDATE pairings SET consumed_at = ?, encrypted_payload = NULL WHERE id = ?")
-        .run(at, id);
+        .prepare("UPDATE pairings SET consumed_at = ?, paired_device_label = ?, encrypted_payload = NULL WHERE id = ?")
+        .run(at, pairedDeviceLabel, id);
     },
   };
 

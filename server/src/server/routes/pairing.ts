@@ -28,6 +28,7 @@ export const registerPairingRoutes = (app: FastifyInstance): void => {
         secret_hash: req.body.secret_hash.toLowerCase(),
         encrypted_payload: null,
         claimed_by: null,
+        paired_device_label: null,
         failed_attempts: 0,
         consumed_at: null,
         expires_at: now + app.deps.pairingTtlMs,
@@ -152,7 +153,12 @@ export const registerPairingRoutes = (app: FastifyInstance): void => {
         if (pairing.user_id !== auth.user_id)
           throw app.httpErrors.forbidden("not the inviter");
         const now = Date.now();
-        if (pairing.consumed_at !== null) return reply.send({ status: "consumed" });
+        if (pairing.consumed_at !== null) {
+          return reply.send({
+            status: "consumed",
+            device_label: pairing.paired_device_label,
+          });
+        }
         if (pairing.expires_at <= now) return reply.send({ status: "expired" });
         if (pairing.claimed_by !== null) return reply.send({ status: "claimed" });
         if (Date.now() >= deadline) return reply.send({ status: "waiting" });

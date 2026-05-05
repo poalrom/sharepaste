@@ -13,7 +13,7 @@ export const events = {
   onCaptureSkipped:  (cb: (p: { reason: string; source_app?: string }) => void) => tauri.listen("capture-skipped", cb),
   onDecryptionError: (cb: (p: { user_id: string; entry_id: number }) => void) => tauri.listen("decryption-error", cb),
   onPairShortcode:   (cb: (p: { code: string; expires_at: number }) => void) => tauri.listen("pair-shortcode", cb),
-  onPairClaimed:     (cb: (p: { user_id: string }) => void) => tauri.listen("pair-claimed", cb),
+  onPairClaimed:     (cb: (p: { user_id: string; device_label?: string | null }) => void) => tauri.listen("pair-claimed", cb),
   onPairExpired:     (cb: () => void) => tauri.listen("pair-expired", () => cb()),
   onMainNavigate:    (cb: (section: "accounts" | "settings" | "pairing") => void) => tauri.listen("main://navigate", cb),
 };
