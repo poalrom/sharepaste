@@ -1,7 +1,7 @@
 import type { Config } from "tailwindcss";
 
 export default {
-  content: ["./index.html", "./popover.html", "./modal.html", "./src/**/*.{ts,tsx}"],
+  content: ["./popover.html", "./main.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       fontFamily: {

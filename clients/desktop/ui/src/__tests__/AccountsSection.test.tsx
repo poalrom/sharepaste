@@ -29,7 +29,6 @@ beforeEach(() => {
       currentAccounts = currentAccounts.filter((a) => a.user_id !== target);
       return undefined;
     }
-    if (cmd === "open_modal") return undefined;
     return undefined;
   }) as ReturnType<typeof vi.fn<Invoker>>;
   const listen = vi.fn(async (event: string, cb: (payload: unknown) => void) => {
