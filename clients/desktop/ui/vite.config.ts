@@ -15,6 +15,7 @@ export default defineConfig({
         popover: "popover.html",
         modal: "modal.html",
         index: "index.html",
+        main: "main.html",
       },
     },
   },
