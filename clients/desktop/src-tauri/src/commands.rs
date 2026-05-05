@@ -26,6 +26,7 @@ pub struct AccountSummary {
     pub server_url: String,
     pub status: ConnectionState,
     pub pending: i64,
+    pub is_active: bool,
 }
 
 #[derive(Serialize)]
@@ -48,7 +49,8 @@ pub async fn list_accounts(
     let conn = state.conn.lock().await;
     for a in accts {
         let pending = pending::count(&conn, &a.user_id)?;
-        let status = if active.as_deref() == Some(&a.user_id) {
+        let is_active = active.as_deref() == Some(&a.user_id);
+        let status = if is_active {
             ConnectionState::Connecting
         } else {
             ConnectionState::Disconnected
@@ -60,6 +62,7 @@ pub async fn list_accounts(
             server_url: a.server_url,
             status,
             pending,
+            is_active,
         });
     }
     Ok(out)
