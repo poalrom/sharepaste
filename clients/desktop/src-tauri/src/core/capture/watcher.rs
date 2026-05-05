@@ -1,5 +1,4 @@
-// Implemented in Task 16.
-#![cfg(target_os = "macos")]
+#![cfg(any(target_os = "macos", target_os = "windows"))]
 
 use crate::errors::AppError;
 use clipboard_master::{CallbackResult, ClipboardHandler, Master};
