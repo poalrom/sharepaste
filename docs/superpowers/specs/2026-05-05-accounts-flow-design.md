@@ -34,7 +34,12 @@ Today the Accounts modal (`clients/desktop/ui/src/modals/AccountsModal.tsx`) kee
 
 ### Concurrency and ordering
 
-The persistence helper `set_active_persisted` takes the conn lock briefly to read–modify–write the settings row, then updates the in-memory `active` field. Callers that already hold the conn lock (notably `forget`) must release it before invoking the helper, or the helper accepts a borrowed `&Connection` to avoid double-locking. The simpler choice is to make the helper accept `&Connection` and have callers pass the existing guard; in `forget`, the lock is dropped after the row delete and re-acquired by the helper if needed.
+The persistence helper accepts a borrowed `&Connection` so callers control the lock lifetime. Two flavors:
+
+- `set_active_persisted_with(&self, conn: &Connection, user_id: Option<String>) -> Result<(), AppError>` — used by `forget`, which already holds the conn lock from the surrounding cleanup.
+- `set_active_persisted(&self, user_id: Option<String>) -> Result<(), AppError>` — convenience wrapper used by `set_active_account` and startup, which acquire the lock internally.
+
+Both write the settings row first and only update the in-memory `active` after the disk write succeeds, so the cache cannot diverge from disk on a successful return.
 
 ## Backend changes
 
@@ -48,12 +53,14 @@ The persistence helper `set_active_persisted` takes the conn lock briefly to rea
 
 - New helper `set_active_persisted(&self, user_id: Option<String>) -> Result<(), AppError>`. Loads settings, writes `last_active_user_id`, saves, then updates `self.active`. Returns `AppError::Storage` on failure without touching the in-memory cache.
 - New helper `load_persisted_active(&self) -> Result<Option<String>, AppError>` for startup, validating that the user id still appears in the account list.
-- Modify `forget(...)` to return the new active id (`Option<String>`). Internally:
-  1. Cancel sync task slot (handled in the command, not the registry).
-  2. Delete keychain entries.
-  3. Delete entries cache and account row (existing).
-  4. If the forgotten user was active, query `accounts::list()`, pick the first by `created_at` (or `None` if empty), and call `set_active_persisted` with the result. Return that value.
-  5. If `set_active_persisted` fails after the row delete succeeded, set the in-memory `active` to `None` and emit `ACTIVE_CHANGED { user_id: None }`. The UI falls into the no-active-account state and the user re-selects.
+- Modify `forget(...)` to return `Result<Option<String>, AppError>` where the `Option<String>` is the new active id (or `None` when no accounts remain or the forgotten user wasn't active). Internally:
+  1. Delete keychain entries (existing behavior).
+  2. Take the conn lock; delete the entries cache and the account row (existing behavior).
+  3. If the forgotten user was active, query `accounts::list(&conn)` for remaining accounts, pick the first by `created_at` (or `None` if empty), and call `set_active_persisted_with(&conn, ...)`. If that call returns `Err`, set the in-memory `active` to `None` (best-effort, no further disk writes) and propagate the error.
+  4. Otherwise leave the in-memory `active` untouched.
+  5. Return the chosen new active id (only meaningful when the forgotten user was previously active).
+
+Sync-task cancellation lives in the `forget_account` command, not in the registry, because the registry does not own the `sync_tasks` map.
 
 ### `commands.rs`
 
@@ -61,11 +68,13 @@ The persistence helper `set_active_persisted` takes the conn lock briefly to rea
 - `list_accounts` computes `is_active = active.as_deref() == Some(&a.user_id)`.
 - `set_active_account` calls `set_active_persisted` instead of bare `set_active`. The rest of the handler (event emit, sync spawn) is unchanged.
 - `forget_account`:
+  - Capture `was_active = state.registry.active_user_id().as_deref() == Some(&args.user_id)` before mutating state.
   - Cancel any sync slot for `args.user_id`: `state.sync_tasks.lock().remove(&args.user_id).map(|s| s.cancel.cancel())`.
-  - Call `state.registry.forget(&args.user_id).await?` and capture the returned `new_active`.
-  - Emit `ACTIVE_CHANGED` with `user_id = new_active.clone()` if the forgotten user was the previously-active one. Otherwise skip the event.
-  - Emit `ACCOUNT_REMOVED { user_id: args.user_id }`.
-  - If `new_active` is `Some`, call `activate_and_sync` for that user.
+  - Call `state.registry.forget(&args.user_id).await`. On `Ok(new_active)`:
+    - If `was_active`, emit `ACTIVE_CHANGED { user_id: new_active.clone() }`.
+    - Emit `ACCOUNT_REMOVED { user_id: args.user_id.clone() }`.
+    - If `new_active.is_some()`, call `activate_and_sync` for that user. Note: `set_active_persisted_with` already updated the in-memory cache and disk, so `activate_and_sync` only needs to spawn sync (or refactor to a `spawn_sync_only` helper to avoid a redundant `set_active`).
+  - On `Err(e)`: emit `ACTIVE_CHANGED { user_id: None }` (only if `was_active`), emit `ACCOUNT_REMOVED { user_id: args.user_id.clone() }`, then return the error.
 
 ### `lib.rs::spawn_sync_for_existing_accounts`
 
@@ -112,7 +121,7 @@ The trash-bin icon uses an inline SVG (no new dependency) styled via Tailwind. T
 ## Error handling
 
 - **Settings write failure during activation.** `set_active_persisted` returns `AppError::Storage` and leaves the in-memory cache untouched. The originating Tauri command propagates the error; the modal renders it in its existing `error` slot.
-- **Forget failure mid-flight.** Keychain or account-row delete failures bubble up as today; the row stays. If the post-forget activation fails after the row delete succeeded, the registry sets `active = None`, clears `last_active_user_id`, and emits `ACTIVE_CHANGED { user_id: None }`. The popover then shows the no-active-account placeholder and the user picks an account manually.
+- **Forget failure mid-flight.** Keychain or account-row delete failures bubble up as today; the row stays and no events fire. If the post-forget activation (the `set_active_persisted_with` call inside `forget`) fails after the row delete succeeded, the registry sets the in-memory `active` to `None` and returns `Err`. The `forget_account` command catches that error and, before propagating, still emits `ACCOUNT_REMOVED` (the row is gone) and `ACTIVE_CHANGED { user_id: None }` so the UI doesn't show a stale forgotten account or stale active id. The error is surfaced to the modal's error slot. The popover falls into the no-active-account placeholder and the user picks an account manually.
 - **Startup load failure.** `load_persisted_active` errors are logged at warn level; the app falls back to the oldest account by `created_at`.
 - **Stale persisted id.** A persisted `last_active_user_id` that no longer exists in the account list is ignored at startup; the fallback path runs.
 - **Sync task on forgotten user.** The forget command cancels the sync slot before invoking `registry.forget` so the running task does not observe a half-deleted state. If the slot is missing (no active sync), the cancel is a no-op.
