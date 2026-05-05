@@ -43,13 +43,15 @@ export default function Popover() {
 
   useEffect(() => {
     let unsub: Array<() => void> = [];
+    let cancelled = false;
     (async () => {
       const accs = await cmd.listAccounts();
+      if (cancelled) return;
       hydrateAccounts(accs);
       const activeUserId = useAccountsStore.getState().active;
       if (activeUserId) {
         const rows = await cmd.listHistory({ user_id: activeUserId, limit: 100 });
-        hydrateHistory(rows);
+        if (!cancelled) hydrateHistory(rows);
       }
       unsub.push(await events.onEntryAdded(({ user_id, entry }) => {
         if (user_id === useAccountsStore.getState().active) addEntry(entry);
@@ -66,8 +68,23 @@ export default function Popover() {
       unsub.push(await events.onAccountAdded(() => {
         cmd.listAccounts().then(hydrateAccounts);
       }));
+      unsub.push(await events.onAccountRemoved(({ user_id }) => {
+        useAccountsStore.getState().remove(user_id);
+      }));
+      unsub.push(await events.onActiveChanged(({ user_id }) => {
+        const next = user_id ?? undefined;
+        useAccountsStore.getState().setActive(next);
+        if (next) {
+          cmd.listHistory({ user_id: next, limit: 100 }).then(hydrateHistory).catch(() => {});
+        } else {
+          hydrateHistory([]);
+        }
+      }));
     })();
-    return () => unsub.forEach((u) => u());
+    return () => {
+      cancelled = true;
+      unsub.forEach((u) => u());
+    };
   }, [addEntry, hydrateAccounts, hydrateHistory, removeEntry, setStatus]);
 
   if (modal === "pairing") {
@@ -87,6 +104,21 @@ export default function Popover() {
           onClick={() => setModal("pairing")}
         >
           Pair a device
+        </button>
+      </div>
+    );
+  }
+
+  if (!active) {
+    return (
+      <div className="flex h-full flex-col p-4 gap-2 text-sm">
+        <div className="font-semibold">No active account.</div>
+        <button
+          data-testid="choose-account"
+          className="self-start rounded bg-blue-600 px-3 py-1.5 text-white hover:bg-blue-500"
+          onClick={() => cmd.openModal("accounts").catch((err) => console.error("open accounts failed", err))}
+        >
+          Choose account
         </button>
       </div>
     );
