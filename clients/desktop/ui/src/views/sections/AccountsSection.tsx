@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { cmd } from "../../ipc/commands";
 import { events } from "../../ipc/events";
-import { useAccountsStore } from "../../store";
+import { useAccountsStore, useUiStore } from "../../store";
 import type { Account } from "../../types";
 
 export default function AccountsSection() {
@@ -53,7 +53,7 @@ export default function AccountsSection() {
         <button
           data-testid="empty-pair"
           className="self-start rounded bg-blue-600 px-3 py-1.5 text-white hover:bg-blue-500"
-          onClick={() => cmd.openModal("pairing").catch((e) => setError(String(e)))}
+          onClick={() => useUiStore.getState().setMainSection("pairing")}
         >
           Pair a device
         </button>

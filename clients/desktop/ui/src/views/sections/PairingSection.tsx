@@ -2,12 +2,14 @@ import { useState, useEffect } from "react";
 import { cmd } from "../../ipc/commands";
 import { events } from "../../ipc/events";
 import { useAccountsStore } from "../../store/accounts";
+import { useUiStore } from "../../store";
 import type { AppErrorPayload } from "../../types";
 
 type Step = "chooser" | "invite" | "code" | "show-code";
 
-export default function PairingSection({ onClose }: { onClose?: () => void } = {}) {
-  const close = onClose ?? (() => window.close());
+export default function PairingSection() {
+  const setMainSection = useUiStore((s) => s.setMainSection);
+  const close = () => setMainSection("accounts");
   const activeUserId = useAccountsStore((s) => s.active);
   const accountCount = useAccountsStore((s) => s.accounts.length);
   const hydrateAccounts = useAccountsStore((s) => s.hydrate);
@@ -33,7 +35,7 @@ export default function PairingSection({ onClose }: { onClose?: () => void } = {
       unsubs.push(await events.onPairExpired(() => setError("Pair code expired or already used. Generate a new one.")));
     })();
     return () => unsubs.forEach((u) => u());
-  }, [close]);
+  }, [setMainSection]);
 
   useEffect(() => {
     if (activeUserId && accountCount > 0) return;

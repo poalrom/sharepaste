@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { injectForTests, type Invoker, type Listener } from "../ipc/tauri";
-import { useAccountsStore } from "../store";
+import { useAccountsStore, useUiStore } from "../store";
 import type { Account } from "../types";
 import AccountsSection from "../views/sections/AccountsSection";
 
@@ -38,6 +38,7 @@ beforeEach(() => {
   }) as ReturnType<typeof vi.fn<Listener>>;
   injectForTests(invoke as never, listen as never);
   useAccountsStore.setState({ accounts: [], active: undefined });
+  useUiStore.setState({ mainSection: "accounts" });
 });
 
 describe("AccountsSection", () => {
@@ -89,13 +90,11 @@ describe("AccountsSection", () => {
     );
   });
 
-  it("renders empty state and opens pairing modal", async () => {
+  it("renders empty state and navigates to pairing section", async () => {
     currentAccounts = [];
     render(<AccountsSection />);
     await waitFor(() => expect(screen.getByTestId("empty-pair")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("empty-pair"));
-    await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("open_modal", { args: { kind: "pairing" } }),
-    );
+    expect(useUiStore.getState().mainSection).toBe("pairing");
   });
 });
