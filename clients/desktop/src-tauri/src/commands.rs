@@ -326,14 +326,15 @@ pub async fn set_active_account(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
 ) -> Result<(), AppError> {
-    state.registry.set_active(Some(args.user_id.clone()));
+    state.registry.set_active_persisted(Some(args.user_id.clone())).await?;
     app.emit(
         ACTIVE_CHANGED,
         crate::events::ActiveChanged {
-            user_id: Some(args.user_id),
+            user_id: Some(args.user_id.clone()),
         },
     )
     .ok();
+    crate::spawn_sync(app.clone(), Arc::clone(state.inner()), args.user_id).await;
     Ok(())
 }
 
@@ -606,7 +607,13 @@ pub async fn hide_popover(app: AppHandle) -> Result<(), AppError> {
 }
 
 async fn activate_and_sync(app: &AppHandle, state: &Arc<AppState>, user_id: &str) {
-    state.registry.set_active(Some(user_id.to_string()));
+    if let Err(e) = state
+        .registry
+        .set_active_persisted(Some(user_id.to_string()))
+        .await
+    {
+        tracing::warn!(err = %e, "persisting active account failed");
+    }
     let _ = app.emit(
         ACTIVE_CHANGED,
         crate::events::ActiveChanged {
