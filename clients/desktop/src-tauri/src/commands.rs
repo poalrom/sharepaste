@@ -408,6 +408,29 @@ pub async fn get_entry_full(
         .ok_or_else(|| AppError::NotFound("plaintext unavailable".into()))
 }
 
+fn set_clipboard_text_with_self_write_guard<F>(
+    last_self_write: &parking_lot::Mutex<Option<(Instant, String)>>,
+    plaintext: String,
+    set_text: F,
+) -> Result<(), AppError>
+where
+    F: FnOnce(String) -> Result<(), AppError>,
+{
+    *last_self_write.lock() = Some((Instant::now(), plaintext.clone()));
+    if let Err(err) = set_text(plaintext.clone()) {
+        let mut marker = last_self_write.lock();
+        if marker
+            .as_ref()
+            .map(|(_, marked_text)| marked_text == &plaintext)
+            .unwrap_or(false)
+        {
+            *marker = None;
+        }
+        return Err(err);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn copy_to_clipboard(
     args: EntryScopedArgs,
@@ -419,10 +442,10 @@ pub async fn copy_to_clipboard(
             .ok_or_else(|| AppError::NotFound("plaintext unavailable".into()))?
     };
     let mut cb = arboard::Clipboard::new().map_err(|e| AppError::Storage(e.to_string()))?;
-    cb.set_text(plaintext.clone())
-        .map_err(|e| AppError::Storage(e.to_string()))?;
-    *state.last_self_write.lock() = Some((Instant::now(), plaintext));
-    Ok(())
+    set_clipboard_text_with_self_write_guard(&state.last_self_write, plaintext, |text| {
+        cb.set_text(text)
+            .map_err(|e| AppError::Storage(e.to_string()))
+    })
 }
 
 #[tauri::command]
@@ -596,4 +619,45 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parking_lot::Mutex;
+
+    #[test]
+    fn self_write_guard_sets_marker_before_clipboard_write() {
+        let last_self_write = Mutex::new(None);
+        let plaintext = "secret".to_string();
+
+        set_clipboard_text_with_self_write_guard(&last_self_write, plaintext.clone(), |text| {
+            let marker = last_self_write.lock();
+            let (_, marked_text) = marker.as_ref().expect("self-write marker should be set");
+            assert_eq!(marked_text, &plaintext);
+            assert_eq!(text, plaintext);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn self_write_guard_clears_matching_marker_when_clipboard_write_fails() {
+        let last_self_write = Mutex::new(None);
+        let plaintext = "secret".to_string();
+
+        let err =
+            set_clipboard_text_with_self_write_guard(&last_self_write, plaintext.clone(), |text| {
+                let marker = last_self_write.lock();
+                let (_, marked_text) = marker.as_ref().expect("self-write marker should be set");
+                assert_eq!(marked_text, &plaintext);
+                assert_eq!(text, plaintext);
+                drop(marker);
+                Err(AppError::Storage("clipboard failed".into()))
+            })
+            .unwrap_err();
+
+        assert!(matches!(err, AppError::Storage(_)));
+        assert!(last_self_write.lock().is_none());
+    }
 }

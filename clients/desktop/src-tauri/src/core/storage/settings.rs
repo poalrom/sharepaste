@@ -14,7 +14,12 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             capture_enabled: true,
-            deny_list: vec!["com.1password.1password".into(), "com.bitwarden.desktop".into()],
+            deny_list: vec![
+                "com.1password.1password".into(),
+                "com.bitwarden.desktop".into(),
+                "1Password.exe".into(),
+                "Bitwarden.exe".into(),
+            ],
             autostart: false,
             hotkey: None,
         }
@@ -57,6 +62,23 @@ mod tests {
         assert!(s.capture_enabled);
         assert!(!s.autostart);
         assert!(s.hotkey.is_none());
+    }
+
+    #[test]
+    fn default_deny_list_includes_macos_and_windows_password_managers() {
+        let s = Settings::default();
+
+        for app_id in [
+            "com.1password.1password",
+            "com.bitwarden.desktop",
+            "1Password.exe",
+            "Bitwarden.exe",
+        ] {
+            assert!(
+                s.deny_list.iter().any(|entry| entry == app_id),
+                "missing default deny-list entry: {app_id}"
+            );
+        }
     }
 
     #[test]
