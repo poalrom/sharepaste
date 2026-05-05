@@ -44,7 +44,7 @@ pub fn launch() {
             build_tray(app, app_state.clone())?;
             build_popover_window(app)?;
             spawn_sync_for_existing_accounts(app.handle().clone(), app_state.clone());
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             spawn_clipboard_capture(app.handle().clone(), app_state.clone());
             register_initial_hotkey(app.handle().clone(), app_state.clone());
             Ok(())
@@ -702,11 +702,14 @@ pub async fn spawn_sync(app: tauri::AppHandle, state: Arc<AppState>, user_id: St
     });
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn spawn_clipboard_capture(app: tauri::AppHandle, state: Arc<AppState>) {
     use crate::core::capture::filter::{evaluate, CaptureContext, FilterDecision, PasteboardSniff};
+    #[cfg(target_os = "macos")]
     use crate::core::capture::macos::{frontmost_bundle_id, NSPasteboardSniffer};
     use crate::core::capture::watcher;
+    #[cfg(target_os = "windows")]
+    use crate::core::capture::windows::{frontmost_process_name, WindowsClipboardSniffer};
 
     let (tx, mut rx) = mpsc::channel::<crate::core::capture::watcher::ClipboardEvent>(32);
     let watcher_cancel = CancellationToken::new();
@@ -715,7 +718,11 @@ fn spawn_clipboard_capture(app: tauri::AppHandle, state: Arc<AppState>) {
         return;
     }
     tauri::async_runtime::spawn(async move {
+        #[cfg(target_os = "macos")]
         let sniffer = NSPasteboardSniffer::new();
+        #[cfg(target_os = "windows")]
+        let sniffer = WindowsClipboardSniffer::new();
+
         while let Some(_ev) = rx.recv().await {
             let Some(user_id) = state.registry.active_user_id() else {
                 continue;
@@ -730,18 +737,21 @@ fn spawn_clipboard_capture(app: tauri::AppHandle, state: Arc<AppState>) {
                     }
                 }
             };
+            #[cfg(target_os = "macos")]
             let frontmost = frontmost_bundle_id();
+            #[cfg(target_os = "windows")]
+            let frontmost = frontmost_process_name();
+
             let last_self = state.last_self_write.lock().clone();
-            let last_self_ref = last_self
-                .as_ref()
-                .map(|(t, s)| (*t, s.as_str()));
+            let last_self_ref = last_self.as_ref().map(|(t, s)| (*t, s.as_str()));
             let ctx = CaptureContext {
                 capture_enabled: settings.capture_enabled,
                 deny_list: &settings.deny_list,
                 frontmost_bundle_id: frontmost.as_deref(),
                 last_self_write: last_self_ref,
             };
-            let decision = evaluate(&ctx, &sniffer as &dyn PasteboardSniff, std::time::Instant::now());
+            let decision =
+                evaluate(&ctx, &sniffer as &dyn PasteboardSniff, std::time::Instant::now());
             let text = match decision {
                 FilterDecision::Capture(t) => t,
                 FilterDecision::Skip(reason) => {
@@ -756,21 +766,19 @@ fn spawn_clipboard_capture(app: tauri::AppHandle, state: Arc<AppState>) {
                     continue;
                 }
             };
-            let ciphertext = match crate::core::crypto::encrypt(&m.user_key, &user_id, text.as_bytes()) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!(err = %e, "encrypt failed");
-                    continue;
-                }
-            };
+            let ciphertext =
+                match crate::core::crypto::encrypt(&m.user_key, &user_id, text.as_bytes()) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(err = %e, "encrypt failed");
+                        continue;
+                    }
+                };
             {
                 let conn = state.conn.lock().await;
-                if let Err(e) = crate::core::storage::pending::enqueue(
-                    &conn,
-                    &user_id,
-                    &ciphertext,
-                    now_ms(),
-                ) {
+                if let Err(e) =
+                    crate::core::storage::pending::enqueue(&conn, &user_id, &ciphertext, now_ms())
+                {
                     tracing::warn!(err = %e, "enqueue failed");
                     continue;
                 }
