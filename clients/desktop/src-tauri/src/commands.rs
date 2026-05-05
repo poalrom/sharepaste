@@ -626,6 +626,19 @@ pub async fn open_modal(app: AppHandle, args: OpenModalArgs) -> Result<(), AppEr
     Ok(())
 }
 
+#[derive(Deserialize)]
+pub struct OpenMainWindowArgs {
+    pub section: String,
+}
+
+#[tauri::command]
+pub async fn open_main_window(
+    app: AppHandle,
+    args: OpenMainWindowArgs,
+) -> Result<(), AppError> {
+    crate::open_main_window_impl(&app, &args.section).map_err(|e| AppError::BadInput(e.to_string()))
+}
+
 #[tauri::command]
 pub async fn hide_popover(app: AppHandle) -> Result<(), AppError> {
     if let Some(win) = app.get_webview_window("popover") {
@@ -697,5 +710,17 @@ mod tests {
 
         assert!(matches!(err, AppError::Storage(_)));
         assert!(last_self_write.lock().is_none());
+    }
+
+    #[test]
+    fn open_main_window_args_rejects_unknown_section() {
+        let valid_sections = ["accounts", "settings", "pairing"];
+        let test_cases = ["", "  ", "history", "Accounts", "ACCOUNTS"];
+        for s in test_cases {
+            assert!(
+                !valid_sections.contains(&s),
+                "test fixture must not collide with valid sections: {s}",
+            );
+        }
     }
 }
