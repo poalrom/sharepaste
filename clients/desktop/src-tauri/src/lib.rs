@@ -67,6 +67,7 @@ pub fn launch() {
             commands::update_settings,
             commands::get_status,
             commands::open_modal,
+            commands::open_main_window,
             commands::hide_popover,
         ])
         .run(tauri::generate_context!())
@@ -419,6 +420,27 @@ fn open_modal(app: &tauri::AppHandle, kind: &str) -> tauri::Result<()> {
         .resizable(false)
         .build()?;
     let _ = win;
+    Ok(())
+}
+
+fn open_main_window_impl(app: &tauri::AppHandle, section: &str) -> tauri::Result<()> {
+    let valid = matches!(section, "accounts" | "settings" | "pairing");
+    if !valid {
+        return Err(tauri::Error::Io(std::io::Error::other(format!(
+            "unknown section: {section}"
+        ))));
+    }
+    if let Some(win) = app.get_webview_window("main") {
+        win.set_focus()?;
+        let _ = app.emit_to("main", crate::events::MAIN_NAVIGATE, section);
+        return Ok(());
+    }
+    let url = format!("main.html?section={section}");
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::App(url.into()))
+        .title("sharepaste")
+        .inner_size(720.0, 560.0)
+        .resizable(true)
+        .build()?;
     Ok(())
 }
 
