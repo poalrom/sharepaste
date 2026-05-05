@@ -13,6 +13,7 @@ pub const DECRYPTION_ERROR: &str = "decryption-error";
 pub const PAIR_SHORTCODE: &str  = "pair-shortcode";
 pub const PAIR_CLAIMED: &str    = "pair-claimed";
 pub const PAIR_EXPIRED: &str    = "pair-expired";
+pub const MAIN_NAVIGATE: &str   = "main://navigate";
 
 #[derive(Serialize, Clone)]
 pub struct AccountAdded { pub user_id: String, pub device_id: String, pub label: String }
