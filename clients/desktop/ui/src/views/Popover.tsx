@@ -5,7 +5,6 @@ import { events } from "../ipc/events";
 import HistoryList from "./HistoryList";
 import Search from "./Search";
 import Footer from "./Footer";
-import PairingSection from "./sections/PairingSection";
 
 export default function Popover() {
   const accounts = useAccountsStore((s) => s.accounts);
@@ -15,22 +14,16 @@ export default function Popover() {
   const addEntry = useHistoryStore((s) => s.add);
   const removeEntry = useHistoryStore((s) => s.remove);
   const setStatus = useStatusStore((s) => s.set);
-  const modal = useUiStore((s) => s.modal);
-  const setModal = useUiStore((s) => s.setModal);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
-      if (useUiStore.getState().modal !== null) {
-        setModal(null);
-      } else {
-        cmd.hidePopover().catch((err) => console.error("hide failed", err));
-      }
+      cmd.hidePopover().catch((err) => console.error("hide failed", err));
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [setModal]);
+  }, []);
 
   useEffect(() => {
     const onBlur = () => {
@@ -87,21 +80,13 @@ export default function Popover() {
     };
   }, [addEntry, hydrateAccounts, hydrateHistory, removeEntry, setStatus]);
 
-  if (modal === "pairing") {
-    return (
-      <div className="flex h-full flex-col">
-        <PairingSection onClose={() => setModal(null)} />
-      </div>
-    );
-  }
-
   if (accounts.length === 0) {
     return (
       <div className="flex h-full flex-col p-4 gap-2 text-sm">
         <div className="font-semibold">No accounts paired yet.</div>
         <button
           className="rounded bg-blue-600 px-3 py-1.5 text-white hover:bg-blue-500"
-          onClick={() => setModal("pairing")}
+          onClick={() => cmd.openSection("pairing").catch((err) => console.error("open pairing failed", err))}
         >
           Pair a device
         </button>
@@ -116,7 +101,7 @@ export default function Popover() {
         <button
           data-testid="choose-account"
           className="self-start rounded bg-blue-600 px-3 py-1.5 text-white hover:bg-blue-500"
-          onClick={() => cmd.openModal("accounts").catch((err) => console.error("open accounts failed", err))}
+          onClick={() => cmd.openSection("accounts").catch((err) => console.error("open accounts failed", err))}
         >
           Choose account
         </button>

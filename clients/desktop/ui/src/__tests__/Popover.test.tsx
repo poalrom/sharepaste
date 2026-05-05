@@ -61,7 +61,6 @@ describe("Popover", () => {
     invoke = vi.fn(async (cmd) => {
       if (cmd === "list_accounts") return inactiveAccounts;
       if (cmd === "list_history") return [];
-      if (cmd === "open_modal") return undefined;
       return undefined;
     }) as ReturnType<typeof vi.fn<Invoker>>;
     const listen = vi.fn(async () => () => {}) as ReturnType<typeof vi.fn<Listener>>;
@@ -70,8 +69,30 @@ describe("Popover", () => {
     const { findByTestId } = render(<Popover />);
     const button = await findByTestId("choose-account");
     fireEvent.click(button);
-    await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("open_modal", { args: { kind: "accounts" } }),
-    );
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("open_main_window", {
+        args: { section: "accounts" },
+      });
+      expect(invoke).toHaveBeenCalledWith("hide_popover", undefined);
+    });
+  });
+
+  it("empty-state Pair button opens main window on pairing section", async () => {
+    invoke = vi.fn(async (cmd) => {
+      if (cmd === "list_accounts") return [];
+      return undefined;
+    }) as ReturnType<typeof vi.fn<Invoker>>;
+    const listen = vi.fn(async () => () => {}) as ReturnType<typeof vi.fn<Listener>>;
+    injectForTests(invoke as never, listen as never);
+
+    const { findByText } = render(<Popover />);
+    const button = await findByText("Pair a device");
+    fireEvent.click(button);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("open_main_window", {
+        args: { section: "pairing" },
+      });
+      expect(invoke).toHaveBeenCalledWith("hide_popover", undefined);
+    });
   });
 });
