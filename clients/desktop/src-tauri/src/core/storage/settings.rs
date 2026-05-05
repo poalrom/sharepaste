@@ -8,6 +8,8 @@ pub struct Settings {
     pub deny_list: Vec<String>,
     pub autostart: bool,
     pub hotkey: Option<String>,
+    #[serde(default)]
+    pub last_active_user_id: Option<String>,
 }
 
 impl Default for Settings {
@@ -17,6 +19,7 @@ impl Default for Settings {
             deny_list: Vec::new(),
             autostart: false,
             hotkey: None,
+            last_active_user_id: None,
         };
         append_builtin_deny_list_entries(&mut settings);
         settings
@@ -145,6 +148,7 @@ mod tests {
             deny_list: vec!["CustomApp.exe".into()],
             autostart: true,
             hotkey: Some("Ctrl+Shift+V".into()),
+            last_active_user_id: None,
         };
 
         save(&c, &s).unwrap();
@@ -158,6 +162,28 @@ mod tests {
         assert!(loaded.deny_list.contains(&"com.bitwarden.desktop".into()));
         assert!(loaded.deny_list.contains(&"1Password.exe".into()));
         assert!(loaded.deny_list.contains(&"Bitwarden.exe".into()));
+    }
+
+    #[test]
+    fn save_then_load_round_trips_last_active_user_id() {
+        let c = open_in_memory().unwrap();
+        let mut s = Settings::default();
+        s.last_active_user_id = Some("user-1".into());
+        save(&c, &s).unwrap();
+        let loaded = load(&c).unwrap();
+        assert_eq!(loaded.last_active_user_id, Some("user-1".into()));
+    }
+
+    #[test]
+    fn load_returns_none_for_last_active_user_id_when_field_missing() {
+        let c = open_in_memory().unwrap();
+        let legacy = r#"{"capture_enabled":true,"deny_list":[],"autostart":false,"hotkey":null}"#;
+        c.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)",
+            params![KEY, legacy],
+        ).unwrap();
+        let s = load(&c).unwrap();
+        assert!(s.last_active_user_id.is_none());
     }
 
     #[test]
