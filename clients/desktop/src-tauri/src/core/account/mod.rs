@@ -85,16 +85,22 @@ impl AccountRegistry {
         Ok(ActiveMembership { account: acct, server, user_key })
     }
 
-    pub async fn forget(&self, user_id: &str) -> Result<(), AppError> {
+    pub async fn forget(&self, user_id: &str) -> Result<Option<String>, AppError> {
         self.keychain.delete(&user_key_account(user_id))?;
         self.keychain.delete(&token_account(user_id))?;
-        let c = self.conn.lock().await;
-        crate::core::storage::entries_cache::delete_all(&c, user_id)?;
-        accounts::delete(&c, user_id)?;
-        if self.active.read().as_deref() == Some(user_id) {
-            *self.active.write() = None;
+        let conn = self.conn.lock().await;
+        crate::core::storage::entries_cache::delete_all(&conn, user_id)?;
+        accounts::delete(&conn, user_id)?;
+        let was_active = self.active.read().as_deref() == Some(user_id);
+        if !was_active {
+            return Ok(None);
         }
-        Ok(())
+        let next = accounts::list(&conn)?.into_iter().next().map(|a| a.user_id);
+        if let Err(e) = self.set_active_persisted_with(&conn, next.clone()) {
+            *self.active.write() = None;
+            return Err(e);
+        }
+        Ok(next)
     }
 }
 
@@ -124,7 +130,8 @@ mod tests {
             }).unwrap();
         }
         r.set_active(Some("u".into()));
-        r.forget("u").await.unwrap();
+        let new_active = r.forget("u").await.unwrap();
+        assert!(new_active.is_none());
         assert!(kc.get("u:token").unwrap().is_none());
         assert!(r.active_user_id().is_none());
     }
@@ -202,5 +209,71 @@ mod tests {
             crate::core::storage::settings::save(&c, &s).unwrap();
         }
         assert!(r.load_persisted_active().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn forget_active_promotes_oldest_remaining() {
+        let r = registry();
+        let kc = r.keychain.clone();
+        for (uid, created_at) in [("oldest", 1i64), ("middle", 2), ("newest", 3)] {
+            kc.put(&format!("{uid}:key"), &"ab".repeat(32)).unwrap();
+            kc.put(&format!("{uid}:token"), "tok").unwrap();
+            let c = r.conn.lock().await;
+            accounts::upsert(&c, &Account {
+                user_id: uid.into(), device_id: "d".into(), device_label: uid.into(),
+                server_url: "https://srv".into(), last_seen_id: 0, created_at,
+            }).unwrap();
+        }
+        r.set_active_persisted(Some("middle".into())).await.unwrap();
+        let new_active = r.forget("middle").await.unwrap();
+        assert_eq!(new_active, Some("oldest".into()));
+        assert_eq!(r.active_user_id(), Some("oldest".into()));
+        let c = r.conn.lock().await;
+        let s = crate::core::storage::settings::load(&c).unwrap();
+        assert_eq!(s.last_active_user_id, Some("oldest".into()));
+    }
+
+    #[tokio::test]
+    async fn forget_inactive_keeps_active_unchanged() {
+        let r = registry();
+        let kc = r.keychain.clone();
+        for uid in ["a", "b"] {
+            kc.put(&format!("{uid}:key"), &"ab".repeat(32)).unwrap();
+            kc.put(&format!("{uid}:token"), "tok").unwrap();
+            let c = r.conn.lock().await;
+            accounts::upsert(&c, &Account {
+                user_id: uid.into(), device_id: "d".into(), device_label: uid.into(),
+                server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+            }).unwrap();
+        }
+        r.set_active_persisted(Some("a".into())).await.unwrap();
+        let new_active = r.forget("b").await.unwrap();
+        assert!(new_active.is_none());
+        assert_eq!(r.active_user_id(), Some("a".into()));
+        let c = r.conn.lock().await;
+        let s = crate::core::storage::settings::load(&c).unwrap();
+        assert_eq!(s.last_active_user_id, Some("a".into()));
+    }
+
+    #[tokio::test]
+    async fn forget_only_active_account_clears_persisted_id() {
+        let r = registry();
+        let kc = r.keychain.clone();
+        kc.put("u:key", &"ab".repeat(32)).unwrap();
+        kc.put("u:token", "tok").unwrap();
+        {
+            let c = r.conn.lock().await;
+            accounts::upsert(&c, &Account {
+                user_id: "u".into(), device_id: "d".into(), device_label: "u".into(),
+                server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+            }).unwrap();
+        }
+        r.set_active_persisted(Some("u".into())).await.unwrap();
+        let new_active = r.forget("u").await.unwrap();
+        assert!(new_active.is_none());
+        assert!(r.active_user_id().is_none());
+        let c = r.conn.lock().await;
+        let s = crate::core::storage::settings::load(&c).unwrap();
+        assert!(s.last_active_user_id.is_none());
     }
 }
