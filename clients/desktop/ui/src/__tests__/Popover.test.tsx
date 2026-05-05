@@ -15,6 +15,7 @@ const accounts: Account[] = [
     server_url: "https://srv",
     status: "Disconnected",
     pending: 0,
+    is_active: false,
   },
   {
     user_id: "u-active",
@@ -23,6 +24,7 @@ const accounts: Account[] = [
     server_url: "https://srv",
     status: "Connecting",
     pending: 0,
+    is_active: true,
   },
 ];
 

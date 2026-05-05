@@ -26,27 +26,36 @@ describe("history store", () => {
 describe("accounts store", () => {
   beforeEach(() => useAccountsStore.setState({ accounts: [], active: undefined }));
 
-  it("hydrate sets active to first row", () => {
+  it("hydrate sets active to the row flagged is_active", () => {
     useAccountsStore.getState().hydrate([
-      { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Online", pending: 0 },
+      { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Online", pending: 0, is_active: true },
+      { user_id: "b", device_id: "d", label: "y", server_url: "https://s", status: "Disconnected", pending: 0, is_active: false },
     ]);
     expect(useAccountsStore.getState().active).toBe("a");
   });
 
-  it("hydrate prefers the backend-active account over the first disconnected row", () => {
+  it("hydrate leaves active undefined when no row is flagged", () => {
     useAccountsStore.getState().hydrate([
-      { user_id: "oldest", device_id: "d1", label: "Oldest", server_url: "https://s", status: "Disconnected", pending: 0 },
-      { user_id: "active", device_id: "d2", label: "Active", server_url: "https://s", status: "Connecting", pending: 0 },
+      { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Disconnected", pending: 0, is_active: false },
     ]);
-    expect(useAccountsStore.getState().active).toBe("active");
+    expect(useAccountsStore.getState().active).toBeUndefined();
   });
 
-  it("removing active falls back to next account", () => {
+  it("removing a non-active account leaves active alone", () => {
     useAccountsStore.getState().hydrate([
-      { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Online", pending: 0 },
-      { user_id: "b", device_id: "d", label: "y", server_url: "https://s", status: "Online", pending: 0 },
+      { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Online", pending: 0, is_active: true },
+      { user_id: "b", device_id: "d", label: "y", server_url: "https://s", status: "Disconnected", pending: 0, is_active: false },
+    ]);
+    useAccountsStore.getState().remove("b");
+    expect(useAccountsStore.getState().active).toBe("a");
+  });
+
+  it("removing the active account clears active and waits for backend", () => {
+    useAccountsStore.getState().hydrate([
+      { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Online", pending: 0, is_active: true },
+      { user_id: "b", device_id: "d", label: "y", server_url: "https://s", status: "Disconnected", pending: 0, is_active: false },
     ]);
     useAccountsStore.getState().remove("a");
-    expect(useAccountsStore.getState().active).toBe("b");
+    expect(useAccountsStore.getState().active).toBeUndefined();
   });
 });

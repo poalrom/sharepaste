@@ -11,7 +11,7 @@ describe("HistoryList", () => {
       { id: 2, user_id: "u", preview: "World", created_at: 2, device_id: "d" },
     ]});
     useAccountsStore.setState({
-      accounts: [{ user_id: "u", device_id: "d", label: "mac", server_url: "https://s", status: "Online", pending: 0 }],
+      accounts: [{ user_id: "u", device_id: "d", label: "mac", server_url: "https://s", status: "Online", pending: 0, is_active: true }],
       active: "u",
     });
   });
