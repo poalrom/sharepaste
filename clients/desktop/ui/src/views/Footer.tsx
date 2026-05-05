@@ -13,8 +13,8 @@ export default function Footer({ activeUserId }: { activeUserId: string }) {
         {status?.last_error ? <span className="ml-2 text-red-400">· {status.last_error}</span> : null}
       </span>
       <span className="space-x-2">
-        <button onClick={() => cmd.openModal("accounts")} className="hover:underline">Accounts</button>
-        <button onClick={() => cmd.openModal("settings")} className="hover:underline">Settings</button>
+        <button onClick={() => cmd.openSection("accounts").catch(() => {})} className="hover:underline">Accounts</button>
+        <button onClick={() => cmd.openSection("settings").catch(() => {})} className="hover:underline">Settings</button>
       </span>
     </div>
   );
