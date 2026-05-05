@@ -1,18 +1,23 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { injectForTests, type Invoker, type Listener } from "../ipc/tauri";
 import { useAccountsStore } from "../store/accounts";
 import PairingSection from "../views/sections/PairingSection";
 
 let invoke: ReturnType<typeof vi.fn<Invoker>>;
+let registeredListeners: Record<string, (payload: unknown) => void>;
 
 beforeEach(() => {
+  registeredListeners = {};
   invoke = vi.fn(async (cmd) => {
     if (cmd === "list_accounts") return [];
     if (cmd === "pair_start") return { code: "ABCDE FGHIJ", expires_at: Date.now() + 120_000 };
     return { user_id: "u", device_id: "d" };
   }) as ReturnType<typeof vi.fn<Invoker>>;
-  const listen = vi.fn(async () => () => {}) as ReturnType<typeof vi.fn<Listener>>;
+  const listen = vi.fn(async (event: string, cb: (payload: unknown) => void) => {
+    registeredListeners[event] = cb;
+    return () => { delete registeredListeners[event]; };
+  }) as ReturnType<typeof vi.fn<Listener>>;
   injectForTests(invoke as never, listen as never);
   useAccountsStore.setState({ accounts: [], active: undefined });
 });
@@ -70,6 +75,45 @@ describe("PairingSection", () => {
     });
     expect(await screen.findByTestId("shortcode")).toHaveTextContent("ABCDE FGHIJ");
     expect(screen.getByTestId("countdown")).toBeInTheDocument();
+  });
+
+  it("goes back from the show-code step to the chooser", async () => {
+    useAccountsStore.setState({
+      accounts: [
+        { user_id: "u-active", device_id: "d1", label: "Laptop", server_url: "https://srv", status: "Online", pending: 0, is_active: true },
+      ],
+      active: "u-active",
+    });
+
+    render(<PairingSection />);
+    fireEvent.click(screen.getByTestId("choose-show-code"));
+
+    expect(await screen.findByTestId("shortcode")).toHaveTextContent("ABCDE FGHIJ");
+    fireEvent.click(screen.getByRole("button", { name: /back/i }));
+
+    expect(screen.getByText("How are you pairing?")).toBeInTheDocument();
+    expect(screen.getByTestId("choose-show-code")).toBeInTheDocument();
+  });
+
+  it("shows paired-device confirmation when a pair is consumed", async () => {
+    useAccountsStore.setState({
+      accounts: [
+        { user_id: "u-active", device_id: "d1", label: "Laptop", server_url: "https://srv", status: "Online", pending: 0, is_active: true },
+      ],
+      active: "u-active",
+    });
+
+    render(<PairingSection />);
+    fireEvent.click(screen.getByTestId("choose-show-code"));
+    expect(await screen.findByTestId("shortcode")).toHaveTextContent("ABCDE FGHIJ");
+
+    await act(async () => {
+      registeredListeners["pair-claimed"]?.({ user_id: "u-active", device_label: "Pixel 9" });
+    });
+
+    expect(screen.getByText('Paired a new device "Pixel 9"')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Ok" }));
+    expect(screen.getByText("How are you pairing?")).toBeInTheDocument();
   });
 
   it("hydrates accounts on mount before starting pairing from an existing account", async () => {

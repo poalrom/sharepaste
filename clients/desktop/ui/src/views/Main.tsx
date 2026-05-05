@@ -3,9 +3,9 @@ import { useUiStore, type MainSection } from "../store/ui";
 import { events } from "../ipc/events";
 import AccountsSection from "./sections/AccountsSection";
 import SettingsSection from "./sections/SettingsSection";
-import PairingSection from "./sections/PairingSection";
 
-const SECTIONS: MainSection[] = ["accounts", "settings", "pairing"];
+const ROUTABLE_SECTIONS: MainSection[] = ["accounts", "settings", "pairing"];
+const TABS: Array<Exclude<MainSection, "pairing">> = ["accounts", "settings"];
 const LABELS: Record<MainSection, string> = {
   accounts: "Accounts",
   settings: "Settings",
@@ -18,7 +18,7 @@ export default function Main() {
 
   useEffect(() => {
     const fromUrl = new URLSearchParams(window.location.search).get("section");
-    if (fromUrl && (SECTIONS as string[]).includes(fromUrl)) {
+    if (fromUrl && (ROUTABLE_SECTIONS as string[]).includes(fromUrl)) {
       setActive(fromUrl as MainSection);
     }
   }, [setActive]);
@@ -28,7 +28,7 @@ export default function Main() {
     let cancelled = false;
     (async () => {
       const off = await events.onMainNavigate((section) => {
-        if ((SECTIONS as string[]).includes(section)) setActive(section as MainSection);
+        if ((ROUTABLE_SECTIONS as string[]).includes(section)) setActive(section as MainSection);
       });
       if (cancelled) off();
       else unsub = off;
@@ -42,15 +42,15 @@ export default function Main() {
   return (
     <div className="flex h-full flex-col">
       <nav role="tablist" className="flex border-b border-zinc-700">
-        {SECTIONS.map((s) => (
+        {TABS.map((s) => (
           <button
             key={s}
             data-testid={`tab-${s}`}
             role="tab"
-            aria-selected={active === s}
+            aria-selected={active === s || (s === "accounts" && active === "pairing")}
             className={
               "px-4 py-2 text-sm " +
-              (active === s
+              (active === s || (s === "accounts" && active === "pairing")
                 ? "border-b-2 border-blue-500 text-blue-300"
                 : "text-zinc-300 hover:text-zinc-100")
             }
@@ -61,9 +61,8 @@ export default function Main() {
         ))}
       </nav>
       <div className="flex-1 overflow-auto">
-        {active === "accounts" && <AccountsSection />}
+        {(active === "accounts" || active === "pairing") && <AccountsSection />}
         {active === "settings" && <SettingsSection />}
-        {active === "pairing" && <PairingSection />}
       </div>
     </div>
   );

@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS pairings (
   secret_hash         TEXT NOT NULL,
   encrypted_payload   BLOB,
   claimed_by          TEXT,
+  paired_device_label TEXT,
   failed_attempts     INTEGER NOT NULL DEFAULT 0,
   consumed_at         INTEGER,
   expires_at          INTEGER NOT NULL
@@ -50,4 +51,8 @@ CREATE INDEX IF NOT EXISTS entries_user_id_id ON entries (user_id, id);
 
 export const migrate = (db: Db): void => {
   db.exec(SCHEMA);
+  const pairingColumns = db.prepare("PRAGMA table_info(pairings)").all() as Array<{ name: string }>;
+  if (!pairingColumns.some((column) => column.name === "paired_device_label")) {
+    db.exec("ALTER TABLE pairings ADD COLUMN paired_device_label TEXT");
+  }
 };

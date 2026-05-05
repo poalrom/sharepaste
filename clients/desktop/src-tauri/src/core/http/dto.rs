@@ -22,7 +22,7 @@ pub struct PairPayloadReq<'a> { pub pair_id: &'a str, pub encrypted_payload: &'a
 pub struct PairPayloadResp { pub encrypted_payload: String }
 
 #[derive(Deserialize)]
-pub struct PairPollResp { pub status: String }
+pub struct PairPollResp { pub status: String, pub device_label: Option<String> }
 
 #[derive(Serialize)]
 pub struct DevicesReq<'a> { pub pair_id: &'a str, pub secret_proof: &'a str, pub label: &'a str }

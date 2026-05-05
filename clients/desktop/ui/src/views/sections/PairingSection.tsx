@@ -5,7 +5,7 @@ import { useAccountsStore } from "../../store/accounts";
 import { useUiStore } from "../../store";
 import type { AppErrorPayload } from "../../types";
 
-type Step = "chooser" | "invite" | "code" | "show-code";
+type Step = "chooser" | "invite" | "code" | "show-code" | "paired";
 
 export default function PairingSection() {
   const setMainSection = useUiStore((s) => s.setMainSection);
@@ -22,6 +22,7 @@ export default function PairingSection() {
   const [error, setError] = useState<string>();
   const [shortcode, setShortcode] = useState<string>();
   const [expiresAt, setExpiresAt] = useState<number>();
+  const [pairedDeviceLabel, setPairedDeviceLabel] = useState<string>();
 
   useEffect(() => {
     const unsubs: Array<() => void> = [];
@@ -31,7 +32,11 @@ export default function PairingSection() {
         setExpiresAt(expires_at);
         setStep("show-code");
       }));
-      unsubs.push(await events.onPairClaimed(() => { setError(undefined); close(); }));
+      unsubs.push(await events.onPairClaimed(({ device_label }) => {
+        setError(undefined);
+        setPairedDeviceLabel(device_label ?? undefined);
+        setStep("paired");
+      }));
       unsubs.push(await events.onPairExpired(() => setError("Pair code expired or already used. Generate a new one.")));
     })();
     return () => unsubs.forEach((u) => u());
@@ -171,12 +176,37 @@ export default function PairingSection() {
     );
   }
 
+  if (step === "paired") {
+    return (
+      <div className="flex flex-col gap-3 p-6">
+        <h1 className="text-base font-semibold">
+          {pairedDeviceLabel ? `Paired a new device "${pairedDeviceLabel}"` : "Paired a new device"}
+        </h1>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="rounded bg-blue-600 px-3 py-1 text-white hover:bg-blue-500"
+            onClick={() => {
+              setStep("chooser");
+              close();
+            }}
+          >
+            Ok
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-3 p-6">
       <h1 className="text-base font-semibold">Show this code on the new device</h1>
       <pre data-testid="shortcode" className="whitespace-pre-wrap rounded bg-zinc-800 p-3 font-mono text-xs">{shortcode}</pre>
       <Countdown expiresAt={expiresAt} />
       {error && <div className="text-xs text-red-400">{error}</div>}
+      <div className="flex gap-2">
+        <button type="button" className="rounded px-3 py-1 hover:underline" onClick={() => setStep("chooser")}>Back</button>
+      </div>
     </div>
   );
 }

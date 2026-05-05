@@ -3,9 +3,12 @@ import { cmd } from "../../ipc/commands";
 import { events } from "../../ipc/events";
 import { useAccountsStore, useUiStore } from "../../store";
 import type { Account } from "../../types";
+import PairingSection from "./PairingSection";
 
 export default function AccountsSection() {
   const accounts = useAccountsStore((s) => s.accounts);
+  const pairingOpen = useUiStore((s) => s.mainSection === "pairing");
+  const setMainSection = useUiStore((s) => s.setMainSection);
   const hydrate = useAccountsStore((s) => s.hydrate);
   const removeFromStore = useAccountsStore((s) => s.remove);
   const setActiveInStore = useAccountsStore((s) => s.setActive);
@@ -51,6 +54,8 @@ export default function AccountsSection() {
     };
   }, [hydrate, removeFromStore, setActiveInStore, updateStatus]);
 
+  if (pairingOpen && accounts.length === 0) return <PairingSection />;
+
   if (accounts.length === 0) {
     return (
       <div className="flex flex-col gap-3 p-6 text-sm">
@@ -59,7 +64,7 @@ export default function AccountsSection() {
         <button
           data-testid="empty-pair"
           className="self-start rounded bg-blue-600 px-3 py-1.5 text-white hover:bg-blue-500"
-          onClick={() => useUiStore.getState().setMainSection("pairing")}
+          onClick={() => setMainSection("pairing")}
         >
           Pair a device
         </button>
@@ -133,6 +138,24 @@ export default function AccountsSection() {
             )}
           </li>
         ))}
+        <li className="rounded border border-dashed border-zinc-700">
+          <button
+            data-testid="add-account-row"
+            className="flex w-full items-center justify-between p-3 text-left hover:bg-zinc-800"
+            onClick={() => setMainSection("pairing")}
+          >
+            <div>
+              <div className="font-semibold">Add an account</div>
+              <div className="text-xs text-zinc-400">Pair this device or another device.</div>
+            </div>
+            <span aria-hidden="true" className="text-lg leading-none text-zinc-400">+</span>
+          </button>
+          {pairingOpen && (
+            <div className="border-t border-zinc-700">
+              <PairingSection />
+            </div>
+          )}
+        </li>
       </ul>
       {error && <div className="text-xs text-red-400">{error}</div>}
     </div>
