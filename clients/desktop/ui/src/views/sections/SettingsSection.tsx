@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import type { Settings } from "../types";
-import { cmd } from "../ipc/commands";
+import type { Settings } from "../../types";
+import { cmd } from "../../ipc/commands";
 
-export default function SettingsModal() {
+export default function SettingsSection() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [error, setError] = useState<string>();
 

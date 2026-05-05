@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { injectForTests, type Invoker, type Listener } from "../ipc/tauri";
 import { useAccountsStore } from "../store";
 import type { Account } from "../types";
-import AccountsModal from "../modals/AccountsModal";
+import AccountsSection from "../views/sections/AccountsSection";
 
 const accounts: Account[] = [
   { user_id: "u-active", device_id: "d1", label: "Laptop", server_url: "https://srv", status: "Connecting", pending: 0, is_active: true },
@@ -40,9 +40,9 @@ beforeEach(() => {
   useAccountsStore.setState({ accounts: [], active: undefined });
 });
 
-describe("AccountsModal", () => {
+describe("AccountsSection", () => {
   it("renders Active badge for the active account and Use button for others", async () => {
-    render(<AccountsModal />);
+    render(<AccountsSection />);
     await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
     expect(screen.getByTestId("active-badge-u-active")).toBeInTheDocument();
     expect(screen.getByTestId("use-u-other")).toBeInTheDocument();
@@ -50,7 +50,7 @@ describe("AccountsModal", () => {
   });
 
   it("clicking trash opens an inline confirmation strip below the row", async () => {
-    render(<AccountsModal />);
+    render(<AccountsSection />);
     await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("trash-u-other"));
     expect(screen.getByTestId("confirm-strip-u-other")).toBeInTheDocument();
@@ -58,7 +58,7 @@ describe("AccountsModal", () => {
   });
 
   it("Cancel collapses the confirmation strip without invoking forget", async () => {
-    render(<AccountsModal />);
+    render(<AccountsSection />);
     await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("trash-u-other"));
     fireEvent.click(screen.getByTestId("cancel-u-other"));
@@ -67,7 +67,7 @@ describe("AccountsModal", () => {
   });
 
   it("Forget invokes forget_account and clears the strip", async () => {
-    render(<AccountsModal />);
+    render(<AccountsSection />);
     await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("trash-u-other"));
     fireEvent.click(screen.getByTestId("confirm-forget-u-other"));
@@ -81,7 +81,7 @@ describe("AccountsModal", () => {
   });
 
   it("Use invokes set_active_account", async () => {
-    render(<AccountsModal />);
+    render(<AccountsSection />);
     await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("use-u-other"));
     await waitFor(() =>
@@ -91,7 +91,7 @@ describe("AccountsModal", () => {
 
   it("renders empty state and opens pairing modal", async () => {
     currentAccounts = [];
-    render(<AccountsModal />);
+    render(<AccountsSection />);
     await waitFor(() => expect(screen.getByTestId("empty-pair")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("empty-pair"));
     await waitFor(() =>

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { injectForTests, type Invoker, type Listener } from "../ipc/tauri";
 import { useAccountsStore } from "../store/accounts";
-import PairingModal from "../modals/PairingModal";
+import PairingSection from "../views/sections/PairingSection";
 
 let invoke: ReturnType<typeof vi.fn<Invoker>>;
 
@@ -17,29 +17,29 @@ beforeEach(() => {
   useAccountsStore.setState({ accounts: [], active: undefined });
 });
 
-describe("PairingModal", () => {
+describe("PairingSection", () => {
   it("starts on the chooser screen", () => {
-    render(<PairingModal />);
+    render(<PairingSection />);
     expect(screen.getByTestId("choose-invite")).toBeInTheDocument();
     expect(screen.getByTestId("choose-code")).toBeInTheDocument();
     expect(screen.getByTestId("choose-show-code")).toBeInTheDocument();
   });
 
   it("keeps the show-code option disabled without an active account", () => {
-    render(<PairingModal />);
+    render(<PairingSection />);
     const showCode = screen.getByTestId("choose-show-code");
     expect(showCode).toBeDisabled();
     expect(screen.getByText(/Pair this device first/i)).toBeInTheDocument();
   });
 
   it("navigates to the invite step", () => {
-    render(<PairingModal />);
+    render(<PairingSection />);
     fireEvent.click(screen.getByTestId("choose-invite"));
     expect(screen.getByText(/Claim invite/i)).toBeInTheDocument();
   });
 
   it("warns on plain http to non-localhost", () => {
-    render(<PairingModal />);
+    render(<PairingSection />);
     fireEvent.click(screen.getByTestId("choose-invite"));
     const url = screen.getByLabelText(/Server URL/i, { selector: "input" }) as HTMLInputElement;
     fireEvent.change(url, { target: { value: "http://example.com" } });
@@ -47,7 +47,7 @@ describe("PairingModal", () => {
   });
 
   it("shows red border on invalid pair code", () => {
-    render(<PairingModal />);
+    render(<PairingSection />);
     fireEvent.click(screen.getByTestId("choose-code"));
     const ta = screen.getByTestId("pair-code") as HTMLTextAreaElement;
     fireEvent.change(ta, { target: { value: "tiny" } });
@@ -62,7 +62,7 @@ describe("PairingModal", () => {
       active: "u-active",
     });
 
-    render(<PairingModal />);
+    render(<PairingSection />);
     fireEvent.click(screen.getByTestId("choose-show-code"));
 
     await waitFor(() => {
@@ -83,7 +83,7 @@ describe("PairingModal", () => {
       return { user_id: "u", device_id: "d" };
     });
 
-    render(<PairingModal />);
+    render(<PairingSection />);
     const showCode = screen.getByTestId("choose-show-code");
 
     await waitFor(() => expect(showCode).toBeEnabled());
@@ -107,7 +107,7 @@ describe("PairingModal", () => {
       return { user_id: "u", device_id: "d" };
     });
 
-    render(<PairingModal />);
+    render(<PairingSection />);
     const showCode = screen.getByTestId("choose-show-code");
 
     await waitFor(() => expect(showCode).toBeEnabled());
@@ -129,7 +129,7 @@ describe("PairingModal", () => {
       active: "u-active",
     });
 
-    render(<PairingModal />);
+    render(<PairingSection />);
     fireEvent.click(screen.getByTestId("choose-show-code"));
 
     expect(await screen.findByText("server unavailable")).toBeInTheDocument();

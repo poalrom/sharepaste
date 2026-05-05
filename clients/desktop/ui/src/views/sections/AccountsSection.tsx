@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { cmd } from "../ipc/commands";
-import { events } from "../ipc/events";
-import { useAccountsStore } from "../store";
-import type { Account } from "../types";
+import { cmd } from "../../ipc/commands";
+import { events } from "../../ipc/events";
+import { useAccountsStore } from "../../store";
+import type { Account } from "../../types";
 
-export default function AccountsModal() {
+export default function AccountsSection() {
   const accounts = useAccountsStore((s) => s.accounts);
   const hydrate = useAccountsStore((s) => s.hydrate);
   const removeFromStore = useAccountsStore((s) => s.remove);

@@ -5,7 +5,7 @@ import { events } from "../ipc/events";
 import HistoryList from "./HistoryList";
 import Search from "./Search";
 import Footer from "./Footer";
-import PairingModal from "../modals/PairingModal";
+import PairingSection from "./sections/PairingSection";
 
 export default function Popover() {
   const accounts = useAccountsStore((s) => s.accounts);
@@ -90,7 +90,7 @@ export default function Popover() {
   if (modal === "pairing") {
     return (
       <div className="flex h-full flex-col">
-        <PairingModal onClose={() => setModal(null)} />
+        <PairingSection onClose={() => setModal(null)} />
       </div>
     );
   }

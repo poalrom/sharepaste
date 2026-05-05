@@ -1,12 +1,12 @@
 import { useState, useEffect } from "react";
-import { cmd } from "../ipc/commands";
-import { events } from "../ipc/events";
-import { useAccountsStore } from "../store/accounts";
-import type { AppErrorPayload } from "../types";
+import { cmd } from "../../ipc/commands";
+import { events } from "../../ipc/events";
+import { useAccountsStore } from "../../store/accounts";
+import type { AppErrorPayload } from "../../types";
 
 type Step = "chooser" | "invite" | "code" | "show-code";
 
-export default function PairingModal({ onClose }: { onClose?: () => void } = {}) {
+export default function PairingSection({ onClose }: { onClose?: () => void } = {}) {
   const close = onClose ?? (() => window.close());
   const activeUserId = useAccountsStore((s) => s.active);
   const accountCount = useAccountsStore((s) => s.accounts.length);
