@@ -294,7 +294,32 @@ pub async fn forget_account(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
 ) -> Result<(), AppError> {
-    state.registry.forget(&args.user_id).await?;
+    let was_active = state
+        .registry
+        .active_user_id()
+        .as_deref()
+        == Some(args.user_id.as_str());
+
+    if let Some(slot) = state.sync_tasks.lock().remove(&args.user_id) {
+        slot.cancel.cancel();
+    }
+
+    let result = state.registry.forget(&args.user_id).await;
+
+    let new_active = match &result {
+        Ok(next) => next.clone(),
+        Err(_) => None,
+    };
+
+    if was_active {
+        app.emit(
+            ACTIVE_CHANGED,
+            crate::events::ActiveChanged {
+                user_id: new_active.clone(),
+            },
+        )
+        .ok();
+    }
     app.emit(
         crate::events::ACCOUNT_REMOVED,
         crate::events::AccountRemoved {
@@ -302,6 +327,13 @@ pub async fn forget_account(
         },
     )
     .ok();
+
+    result?;
+
+    if let Some(uid) = new_active {
+        crate::spawn_sync(app.clone(), Arc::clone(state.inner()), uid).await;
+    }
+
     Ok(())
 }
 
