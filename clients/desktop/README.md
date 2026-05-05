@@ -1,9 +1,8 @@
 # sharepaste - desktop client
 
-Tauri 2 client for the sharepaste self-hosted clipboard sync server. macOS is
-the feature-complete target. Windows currently supports compile and launch with
-reduced clipboard scope: manual history copy works, but clipboard auto-capture
-is still macOS-only.
+Tauri 2 client for the sharepaste self-hosted clipboard sync server. macOS and
+Windows support text clipboard auto-capture, encrypted sync, searchable history,
+and manual history copy.
 
 Specs:
 
@@ -71,10 +70,14 @@ open /Applications/sharepaste.app
 ## Windows smoke checklist
 
 1. `npm.cmd --prefix ui run build` - Vite production build succeeds.
-2. `cd src-tauri && cargo check` - Rust/Tauri check succeeds.
+2. `cargo check --manifest-path src-tauri/Cargo.toml` - Rust/Tauri check succeeds.
 3. `npm.cmd run tauri dev` - desktop shell opens.
-4. Open the popover and verify the app does not start clipboard auto-capture.
-5. Pair against a running server and copy an existing history item from the UI.
+4. Pair against a running server.
+5. Copy text in another app and verify the entry appears in the popover.
+6. Add the foreground app executable name to the deny-list, copy new text from
+   that app, and verify the entry is skipped.
+7. Copy an existing history item from the UI and verify it is not immediately
+   re-captured as a new entry.
 
 ## macOS manual smoke checklist
 
