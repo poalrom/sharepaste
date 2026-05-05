@@ -83,8 +83,9 @@ fn build_tray(app: &mut tauri::App, _state: Arc<AppState>) -> tauri::Result<()> 
         .ok_or_else(|| tauri::Error::Io(std::io::Error::other("tray 'main' not found")))?;
 
     let menu = MenuBuilder::new(app)
-        .item(&MenuItemBuilder::with_id("pair", "Pair device…").build(app)?)
-        .item(&MenuItemBuilder::with_id("settings", "Settings…").build(app)?)
+        .item(&MenuItemBuilder::with_id("open_accounts", "Accounts…").build(app)?)
+        .item(&MenuItemBuilder::with_id("open_pairing", "Pair device…").build(app)?)
+        .item(&MenuItemBuilder::with_id("open_settings", "Settings…").build(app)?)
         .separator()
         .item(&MenuItemBuilder::with_id("quit", "Quit").build(app)?)
         .build()?;
@@ -98,11 +99,14 @@ fn build_tray(app: &mut tauri::App, _state: Arc<AppState>) -> tauri::Result<()> 
 
     let menu_for_event = menu.clone();
     tray.on_menu_event(|app, event| match event.id.as_ref() {
-        "pair" => {
-            let _ = open_modal(app, "pairing");
+        "open_accounts" => {
+            let _ = open_main_window_impl(app, "accounts");
         }
-        "settings" => {
-            let _ = open_modal(app, "settings");
+        "open_pairing" => {
+            let _ = open_main_window_impl(app, "pairing");
+        }
+        "open_settings" => {
+            let _ = open_main_window_impl(app, "settings");
         }
         "quit" => {
             app.exit(0);
