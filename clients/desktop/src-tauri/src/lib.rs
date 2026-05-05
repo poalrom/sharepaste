@@ -424,17 +424,40 @@ fn open_modal(app: &tauri::AppHandle, kind: &str) -> tauri::Result<()> {
 
 fn spawn_sync_for_existing_accounts(app: tauri::AppHandle, state: Arc<AppState>) {
     tauri::async_runtime::spawn(async move {
-        let accounts = state.registry.list().await.unwrap_or_default();
-        if let Some(first) = accounts.first() {
-            state.registry.set_active(Some(first.user_id.clone()));
-            let _ = app.emit(
-                ACTIVE_CHANGED,
-                crate::events::ActiveChanged {
-                    user_id: Some(first.user_id.clone()),
-                },
-            );
-            spawn_sync(app.clone(), state.clone(), first.user_id.clone()).await;
+        let persisted = match state.registry.load_persisted_active().await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(err = %e, "load persisted active failed");
+                None
+            }
+        };
+        let chosen = if let Some(uid) = persisted {
+            Some(uid)
+        } else {
+            state
+                .registry
+                .list()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .next()
+                .map(|a| a.user_id)
+        };
+        let Some(user_id) = chosen else { return };
+        if let Err(e) = state
+            .registry
+            .set_active_persisted(Some(user_id.clone()))
+            .await
+        {
+            tracing::warn!(err = %e, "persist active on startup failed");
         }
+        let _ = app.emit(
+            ACTIVE_CHANGED,
+            crate::events::ActiveChanged {
+                user_id: Some(user_id.clone()),
+            },
+        );
+        spawn_sync(app.clone(), state.clone(), user_id).await;
     });
 }
 
