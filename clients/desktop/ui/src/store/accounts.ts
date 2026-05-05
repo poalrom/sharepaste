@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Account } from "../types";
+import type { Account, ConnectionState } from "../types";
 
 export type AccountsState = {
   accounts: Account[];
@@ -8,6 +8,7 @@ export type AccountsState = {
   upsert: (a: Account) => void;
   remove: (user_id: string) => void;
   setActive: (user_id: string | undefined) => void;
+  updateStatus: (user_id: string, status: ConnectionState) => void;
 };
 
 export const useAccountsStore = create<AccountsState>((set) => ({
@@ -32,5 +33,11 @@ export const useAccountsStore = create<AccountsState>((set) => ({
     set((s) => ({
       active,
       accounts: s.accounts.map((a) => ({ ...a, is_active: a.user_id === active })),
+    })),
+  updateStatus: (user_id, status) =>
+    set((s) => ({
+      accounts: s.accounts.map((a) =>
+        a.user_id === user_id ? { ...a, status } : a,
+      ),
     })),
 }));

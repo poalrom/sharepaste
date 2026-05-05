@@ -47,14 +47,14 @@ pub async fn list_accounts(
     let active = state.registry.active_user_id();
     let mut out = Vec::with_capacity(accts.len());
     let conn = state.conn.lock().await;
+    let conn_states = state.conn_states.lock();
     for a in accts {
         let pending = pending::count(&conn, &a.user_id)?;
         let is_active = active.as_deref() == Some(&a.user_id);
-        let status = if is_active {
-            ConnectionState::Connecting
-        } else {
-            ConnectionState::Disconnected
-        };
+        let status = conn_states
+            .get(&a.user_id)
+            .copied()
+            .unwrap_or(ConnectionState::Disconnected);
         out.push(AccountSummary {
             user_id: a.user_id,
             device_id: a.device_id,
@@ -299,6 +299,7 @@ pub async fn forget_account(
     if let Some(slot) = state.sync_tasks.lock().remove(&args.user_id) {
         slot.cancel.cancel();
     }
+    state.conn_states.lock().remove(&args.user_id);
 
     let result = state.registry.forget(&args.user_id).await;
 
@@ -585,12 +586,13 @@ pub async fn get_status(
 ) -> Result<StatusResp, AppError> {
     let conn = state.conn.lock().await;
     let count = pending::count(&conn, &args.user_id)?;
-    let active = state.registry.active_user_id();
-    let st = if active.as_deref() == Some(&args.user_id) {
-        ConnectionState::Connecting
-    } else {
-        ConnectionState::Disconnected
-    };
+    drop(conn);
+    let st = state
+        .conn_states
+        .lock()
+        .get(&args.user_id)
+        .copied()
+        .unwrap_or(ConnectionState::Disconnected);
     Ok(StatusResp {
         state: st,
         pending_count: count,

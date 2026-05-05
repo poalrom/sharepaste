@@ -487,6 +487,27 @@ fn spawn_sync_for_existing_accounts(app: tauri::AppHandle, state: Arc<AppState>)
     });
 }
 
+pub fn set_conn_state(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    user_id: &str,
+    new_state: crate::core::sync::ConnectionState,
+    last_error: Option<String>,
+) {
+    state
+        .conn_states
+        .lock()
+        .insert(user_id.to_string(), new_state);
+    let _ = app.emit(
+        CONNECTION_STATE,
+        ConnectionStateEvent {
+            user_id: user_id.to_string(),
+            state: new_state,
+            last_error,
+        },
+    );
+}
+
 pub async fn spawn_sync(app: tauri::AppHandle, state: Arc<AppState>, user_id: String) {
     let cancel = CancellationToken::new();
     {
@@ -504,13 +525,12 @@ pub async fn spawn_sync(app: tauri::AppHandle, state: Arc<AppState>, user_id: St
     let m = match state.registry.load_active_membership(&user_id).await {
         Ok(m) => m,
         Err(e) => {
-            let _ = app.emit(
-                CONNECTION_STATE,
-                ConnectionStateEvent {
-                    user_id: user_id.clone(),
-                    state: crate::core::sync::ConnectionState::AuthFailed,
-                    last_error: Some(e.to_string()),
-                },
+            set_conn_state(
+                &app,
+                &state,
+                &user_id,
+                crate::core::sync::ConnectionState::AuthFailed,
+                Some(e.to_string()),
             );
             return;
         }
@@ -541,13 +561,12 @@ pub async fn spawn_sync(app: tauri::AppHandle, state: Arc<AppState>, user_id: St
             if cancel2.is_cancelled() {
                 return;
             }
-            let _ = app2.emit(
-                CONNECTION_STATE,
-                ConnectionStateEvent {
-                    user_id: user_id_for_sse.clone(),
-                    state: crate::core::sync::ConnectionState::Connecting,
-                    last_error: None,
-                },
+            set_conn_state(
+                &app2,
+                &state2,
+                &user_id_for_sse,
+                crate::core::sync::ConnectionState::Connecting,
+                None,
             );
             let last_seen = {
                 let conn = state2.conn.lock().await;
@@ -586,25 +605,23 @@ pub async fn spawn_sync(app: tauri::AppHandle, state: Arc<AppState>, user_id: St
                     }
                 }
                 Err(crate::errors::AppError::Auth(s)) => {
-                    let _ = app2.emit(
-                        CONNECTION_STATE,
-                        ConnectionStateEvent {
-                            user_id: user_id_for_sse.clone(),
-                            state: crate::core::sync::ConnectionState::AuthFailed,
-                            last_error: Some(s),
-                        },
+                    set_conn_state(
+                        &app2,
+                        &state2,
+                        &user_id_for_sse,
+                        crate::core::sync::ConnectionState::AuthFailed,
+                        Some(s),
                     );
                     return;
                 }
                 Err(e) => {
                     tracing::warn!(err = %e, "backfill failed; will retry");
-                    let _ = app2.emit(
-                        CONNECTION_STATE,
-                        ConnectionStateEvent {
-                            user_id: user_id_for_sse.clone(),
-                            state: crate::core::sync::ConnectionState::Connecting,
-                            last_error: Some(e.to_string()),
-                        },
+                    set_conn_state(
+                        &app2,
+                        &state2,
+                        &user_id_for_sse,
+                        crate::core::sync::ConnectionState::Connecting,
+                        Some(e.to_string()),
                     );
                     let delay = backoff.next_delay_secs();
                     tokio::select! {
@@ -615,13 +632,12 @@ pub async fn spawn_sync(app: tauri::AppHandle, state: Arc<AppState>, user_id: St
                 }
             }
 
-            let _ = app2.emit(
-                CONNECTION_STATE,
-                ConnectionStateEvent {
-                    user_id: user_id_for_sse.clone(),
-                    state: crate::core::sync::ConnectionState::Online,
-                    last_error: None,
-                },
+            set_conn_state(
+                &app2,
+                &state2,
+                &user_id_for_sse,
+                crate::core::sync::ConnectionState::Online,
+                None,
             );
             backoff.reset();
             // Server reachable again — push any queued entries.
@@ -682,13 +698,12 @@ pub async fn spawn_sync(app: tauri::AppHandle, state: Arc<AppState>, user_id: St
             if cancel2.is_cancelled() {
                 return;
             }
-            let _ = app2.emit(
-                CONNECTION_STATE,
-                ConnectionStateEvent {
-                    user_id: user_id_for_sse.clone(),
-                    state: crate::core::sync::ConnectionState::Connecting,
-                    last_error,
-                },
+            set_conn_state(
+                &app2,
+                &state2,
+                &user_id_for_sse,
+                crate::core::sync::ConnectionState::Connecting,
+                last_error,
             );
             let delay = backoff.next_delay_secs();
             tokio::select! {
@@ -701,6 +716,7 @@ pub async fn spawn_sync(app: tauri::AppHandle, state: Arc<AppState>, user_id: St
     // Pending-queue uploader on its own task.
     let conn_for_upload = state.conn.clone();
     let app_for_upload = app.clone();
+    let state_for_upload = state.clone();
     let cancel3 = cancel.clone();
     let user_id2 = user_id.clone();
     let upload_trigger_for_task = upload_trigger.clone();
@@ -715,6 +731,7 @@ pub async fn spawn_sync(app: tauri::AppHandle, state: Arc<AppState>, user_id: St
         }
         let app_pc = app_for_upload.clone();
         let app_af = app_for_upload.clone();
+        let state_af = state_for_upload.clone();
         let user_pc = user_id2.clone();
         let user_af = user_id2.clone();
         let events = UploaderEvents {
@@ -728,13 +745,12 @@ pub async fn spawn_sync(app: tauri::AppHandle, state: Arc<AppState>, user_id: St
                 );
             }),
             on_auth_failed: Box::new(move || {
-                let _ = app_af.emit(
-                    CONNECTION_STATE,
-                    ConnectionStateEvent {
-                        user_id: user_af.clone(),
-                        state: crate::core::sync::ConnectionState::AuthFailed,
-                        last_error: None,
-                    },
+                set_conn_state(
+                    &app_af,
+                    &state_af,
+                    &user_af,
+                    crate::core::sync::ConnectionState::AuthFailed,
+                    None,
                 );
             }),
         };
