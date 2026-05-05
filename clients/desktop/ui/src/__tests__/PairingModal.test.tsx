@@ -57,7 +57,7 @@ describe("PairingModal", () => {
   it("starts pairing for the active account and displays the returned code", async () => {
     useAccountsStore.setState({
       accounts: [
-        { user_id: "u-active", device_id: "d1", label: "Laptop", server_url: "https://srv", status: "Online", pending: 0 },
+        { user_id: "u-active", device_id: "d1", label: "Laptop", server_url: "https://srv", status: "Online", pending: 0, is_active: true },
       ],
       active: "u-active",
     });
@@ -76,7 +76,7 @@ describe("PairingModal", () => {
     invoke.mockImplementation(async (cmd) => {
       if (cmd === "list_accounts") {
         return [
-          { user_id: "u-hydrated", device_id: "d1", label: "Laptop", server_url: "https://srv", status: "Online", pending: 0 },
+          { user_id: "u-hydrated", device_id: "d1", label: "Laptop", server_url: "https://srv", status: "Online", pending: 0, is_active: true },
         ];
       }
       if (cmd === "pair_start") return { code: "VWXYZ 23456", expires_at: Date.now() + 120_000 };
@@ -99,8 +99,8 @@ describe("PairingModal", () => {
     invoke.mockImplementation(async (cmd) => {
       if (cmd === "list_accounts") {
         return [
-          { user_id: "u-oldest", device_id: "d1", label: "Oldest", server_url: "https://srv", status: "Disconnected", pending: 0 },
-          { user_id: "u-active", device_id: "d2", label: "Active", server_url: "https://srv", status: "Connecting", pending: 0 },
+          { user_id: "u-oldest", device_id: "d1", label: "Oldest", server_url: "https://srv", status: "Disconnected", pending: 0, is_active: false },
+          { user_id: "u-active", device_id: "d2", label: "Active", server_url: "https://srv", status: "Connecting", pending: 0, is_active: true },
         ];
       }
       if (cmd === "pair_start") return { code: "LMNOP 78901", expires_at: Date.now() + 120_000 };
@@ -124,7 +124,7 @@ describe("PairingModal", () => {
     });
     useAccountsStore.setState({
       accounts: [
-        { user_id: "u-active", device_id: "d1", label: "Laptop", server_url: "https://srv", status: "Online", pending: 0 },
+        { user_id: "u-active", device_id: "d1", label: "Laptop", server_url: "https://srv", status: "Online", pending: 0, is_active: true },
       ],
       active: "u-active",
     });

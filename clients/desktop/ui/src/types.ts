@@ -16,6 +16,7 @@ export type Account = {
   server_url: string;
   status: ConnectionState;
   pending: number;
+  is_active: boolean;
 };
 
 export type Settings = {
