@@ -440,11 +440,28 @@ fn open_main_window_impl(app: &tauri::AppHandle, section: &str) -> tauri::Result
         return Ok(());
     }
     let url = format!("main.html?section={section}");
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::App(url.into()))
+    let win = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(url.into()))
         .title("sharepaste")
         .inner_size(720.0, 560.0)
         .resizable(true)
         .build()?;
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    }
+
+    let app_handle = app.clone();
+    win.on_window_event(move |ev| {
+        if let WindowEvent::Destroyed = ev {
+            #[cfg(target_os = "macos")]
+            {
+                let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            }
+            // Touch app_handle on non-macOS to silence unused warning.
+            let _ = &app_handle;
+        }
+    });
     Ok(())
 }
 
