@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import { injectForTests, type Invoker, type Listener } from "../ipc/tauri";
 import { useAccountsStore, useHistoryStore, useStatusStore, useUiStore } from "../store";
 import type { Account } from "../types";
@@ -54,5 +54,24 @@ describe("Popover", () => {
     expect(invoke).not.toHaveBeenCalledWith("list_history", {
       args: { user_id: "u-oldest", limit: 100 },
     });
+  });
+
+  it("renders the choose-account placeholder when accounts exist but none is active", async () => {
+    const inactiveAccounts: Account[] = accounts.map((a) => ({ ...a, is_active: false, status: "Disconnected" }));
+    invoke = vi.fn(async (cmd) => {
+      if (cmd === "list_accounts") return inactiveAccounts;
+      if (cmd === "list_history") return [];
+      if (cmd === "open_modal") return undefined;
+      return undefined;
+    }) as ReturnType<typeof vi.fn<Invoker>>;
+    const listen = vi.fn(async () => () => {}) as ReturnType<typeof vi.fn<Listener>>;
+    injectForTests(invoke as never, listen as never);
+
+    const { findByTestId } = render(<Popover />);
+    const button = await findByTestId("choose-account");
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("open_modal", { args: { kind: "accounts" } }),
+    );
   });
 });
