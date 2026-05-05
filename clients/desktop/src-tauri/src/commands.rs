@@ -135,6 +135,21 @@ pub async fn pair_start(
 ) -> Result<PairStartResp, AppError> {
     let m = state.registry.load_active_membership(&args.user_id).await?;
     let started = start_pair(&m.server).await?;
+
+    // Pre-upload payload (encrypted to pairing_secret) before exposing the code,
+    // so the claimer's fetch can never race the inviter's upload.
+    let user_key: crate::core::crypto::UserKey = Zeroizing::new(*m.user_key);
+    let server_url = m.server.base().to_string();
+    upload_pair_payload(
+        &m.server,
+        started.pair_id,
+        &started.pairing_secret,
+        &args.user_id,
+        &user_key,
+        &server_url,
+    )
+    .await?;
+
     let expires_at = now_ms() + 2 * 60 * 1000;
     let formatted = group_for_display(&started.shortcode);
     app.emit(
@@ -146,40 +161,21 @@ pub async fn pair_start(
     )
     .ok();
 
-    // Spawn pair-watch task that polls /pair/poll, uploads payload on `claimed`,
-    // and emits pair-claimed / pair-expired.
+    // Spawn pair-watch task that polls /pair/poll and emits pair-claimed / pair-expired.
     let server = m.server.clone();
     let user_id = args.user_id.clone();
-    // UserKey (Zeroizing<[u8;32]>) does not impl Clone; clone the inner array
-    // through a fresh Zeroizing wrapper so the spawned task owns its own key.
-    let user_key: crate::core::crypto::UserKey = Zeroizing::new(*m.user_key);
     let pair_id = started.pair_id;
-    let pairing_secret = *started.pairing_secret;
     let app2 = app.clone();
     tokio::spawn(async move {
         loop {
             match server.pair_poll(&pair_id.to_string(), 25_000).await {
                 Ok(p) if p.status == "claimed" => {
-                    let server_url = server.base().to_string();
-                    if let Err(e) = upload_pair_payload(
-                        &server,
-                        pair_id,
-                        &pairing_secret,
-                        &user_id,
-                        &user_key,
-                        &server_url,
-                    )
-                    .await
-                    {
-                        tracing::warn!(err = %e, "pair payload upload failed");
-                    } else {
-                        let _ = app2.emit(
-                            crate::events::PAIR_CLAIMED,
-                            crate::events::PairClaimed {
-                                user_id: user_id.clone(),
-                            },
-                        );
-                    }
+                    let _ = app2.emit(
+                        crate::events::PAIR_CLAIMED,
+                        crate::events::PairClaimed {
+                            user_id: user_id.clone(),
+                        },
+                    );
                     return;
                 }
                 Ok(p) if p.status == "consumed" || p.status == "expired" => {
