@@ -39,6 +39,33 @@ impl AccountRegistry {
         *self.active.write() = user_id;
     }
 
+    pub fn set_active_persisted_with(
+        &self,
+        conn: &Connection,
+        user_id: Option<String>,
+    ) -> Result<(), AppError> {
+        let mut s = crate::core::storage::settings::load(conn)?;
+        s.last_active_user_id = user_id.clone();
+        crate::core::storage::settings::save(conn, &s)?;
+        *self.active.write() = user_id;
+        Ok(())
+    }
+
+    pub async fn set_active_persisted(&self, user_id: Option<String>) -> Result<(), AppError> {
+        let conn = self.conn.lock().await;
+        self.set_active_persisted_with(&conn, user_id)
+    }
+
+    pub async fn load_persisted_active(&self) -> Result<Option<String>, AppError> {
+        let conn = self.conn.lock().await;
+        let s = crate::core::storage::settings::load(&conn)?;
+        let Some(uid) = s.last_active_user_id else { return Ok(None) };
+        match accounts::find(&conn, &uid)? {
+            Some(_) => Ok(Some(uid)),
+            None => Ok(None),
+        }
+    }
+
     pub async fn load_active_membership(&self, user_id: &str) -> Result<ActiveMembership, AppError> {
         let acct = {
             let c = self.conn.lock().await;
@@ -114,5 +141,66 @@ mod tests {
         }
         let err = r.load_active_membership("u").await.unwrap_err();
         assert!(matches!(err, AppError::Keychain(_)));
+    }
+
+    #[tokio::test]
+    async fn set_active_persisted_writes_settings_row() {
+        let r = registry();
+        {
+            let c = r.conn.lock().await;
+            accounts::upsert(&c, &Account {
+                user_id: "u".into(), device_id: "d".into(), device_label: "mac".into(),
+                server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+            }).unwrap();
+        }
+        r.set_active_persisted(Some("u".into())).await.unwrap();
+        let c = r.conn.lock().await;
+        let s = crate::core::storage::settings::load(&c).unwrap();
+        assert_eq!(s.last_active_user_id, Some("u".into()));
+        assert_eq!(r.active_user_id(), Some("u".into()));
+    }
+
+    #[tokio::test]
+    async fn set_active_persisted_none_clears_settings_row() {
+        let r = registry();
+        {
+            let c = r.conn.lock().await;
+            accounts::upsert(&c, &Account {
+                user_id: "u".into(), device_id: "d".into(), device_label: "mac".into(),
+                server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+            }).unwrap();
+        }
+        r.set_active_persisted(Some("u".into())).await.unwrap();
+        r.set_active_persisted(None).await.unwrap();
+        let c = r.conn.lock().await;
+        let s = crate::core::storage::settings::load(&c).unwrap();
+        assert!(s.last_active_user_id.is_none());
+        assert!(r.active_user_id().is_none());
+    }
+
+    #[tokio::test]
+    async fn load_persisted_active_returns_id_when_account_exists() {
+        let r = registry();
+        {
+            let c = r.conn.lock().await;
+            accounts::upsert(&c, &Account {
+                user_id: "u".into(), device_id: "d".into(), device_label: "mac".into(),
+                server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+            }).unwrap();
+        }
+        r.set_active_persisted(Some("u".into())).await.unwrap();
+        assert_eq!(r.load_persisted_active().await.unwrap(), Some("u".into()));
+    }
+
+    #[tokio::test]
+    async fn load_persisted_active_returns_none_when_account_missing() {
+        let r = registry();
+        {
+            let c = r.conn.lock().await;
+            let mut s = crate::core::storage::settings::Settings::default();
+            s.last_active_user_id = Some("ghost".into());
+            crate::core::storage::settings::save(&c, &s).unwrap();
+        }
+        assert!(r.load_persisted_active().await.unwrap().is_none());
     }
 }
