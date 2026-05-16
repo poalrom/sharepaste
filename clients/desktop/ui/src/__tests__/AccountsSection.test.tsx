@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { injectForTests, type Invoker, type Listener } from "../ipc/tauri";
 import { useAccountsStore, useUiStore } from "../store";
 import type { Account } from "../types";
@@ -78,7 +78,7 @@ describe("AccountsSection", () => {
     expect(invoke).not.toHaveBeenCalledWith("forget_account", expect.anything());
   });
 
-  it("Forget invokes forget_account and clears the strip", async () => {
+  it("Forget invokes forget_account, clears the strip, and removes the account row", async () => {
     render(<AccountsSection />);
     await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("trash-u-other"));
@@ -86,9 +86,6 @@ describe("AccountsSection", () => {
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("forget_account", { args: { user_id: "u-other" } }),
     );
-    await act(async () => {
-      registeredListeners["account-removed"]?.({ user_id: "u-other" });
-    });
     await waitFor(() => expect(screen.queryByText("Desktop")).toBeNull());
   });
 
