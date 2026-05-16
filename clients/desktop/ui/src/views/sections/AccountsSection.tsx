@@ -129,6 +129,7 @@ export default function AccountsSection() {
                 onConfirm={async () => {
                   try {
                     await cmd.forgetAccount({ user_id: a.user_id });
+                    removeFromStore(a.user_id);
                     setConfirmingUserId(undefined);
                   } catch (e) {
                     setError(String(e));
