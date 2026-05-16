@@ -12,7 +12,7 @@ Specs:
 ## Prerequisites
 
 - Rust stable (`rustup` will pick up `rust-toolchain.toml`)
-- Node 20+
+- Node 25
 - A running sharepaste server (see top-level repo README; for dev, `cd server && npx tsx src/index.ts serve`)
 
 macOS:
