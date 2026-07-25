@@ -1,6 +1,9 @@
 use crate::errors::AppError;
+#[cfg(test)]
 use parking_lot::Mutex;
+#[cfg(test)]
 use std::collections::HashMap;
+#[cfg(test)]
 use std::sync::Arc;
 
 const SERVICE: &str = "sharepaste";
@@ -42,11 +45,13 @@ impl Keychain for SystemKeychain {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Default)]
 pub struct InMemoryKeychain {
     inner: Arc<Mutex<HashMap<String, String>>>,
 }
 
+#[cfg(test)]
 impl Keychain for InMemoryKeychain {
     fn put(&self, account: &str, secret: &str) -> Result<(), AppError> {
         self.inner.lock().insert(account.into(), secret.into());

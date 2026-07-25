@@ -2,7 +2,7 @@ mod common;
 
 use sharepaste_desktop_lib::core::crypto::{encrypt, random_user_key};
 use sharepaste_desktop_lib::core::http::ServerClient;
-use sharepaste_desktop_lib::core::pairing::qr::{base64_decode, base64_encode};
+use sharepaste_desktop_lib::core::pairing::payload::{base64_decode, base64_encode};
 
 #[tokio::test]
 async fn invite_then_post_and_list() {

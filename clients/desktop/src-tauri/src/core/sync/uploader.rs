@@ -1,4 +1,4 @@
-use crate::core::pairing::qr::base64_encode;
+use crate::core::pairing::payload::base64_encode;
 use crate::core::storage::pending;
 use crate::errors::AppError;
 use async_trait::async_trait;

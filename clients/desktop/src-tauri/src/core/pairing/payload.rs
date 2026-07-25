@@ -2,38 +2,12 @@ use crate::core::crypto::{decrypt, encrypt, UserKey};
 use crate::core::http::ServerClient;
 use crate::core::pairing::shortcode::{encode, ShortcodePayload};
 use crate::errors::AppError;
+use data_encoding::{BASE64, HEXLOWER};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sha2_local::Sha256Hex;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 use zeroize::Zeroizing;
-
-pub mod sha2_local {
-    pub struct Sha256Hex;
-
-    impl Sha256Hex {
-        pub fn hex(input: &[u8]) -> String {
-            use sha2_imp::{Digest, Sha256};
-            let mut h = Sha256::new();
-            h.update(input);
-            let out = h.finalize();
-            hex_lower(&out)
-        }
-    }
-
-    fn hex_lower(bytes: &[u8]) -> String {
-        let mut s = String::with_capacity(bytes.len() * 2);
-        for b in bytes {
-            use std::fmt::Write;
-            write!(&mut s, "{:02x}", b).unwrap();
-        }
-        s
-    }
-
-    mod sha2_imp {
-        pub use sha2::{Digest, Sha256};
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairPayload {
@@ -51,8 +25,8 @@ pub struct PairStarted {
 pub async fn start_pair(server: &ServerClient) -> Result<PairStarted, AppError> {
     let mut secret = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut secret);
-    let secret_hex = hex_lower_static(&secret);
-    let secret_hash = Sha256Hex::hex(secret_hex.as_bytes());
+    let secret_hex = HEXLOWER.encode(&secret);
+    let secret_hash = sha256_hex(secret_hex.as_bytes());
 
     let resp = server.pair_start(&secret_hash).await?;
     let pair_id = Uuid::parse_str(&resp.pair_id)
@@ -95,7 +69,7 @@ pub async fn fetch_and_decrypt_pair_payload(
     pair_id: Uuid,
     pairing_secret: &[u8; 32],
 ) -> Result<PairPayload, AppError> {
-    let secret_hex = hex_lower_static(pairing_secret);
+    let secret_hex = HEXLOWER.encode(pairing_secret);
     let resp = server.pair_payload_get(&pair_id.to_string(), &secret_hex).await?;
     let wire = base64_decode(&resp.encrypted_payload)?;
     let key: UserKey = Zeroizing::new(*pairing_secret);
@@ -104,25 +78,20 @@ pub async fn fetch_and_decrypt_pair_payload(
 }
 
 pub fn secret_proof_hex(pairing_secret: &[u8; 32]) -> String {
-    hex_lower_static(pairing_secret)
+    HEXLOWER.encode(pairing_secret)
 }
 
-fn hex_lower_static(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        use std::fmt::Write;
-        write!(&mut s, "{:02x}", b).unwrap();
-    }
-    s
+fn sha256_hex(input: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(input);
+    HEXLOWER.encode(&h.finalize())
 }
 
 pub fn base64_encode(bytes: &[u8]) -> String {
-    use data_encoding::BASE64;
     BASE64.encode(bytes)
 }
 
 pub fn base64_decode(s: &str) -> Result<Vec<u8>, AppError> {
-    use data_encoding::BASE64;
     BASE64.decode(s.as_bytes()).map_err(|e| AppError::BadInput(e.to_string()))
 }
 
@@ -152,5 +121,21 @@ mod tests {
         let s = secret_proof_hex(&[0xAB; 32]);
         assert_eq!(s.len(), 64);
         assert!(s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn hex_output_matches_wire_golden_values() {
+        assert_eq!(
+            secret_proof_hex(&[0xAB; 32]),
+            "abababababababababababababababababababababababababababababababab"
+        );
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            sha256_hex(secret_proof_hex(&[0x0A; 32]).as_bytes()),
+            "2db6b2a7b2fbb5fbf2ea7fcbacb5e1645fb6bf3c0d606ce5b88a23533b32d4b8"
+        );
     }
 }

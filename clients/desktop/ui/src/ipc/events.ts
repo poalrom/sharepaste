@@ -10,7 +10,6 @@ export const events = {
   onEntryDeleted:    (cb: (p: { user_id: string; entry_id: number }) => void) => tauri.listen("entry-deleted", cb),
   onHistoryChanged:  (cb: (p: { user_id: string }) => void) => tauri.listen("history-changed", cb),
   onPendingCount:    (cb: (p: { user_id: string; count: number }) => void) => tauri.listen("pending-count", cb),
-  onCaptureSkipped:  (cb: (p: { reason: string; source_app?: string }) => void) => tauri.listen("capture-skipped", cb),
   onDecryptionError: (cb: (p: { user_id: string; entry_id: number }) => void) => tauri.listen("decryption-error", cb),
   onPairShortcode:   (cb: (p: { code: string; expires_at: number }) => void) => tauri.listen("pair-shortcode", cb),
   onPairClaimed:     (cb: (p: { user_id: string; device_label?: string | null }) => void) => tauri.listen("pair-claimed", cb),
