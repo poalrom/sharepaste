@@ -1,6 +1,6 @@
 use crate::core::crypto::{decrypt, UserKey};
 use crate::core::http::dto::EntryRow;
-use crate::core::pairing::qr::base64_decode;
+use crate::core::pairing::payload::base64_decode;
 use crate::core::storage::entries_cache::{upsert_and_prune, NewCachedEntry};
 use crate::errors::AppError;
 use rusqlite::Connection;
@@ -56,7 +56,7 @@ pub fn build_preview(plaintext: &str) -> String {
 mod tests {
     use super::*;
     use crate::core::crypto::encrypt;
-    use crate::core::pairing::qr::base64_encode;
+    use crate::core::pairing::payload::base64_encode;
     use crate::core::storage::open_in_memory;
     use zeroize::Zeroizing;
 

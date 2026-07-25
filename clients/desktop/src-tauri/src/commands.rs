@@ -1,7 +1,7 @@
 use crate::core::http::ServerClient;
 use crate::core::keychain::{token_account, user_key_account};
 use crate::core::pairing::invite::{claim_invite, persist_claimed_account};
-use crate::core::pairing::qr::{
+use crate::core::pairing::payload::{
     fetch_and_decrypt_pair_payload, secret_proof_hex, start_pair, upload_pair_payload,
 };
 use crate::core::pairing::shortcode::{decode as decode_shortcode, group_for_display};
@@ -335,21 +335,6 @@ pub async fn forget_account(
     Ok(())
 }
 
-#[derive(Deserialize)]
-pub struct RevokeDeviceArgs {
-    pub user_id: String,
-    pub device_id: String,
-}
-
-#[tauri::command]
-pub async fn revoke_device(
-    args: RevokeDeviceArgs,
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), AppError> {
-    let m = state.registry.load_active_membership(&args.user_id).await?;
-    m.server.revoke_device(&args.device_id).await
-}
-
 #[tauri::command]
 pub async fn set_active_account(
     args: UserScopedArgs,
@@ -396,50 +381,9 @@ pub async fn list_history(
 }
 
 #[derive(Deserialize)]
-pub struct SearchHistoryArgs {
-    pub user_id: String,
-    pub query: String,
-    pub limit: i64,
-}
-
-#[tauri::command]
-pub async fn search_history(
-    args: SearchHistoryArgs,
-    state: State<'_, Arc<AppState>>,
-) -> Result<Vec<EntryViewDto>, AppError> {
-    let conn = state.conn.lock().await;
-    let rows = entries_cache::search(&conn, &args.user_id, &args.query, args.limit)?;
-    Ok(rows
-        .into_iter()
-        .map(|r| EntryViewDto {
-            id: r.id,
-            user_id: r.user_id,
-            preview: r
-                .plaintext
-                .as_deref()
-                .map(crate::core::sync::decryptor::build_preview)
-                .unwrap_or_default(),
-            created_at: r.created_at,
-            device_id: r.device_id,
-            device_label: None,
-        })
-        .collect())
-}
-
-#[derive(Deserialize)]
 pub struct EntryScopedArgs {
     pub user_id: String,
     pub entry_id: i64,
-}
-
-#[tauri::command]
-pub async fn get_entry_full(
-    args: EntryScopedArgs,
-    state: State<'_, Arc<AppState>>,
-) -> Result<String, AppError> {
-    let conn = state.conn.lock().await;
-    entries_cache::get_full(&conn, &args.user_id, args.entry_id)?
-        .ok_or_else(|| AppError::NotFound("plaintext unavailable".into()))
 }
 
 fn set_clipboard_text_with_self_write_guard<F>(
@@ -584,34 +528,6 @@ pub async fn update_settings(
     Ok(s)
 }
 
-#[derive(Serialize)]
-pub struct StatusResp {
-    pub state: ConnectionState,
-    pub pending_count: i64,
-    pub last_error: Option<String>,
-}
-
-#[tauri::command]
-pub async fn get_status(
-    args: UserScopedArgs,
-    state: State<'_, Arc<AppState>>,
-) -> Result<StatusResp, AppError> {
-    let conn = state.conn.lock().await;
-    let count = pending::count(&conn, &args.user_id)?;
-    drop(conn);
-    let st = state
-        .conn_states
-        .lock()
-        .get(&args.user_id)
-        .copied()
-        .unwrap_or(ConnectionState::Disconnected);
-    Ok(StatusResp {
-        state: st,
-        pending_count: count,
-        last_error: None,
-    })
-}
-
 #[derive(Deserialize)]
 pub struct OpenMainWindowArgs {
     pub section: String,
@@ -696,17 +612,5 @@ mod tests {
 
         assert!(matches!(err, AppError::Storage(_)));
         assert!(last_self_write.lock().is_none());
-    }
-
-    #[test]
-    fn open_main_window_args_rejects_unknown_section() {
-        let valid_sections = ["accounts", "settings", "pairing"];
-        let test_cases = ["", "  ", "history", "Accounts", "ACCOUNTS"];
-        for s in test_cases {
-            assert!(
-                !valid_sections.contains(&s),
-                "test fixture must not collide with valid sections: {s}",
-            );
-        }
     }
 }

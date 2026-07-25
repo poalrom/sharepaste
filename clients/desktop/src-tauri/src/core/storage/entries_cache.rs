@@ -79,21 +79,6 @@ pub fn list_recent(conn: &Connection, user_id: &str, before_id: Option<i64>, lim
     Ok(rows)
 }
 
-pub fn search(conn: &Connection, user_id: &str, query: &str, limit: i64) -> Result<Vec<CachedEntry>, AppError> {
-    let limit = limit.clamp(1, MAX_PER_USER);
-    let needle = format!("%{}%", query.to_lowercase());
-    let mut stmt = conn.prepare(
-        "SELECT user_id, id, ciphertext, plaintext, created_at, device_id
-         FROM entries_cache
-         WHERE user_id = ?1 AND plaintext IS NOT NULL AND lower(plaintext) LIKE ?2
-         ORDER BY id DESC LIMIT ?3"
-    )?;
-    let rows: Vec<CachedEntry> = stmt
-        .query_map(params![user_id, needle, limit], map_row)?
-        .collect::<Result<_, _>>()?;
-    Ok(rows)
-}
-
 pub fn get_full(conn: &Connection, user_id: &str, id: i64) -> Result<Option<String>, AppError> {
     let pt: Option<Option<String>> = conn
         .query_row(
@@ -182,16 +167,6 @@ mod tests {
         for i in 1..=10 { ins(&c, "u", i, None, i, 9_999); }
         let page = list_recent(&c, "u", Some(8), 3).unwrap();
         assert_eq!(page.iter().map(|r| r.id).collect::<Vec<_>>(), vec![7, 6, 5]);
-    }
-
-    #[test]
-    fn search_matches_plaintext_case_insensitive() {
-        let c = open_in_memory().unwrap();
-        ins(&c, "u", 1, Some("Hello World"), 1, 9);
-        ins(&c, "u", 2, Some("goodbye"), 2, 9);
-        ins(&c, "u", 3, None, 3, 9);
-        let hits = search(&c, "u", "hello", 10).unwrap();
-        assert_eq!(hits.iter().map(|r| r.id).collect::<Vec<_>>(), vec![1]);
     }
 
     #[test]

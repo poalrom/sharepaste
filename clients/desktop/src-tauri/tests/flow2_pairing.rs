@@ -2,7 +2,7 @@ mod common;
 
 use sharepaste_desktop_lib::core::crypto::{decrypt, encrypt, random_user_key};
 use sharepaste_desktop_lib::core::http::ServerClient;
-use sharepaste_desktop_lib::core::pairing::qr::{
+use sharepaste_desktop_lib::core::pairing::payload::{
     base64_decode, base64_encode, fetch_and_decrypt_pair_payload, secret_proof_hex, start_pair,
     upload_pair_payload, PairPayload,
 };

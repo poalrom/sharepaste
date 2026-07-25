@@ -1,21 +1,17 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { injectForTests, type Listener } from "../ipc/tauri";
+import { mockIpc, type MockIpc } from "./helpers";
 import { useAccountsStore, useHistoryStore, useUiStore } from "../store";
 import HistoryList from "../views/HistoryList";
 
-// jsdom does not implement scrollIntoView; HistoryList calls it to keep the
-// keyboard selection on screen.
-let scrollIntoView: Mock;
-let invoke: Mock;
+let ipc: MockIpc;
+// Stubbed in test-setup.ts: jsdom has no scrollIntoView.
+const scrollIntoView = vi.mocked(Element.prototype.scrollIntoView);
 
 describe("HistoryList", () => {
   beforeEach(() => {
-    scrollIntoView = vi.fn();
-    Element.prototype.scrollIntoView = scrollIntoView as unknown as Element["scrollIntoView"];
-    invoke = vi.fn(async () => undefined);
-    const listen = vi.fn(async () => () => {}) as unknown as Listener;
-    injectForTests(invoke as never, listen as never);
+    scrollIntoView.mockClear();
+    ipc = mockIpc();
     useUiStore.setState({ search: "", selectedIndex: 0, mainSection: "accounts" });
     useHistoryStore.setState({ entries: [
       { id: 1, user_id: "u", preview: "Hello", created_at: 1, device_id: "d" },
@@ -25,12 +21,6 @@ describe("HistoryList", () => {
       accounts: [{ user_id: "u", device_id: "d", label: "mac", server_url: "https://s", status: "Online", pending: 0, is_active: true }],
       active: "u",
     });
-  });
-
-  it("renders rows newest first", () => {
-    render(<HistoryList />);
-    const rows = screen.getAllByTestId("entry-row");
-    expect(rows).toHaveLength(2);
   });
 
   it("filters by search term", () => {
@@ -60,15 +50,15 @@ describe("HistoryList", () => {
     const button = screen.getByTestId("delete-entry-1");
     button.focus();
     fireEvent.keyDown(button, { key: "Enter" });
-    await waitFor(() => expect(invoke).not.toHaveBeenCalled());
+    await waitFor(() => expect(ipc.invoke).not.toHaveBeenCalled());
   });
 
   it("still copies on Enter when nothing is focused", async () => {
     render(<HistoryList />);
     fireEvent.keyDown(window, { key: "Enter" });
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("copy_to_clipboard", { args: { user_id: "u", entry_id: 1 } });
-      expect(invoke).toHaveBeenCalledWith("hide_popover", undefined);
+      expect(ipc.invoke).toHaveBeenCalledWith("copy_to_clipboard", { args: { user_id: "u", entry_id: 1 } });
+      expect(ipc.invoke).toHaveBeenCalledWith("hide_popover", undefined);
     });
   });
 
@@ -76,9 +66,9 @@ describe("HistoryList", () => {
     render(<HistoryList />);
     fireEvent.click(screen.getByTestId("delete-entry-2"));
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("delete_entry", { args: { user_id: "u", entry_id: 2 } });
+      expect(ipc.invoke).toHaveBeenCalledWith("delete_entry", { args: { user_id: "u", entry_id: 2 } });
     });
-    expect(invoke).not.toHaveBeenCalledWith("copy_to_clipboard", expect.anything());
+    expect(ipc.invoke).not.toHaveBeenCalledWith("copy_to_clipboard", expect.anything());
     await waitFor(() => {
       expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([1]);
     });
@@ -86,11 +76,10 @@ describe("HistoryList", () => {
   });
 
   it("keeps the row in the list when delete fails", async () => {
-    invoke = vi.fn(async (cmd: string) => {
-      if (cmd === "delete_entry") throw new Error("nope");
-      return undefined;
+    ipc.invoke.mockImplementation(async (command) => {
+      if (command === "delete_entry") throw new Error("nope");
+      return undefined as never;
     });
-    injectForTests(invoke as never, vi.fn(async () => () => {}) as never);
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     render(<HistoryList />);
     fireEvent.click(screen.getByTestId("delete-entry-2"));

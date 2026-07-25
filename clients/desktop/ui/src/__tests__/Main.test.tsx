@@ -1,65 +1,81 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { injectForTests, type Invoker, type Listener } from "../ipc/tauri";
-import { useUiStore } from "../store/ui";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { mockIpc, type MockIpc } from "./helpers";
+import { useUiStore, type MainSection } from "../store/ui";
 import Main from "../views/Main";
 
-let invoke: ReturnType<typeof vi.fn<Invoker>>;
-let navigateCb: ((section: string) => void) | undefined;
+let ipc: MockIpc;
 
 beforeEach(() => {
-  invoke = vi.fn(async () => undefined as never) as ReturnType<typeof vi.fn<Invoker>>;
-  const listen: Listener = async <P,>(event: string, cb: (payload: P) => void) => {
-    if (event === "main://navigate") navigateCb = cb as (s: string) => void;
-    return () => {};
-  };
-  injectForTests(invoke as never, listen);
+  ipc = mockIpc({
+    invoke: (command) => {
+      if (command === "get_settings") {
+        return { capture_enabled: true, deny_list: [], autostart: false, hotkey: null };
+      }
+      if (command === "list_accounts") return [];
+      return undefined;
+    },
+  });
   useUiStore.setState({ search: "", selectedIndex: 0, mainSection: "accounts" });
-  navigateCb = undefined;
 });
 
 afterEach(() => {
   window.history.replaceState({}, "", "/");
 });
 
+/**
+ * Drains the sections' async mount effects inside act(). Without this React
+ * warns about the state updates that land after the test body returns.
+ */
+const settle = () => act(async () => {});
+
+async function renderMain() {
+  const view = render(<Main />);
+  await settle();
+  return view;
+}
+
 describe("Main shell", () => {
-  it("uses ?section= from URL on mount", () => {
-    window.history.replaceState({}, "", "/main.html?section=settings");
-    render(<Main />);
-    expect(useUiStore.getState().mainSection).toBe("settings");
-    expect(screen.getByTestId("tab-settings")).toHaveAttribute("aria-selected", "true");
+  it("routes the initial section from ?section=, falling back to accounts", async () => {
+    const cases: Array<{ url: string; section: MainSection; selectedTab: string }> = [
+      { url: "/main.html?section=settings", section: "settings", selectedTab: "tab-settings" },
+      { url: "/main.html?section=pairing", section: "pairing", selectedTab: "tab-accounts" },
+      { url: "/main.html", section: "accounts", selectedTab: "tab-accounts" },
+      { url: "/main.html?section=nonsense", section: "accounts", selectedTab: "tab-accounts" },
+    ];
+
+    for (const { url, section, selectedTab } of cases) {
+      useUiStore.setState({ mainSection: "accounts" });
+      window.history.replaceState({}, "", url);
+
+      const view = await renderMain();
+      expect(useUiStore.getState().mainSection).toBe(section);
+      expect(view.getByTestId(selectedTab)).toHaveAttribute("aria-selected", "true");
+      // Pairing has no tab of its own: it routes under the accounts tab.
+      if (section === "pairing") expect(view.getByText("How are you pairing?")).toBeInTheDocument();
+
+      view.unmount();
+    }
   });
 
-  it("falls back to 'accounts' when ?section= is missing or unknown", () => {
-    window.history.replaceState({}, "", "/main.html");
-    render(<Main />);
-    expect(useUiStore.getState().mainSection).toBe("accounts");
-  });
-
-  it("clicking a tab updates the active section", () => {
-    render(<Main />);
+  it("clicking a tab updates the active section", async () => {
+    await renderMain();
     fireEvent.click(screen.getByTestId("tab-settings"));
     expect(useUiStore.getState().mainSection).toBe("settings");
+    await settle();
   });
 
-  it("does not render a separate pairing tab", () => {
-    render(<Main />);
+  it("does not render a separate pairing tab", async () => {
+    await renderMain();
     expect(screen.queryByTestId("tab-pairing")).toBeNull();
   });
 
-  it("shows pairing routes under the accounts tab", () => {
-    window.history.replaceState({}, "", "/main.html?section=pairing");
-    render(<Main />);
-    expect(screen.getByTestId("tab-accounts")).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("How are you pairing?")).toBeInTheDocument();
-  });
-
   it("main://navigate event flips the active section", async () => {
-    render(<Main />);
-    // wait one microtask for the listener registration
-    await Promise.resolve();
-    expect(navigateCb).toBeDefined();
-    navigateCb!("settings");
+    await renderMain();
+    expect(ipc.handlers.get("main://navigate")).toHaveLength(1);
+
+    await act(async () => ipc.emit("main://navigate", "settings"));
     expect(useUiStore.getState().mainSection).toBe("settings");
+    await settle();
   });
 });

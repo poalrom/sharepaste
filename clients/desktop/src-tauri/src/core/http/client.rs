@@ -119,16 +119,6 @@ impl ServerClient {
         self.json_post("/devices", &DevicesReq { pair_id, secret_proof, label }, false).await
     }
 
-    pub async fn revoke_device(&self, device_id: &str) -> Result<(), AppError> {
-        let resp = self.http.delete(self.url(&format!("/devices/{device_id}")))
-            .headers(self.auth_headers()?)
-            .send().await?;
-        let status = resp.status();
-        if status.is_success() { return Ok(()); }
-        let body = resp.text().await.unwrap_or_default();
-        Err(Self::map_status(status, body))
-    }
-
     pub async fn post_entry(&self, ciphertext_b64: &str) -> Result<PostEntryResp, AppError> {
         self.json_post("/entries", &PostEntryReq { ciphertext: ciphertext_b64 }, true).await
     }

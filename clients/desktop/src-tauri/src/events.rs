@@ -8,7 +8,6 @@ pub const ENTRY_ADDED: &str     = "entry-added";
 pub const ENTRY_DELETED: &str   = "entry-deleted";
 pub const HISTORY_CHANGED: &str = "history-changed";
 pub const PENDING_COUNT: &str   = "pending-count";
-pub const CAPTURE_SKIPPED: &str = "capture-skipped";
 pub const DECRYPTION_ERROR: &str = "decryption-error";
 pub const PAIR_SHORTCODE: &str  = "pair-shortcode";
 pub const PAIR_CLAIMED: &str    = "pair-claimed";
@@ -49,9 +48,6 @@ pub struct EntryDeleted { pub user_id: String, pub entry_id: i64 }
 
 #[derive(Serialize, Clone)]
 pub struct PendingCount { pub user_id: String, pub count: i64 }
-
-#[derive(Serialize, Clone)]
-pub struct CaptureSkipped { pub reason: String, pub source_app: Option<String> }
 
 #[derive(Serialize, Clone)]
 pub struct DecryptionError { pub user_id: String, pub entry_id: i64 }

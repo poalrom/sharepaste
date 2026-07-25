@@ -56,17 +56,13 @@ pub fn launch() {
             commands::pair_start,
             commands::pair_with_code,
             commands::forget_account,
-            commands::revoke_device,
             commands::set_active_account,
             commands::list_history,
-            commands::search_history,
-            commands::get_entry_full,
             commands::copy_to_clipboard,
             commands::delete_entry,
             commands::clear_history,
             commands::get_settings,
             commands::update_settings,
-            commands::get_status,
             commands::open_main_window,
             commands::hide_popover,
         ])
@@ -427,9 +423,14 @@ fn calculate_fallback_popover_position(
     }
 }
 
+/// The set of sections `main.html` knows how to render. Kept next to the
+/// window opener so the guard and the router stay in sync.
+fn is_valid_section(section: &str) -> bool {
+    matches!(section, "accounts" | "settings" | "pairing")
+}
+
 fn open_main_window_impl(app: &tauri::AppHandle, section: &str) -> tauri::Result<()> {
-    let valid = matches!(section, "accounts" | "settings" | "pairing");
-    if !valid {
+    if !is_valid_section(section) {
         return Err(tauri::Error::Io(std::io::Error::other(format!(
             "unknown section: {section}"
         ))));
@@ -463,6 +464,28 @@ fn open_main_window_impl(app: &tauri::AppHandle, section: &str) -> tauri::Result
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod section_tests {
+    use super::is_valid_section;
+
+    #[test]
+    fn accepts_exactly_the_three_routable_sections() {
+        for section in ["accounts", "settings", "pairing"] {
+            assert!(is_valid_section(section), "{section} must be routable");
+        }
+    }
+
+    #[test]
+    fn rejects_blank_unknown_and_miscased_sections() {
+        for section in ["", "  ", "history", "Accounts", "ACCOUNTS"] {
+            assert!(
+                !is_valid_section(section),
+                "{section:?} must not open the main window"
+            );
+        }
+    }
 }
 
 fn spawn_sync_for_existing_accounts(app: tauri::AppHandle, state: Arc<AppState>) {

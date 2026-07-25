@@ -79,22 +79,3 @@ pub fn frontmost_process_name() -> Option<String> {
             .filter(|name| !name.is_empty())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::capture::filter::PasteboardSniff;
-
-    #[test]
-    #[ignore = "live Windows clipboard call; run manually on a developer desktop"]
-    fn read_text_call_does_not_panic() {
-        let sniff = WindowsClipboardSniffer::new();
-        let _ = sniff.read_text();
-    }
-
-    #[test]
-    #[ignore = "live Win32 foreground-window call; run manually on a developer desktop"]
-    fn frontmost_process_name_call_does_not_panic() {
-        let _ = frontmost_process_name();
-    }
-}
