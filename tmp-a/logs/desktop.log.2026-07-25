@@ -1,6 +1,0 @@
-{"timestamp":"2026-07-25T22:27:49.641202Z","level":"INFO","fields":{"message":"logging initialized"},"target":"sharepaste_desktop_lib::logging"}
-{"timestamp":"2026-07-25T23:47:19.264237Z","level":"INFO","fields":{"message":"logging initialized"},"target":"sharepaste_desktop_lib::logging"}
-{"timestamp":"2026-07-25T23:47:21.684095Z","level":"WARN","fields":{"message":"backfill failed; will retry","err":"network error: error sending request for url (http://127.0.0.1:8443/entries?since=37&limit=500)"},"target":"sharepaste_desktop_lib::core::sync::session"}
-{"timestamp":"2026-07-25T23:47:24.749401Z","level":"WARN","fields":{"message":"backfill failed; will retry","err":"network error: error sending request for url (http://127.0.0.1:8443/entries?since=37&limit=500)"},"target":"sharepaste_desktop_lib::core::sync::session"}
-{"timestamp":"2026-07-25T23:47:28.805491Z","level":"WARN","fields":{"message":"backfill failed; will retry","err":"network error: error sending request for url (http://127.0.0.1:8443/entries?since=37&limit=500)"},"target":"sharepaste_desktop_lib::core::sync::session"}
-{"timestamp":"2026-07-25T23:47:34.841807Z","level":"WARN","fields":{"message":"backfill failed; will retry","err":"network error: error sending request for url (http://127.0.0.1:8443/entries?since=37&limit=500)"},"target":"sharepaste_desktop_lib::core::sync::session"}
