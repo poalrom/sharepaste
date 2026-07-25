@@ -39,6 +39,12 @@ jobs:
       - name: Run Rust unit tests
         run: cargo test --lib --manifest-path clients/desktop/src-tauri/Cargo.toml
 
+      # Separate crate and separate invocation on purpose: it links Tauri's mock
+      # runtime, which cannot coexist with wry in one test binary, and Cargo
+      # unifies features across a build graph. See acl-tests/Cargo.toml.
+      - name: Run ACL regression tests
+        run: cargo test --manifest-path clients/desktop/acl-tests/Cargo.toml
+
       - name: Install desktop UI dependencies
         run: npm --prefix clients/desktop/ui ci
 

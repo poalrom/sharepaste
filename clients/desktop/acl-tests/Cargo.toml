@@ -1,0 +1,33 @@
+[package]
+name = "sharepaste-acl-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "ACL regression tests for the sharepaste desktop app. Standalone by necessity - see src/lib.rs."
+
+# `default-features = false` is load-bearing, not tidiness.
+#
+# `tauri::test::MockRuntime` and the real `wry`/`tao` runtime cannot coexist in
+# one test binary on Windows: the process dies at load with
+# STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139) before a single test runs. Reproduced
+# in a clean scratch crate, so it is not specific to this app.
+#
+# Cargo unifies features across one build graph, so the app crate (which needs
+# `wry`) cannot host these tests. Hence a separate crate, built by its own
+# `cargo test` invocation.
+[dependencies]
+# `tray-icon` is required only because the app's tauri.conf.json declares a
+# trayIcon, so the generated context calls Context::set_tray_icon.
+tauri = { version = "2", default-features = false, features = ["test", "tray-icon"] }
+serde_json = "1"
+# The app's capability file grants `autostart:default` and
+# `global-shortcut:default`; tauri-build can only resolve those permissions if
+# the plugin crates are in this crate's dependency graph.
+tauri-plugin-autostart = "2"
+tauri-plugin-global-shortcut = "2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[lib]
+path = "src/lib.rs"
