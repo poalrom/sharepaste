@@ -131,4 +131,42 @@ describe("Popover event subscriptions", () => {
       expect(ipc.handlers.get("decryption-error")).toHaveLength(0);
     });
   });
+
+  // The popover window is shown/hidden, never unmounted, so `autoFocus` fires
+  // once per window lifetime. Reopening used to leave focus on whatever was
+  // last clicked - and because HistoryList ignores keydown while a button holds
+  // focus, that made the reopened popover keyboard-dead.
+  it("returns focus to the search box each time the popover is shown", async () => {
+    const { findByPlaceholderText, getByRole } = render(<Popover />);
+    const input = await findByPlaceholderText("Search history…");
+    expect(document.activeElement).toBe(input);
+
+    // Simulate the reported sequence: click a footer button, which opens the
+    // main window and hides the popover, leaving focus on the button.
+    const settings = getByRole("button", { name: "Settings" });
+    settings.focus();
+    expect(document.activeElement).toBe(settings);
+
+    // Hidden, then shown again: the window regains focus.
+    act(() => {
+      window.dispatchEvent(new FocusEvent("focus"));
+    });
+
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("selects any leftover query so typing replaces it", async () => {
+    const { findByPlaceholderText } = render(<Popover />);
+    const input = (await findByPlaceholderText("Search history…")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "old query" } });
+    input.blur();
+
+    act(() => {
+      window.dispatchEvent(new FocusEvent("focus"));
+    });
+
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe("old query".length);
+  });
 });
