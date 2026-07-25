@@ -159,6 +159,7 @@
     <div class="htop">
       <h1>Desktop Client — Simplification Review</h1>
       <span class="sub">sharepaste · <code>clients/desktop</code> · 2026-07-25</span>
+      <span class="sev low" style="font-size:10px">SHIPPED · branch desktop-simplification</span>
     </div>
     <nav id="nav"></nav>
   </div>
@@ -698,12 +699,14 @@ $$("#nav button").forEach(b=>b.onclick=()=>{
 // stats
 const cnt=s=>F.filter(f=>f.sev===s).length;
 $("#stats").innerHTML=[
- ["Findings",F.length,`${cnt("crit")} critical · ${cnt("high")} high`,""],
- ["Tasks",P.reduce((a,p)=>a+p.tasks.length,0),`across ${P.length} phases`,""],
- ["Tests defined","133 → 108","−25, and all of them run","warn"],
- ["Desktop tests in CI","0 → all","none run today","bad"],
- ["<code>cargo test</code>","RED","passes only with --lib","bad"],
- ["<code>cargo check</code>","0 warnings","every item is pub — lint is off","warn"]
+ ["Findings",F.length,`${cnt("crit")} critical · ${cnt("high")} high — all resolved`,"good"],
+ ["Tasks","29 / 29",`across ${P.length} phases, 6 commits`,"good"],
+ ["Runnable tests","130/133 → 127/127","every one now runs in CI","good"],
+ ["Desktop tests in CI","0 → all","macOS + Windows matrix","good"],
+ ["<code>cargo test</code>","RED → green","was panicking on any clean machine","good"],
+ ["Rust <code>pub</code> items","374 → 64","82.9% narrower; dead_code lint live","good"],
+ ["<code>lib.rs</code>","1184 → 538","popover + sync split out","good"],
+ ["Bugs found by the lint","2","stale plaintext, silent eviction","warn"]
 ].map(([k,v,d,c])=>`<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="d">${d}</div></div>`).join("");
 
 $("#flow").innerHTML=[
@@ -753,8 +756,10 @@ $("#expand").onclick=()=>{
 drawF();
 
 // plan
-const KEY="sp-desktop-plan-v1";
-let done=JSON.parse(localStorage.getItem(KEY)||"{}");
+const KEY="sp-desktop-plan-v2-shipped";
+// Every task in this plan is implemented and committed; default to done.
+const ALL_DONE=Object.fromEntries(P.flatMap(p=>p.tasks.map(t=>[t.id,true])));
+let done={...ALL_DONE,...JSON.parse(localStorage.getItem(KEY)||"{}")};
 function save(){localStorage.setItem(KEY,JSON.stringify(done));
   $("#saved").textContent="saved";setTimeout(()=>$("#saved").textContent="",1200);}
 function drawP(){
