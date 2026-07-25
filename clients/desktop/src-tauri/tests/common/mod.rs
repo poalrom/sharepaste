@@ -65,15 +65,34 @@ fn unique_username(prefix: &str) -> String {
     format!("{prefix}-{now}-{nonce}")
 }
 
-pub fn create_invite(_server: &TestServer, prefix: &str) -> (String, String) {
-    let username = unique_username(prefix);
-    // The CLI must run *inside* the container so it shares better-sqlite3's
-    // WAL state with the running server — running from the host raced and
-    // produced FK / "invite not found" errors. `--db` is left off so the CLI
-    // resolves the path exactly as the server does (the container's `DB_PATH`,
-    // else the server's own default); the two must agree or the invite lands
-    // in a database the server never reads. `SHAREPASTE_TEST_DB` overrides it
-    // for a non-standard mount.
+/// Builds the operator-CLI invocation.
+///
+/// Two shapes, because the crate only compiles on macOS and Windows while the
+/// server image only runs on Linux — so CI cannot use Docker and a local dev
+/// box usually does:
+///
+/// * `SHAREPASTE_TEST_CLI` set (e.g. `node /path/to/server/dist/index.js`) —
+///   run it directly. Used by CI, where the server is a plain node process on
+///   the same runner, and by anyone without Docker.
+/// * unset — `docker exec` into the running container.
+///
+/// Either way the CLI must resolve the *same* database the server opened. In
+/// the container that means leaving `--db` off so it reads the image's own
+/// `DB_PATH`; natively it means `SHAREPASTE_TEST_DB` pointing at the same file
+/// the server was given. Getting this wrong lands the invite in a database the
+/// server never reads, which surfaces as a bogus "invite not found".
+fn cli_command() -> Command {
+    if let Ok(spec) = std::env::var("SHAREPASTE_TEST_CLI") {
+        let mut parts = spec.split_whitespace();
+        let program = parts.next().expect("SHAREPASTE_TEST_CLI must not be empty");
+        let mut cmd = Command::new(program);
+        cmd.args(parts);
+        return cmd;
+    }
+
+    // The CLI must run *inside* the container so it shares better-sqlite3's WAL
+    // state with the running server — running from the host raced and produced
+    // FK / "invite not found" errors.
     let mut cmd = Command::new("docker");
     cmd.args([
         "exec",
@@ -83,16 +102,21 @@ pub fn create_invite(_server: &TestServer, prefix: &str) -> (String, String) {
         // entry, but the Dockerfile never links it, and `docker exec` bypasses
         // the ENTRYPOINT that would otherwise supply `node dist/index.js`.
         "/app/dist/index.js",
-        "user",
-        "create",
     ]);
+    cmd
+}
+
+pub fn create_invite(_server: &TestServer, prefix: &str) -> (String, String) {
+    let username = unique_username(prefix);
+    let mut cmd = cli_command();
+    cmd.args(["user", "create"]);
     if let Ok(db) = std::env::var("SHAREPASTE_TEST_DB") {
         cmd.arg("--db").arg(db);
     }
     let out = cmd
         .arg(&username)
         .output()
-        .expect("spawn docker exec sharepaste user create");
+        .expect("spawn the sharepaste operator CLI");
     if !out.status.success() {
         panic!(
             "user create failed: stderr={}",
