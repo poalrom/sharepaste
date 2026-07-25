@@ -469,6 +469,29 @@ Branch `desktop-simplification`, six implementation commits, executed by five wa
 
 Total defined tests 133 → 127, but the comparison that matters is 130/133 runnable → **127/127**. The plan projected ~108; the extra 19 are genuine new coverage the plan did not budget for — 15 UI tests for the Phase 2 features (delete affordance, scroll-into-view, Enter disambiguation, the two event subscriptions, hotkey commit-on-blur, clear-history confirm), 3 capability-guard tests instead of 1, and a wire-format golden test added to de-risk Task 5.3. No planned deletion was skipped.
 
+### Manual confirmation of S1 — 2026-07-26, Windows 11
+
+The Phase 1 finding is that no automated test could see the bug, so it needed a
+human once. It got one. Two dev instances against a live compose stack:
+
+1. Instance A claimed an invite and paired.
+2. Instance A showed a short code; instance B claimed it.
+3. **Instance A advanced to the paired state on its own** — it received
+   `pair-claimed`. Pre-fix it sat on the code screen indefinitely with
+   `Command plugin:event|listen not allowed by ACL` in the webview console.
+
+That is the S1 effect-level proof. The mechanism was already covered three ways:
+`capability_guard` (parses the shipped JSON), the `acl-tests` crate (drives the
+real `on_message` through the real ACL), and the generated `gen/schemas/
+capabilities.json` in a real build. This closes the last gap between "the
+mechanism is right" and "the app works".
+
+Not yet re-run by hand after the fix: the autostart registry check (S13a), the
+fresh-profile default hotkey (S13b), and the duplicate-capture, scroll-into-view
+and delete/clear-history checks. Of those only **S13a has no automated backup at
+all** — the OS autostart entry cannot be asserted from a unit test, and a passing
+round-trip test on the boolean is exactly how it shipped broken.
+
 ### Two defects found by Task 4.1, fixed in `c7ecbed`
 
 Phase 4 predicted the `dead_code` lint would surface real problems once the crate stopped declaring everything public. It surfaced six warnings; four were dead code and deleted, two were bugs:
