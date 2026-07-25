@@ -1,0 +1,841 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Desktop Simplification — Interactive Overview</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2128; --line:#30363d;
+    --fg:#e6edf3; --dim:#8b949e; --faint:#6e7681;
+    --crit:#f85149; --high:#fd8c73; --med:#d29922; --low:#3fb950; --info:#58a6ff;
+    --accent:#58a6ff; --ok:#3fb950;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono);font-size:12.5px}
+
+  header{position:sticky;top:0;z-index:20;background:rgba(13,17,23,.92);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 22px}
+  .htop{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;padding:16px 0 12px}
+  h1{font-size:17px;margin:0;font-weight:600;letter-spacing:-.2px}
+  .sub{color:var(--dim);font-size:12.5px}
+
+  nav{display:flex;gap:2px}
+  nav button{background:none;border:0;border-bottom:2px solid transparent;color:var(--dim);
+    padding:9px 14px;font:inherit;font-size:13px;cursor:pointer}
+  nav button:hover{color:var(--fg)}
+  nav button.on{color:var(--fg);border-bottom-color:#f78166;font-weight:600}
+
+  main{max-width:1180px;margin:0 auto;padding:22px}
+  section{display:none}
+  section.on{display:block}
+
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:10px;margin-bottom:22px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:12px 14px}
+  .stat .k{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.55px}
+  .stat .v{font-size:21px;font-weight:600;margin-top:5px;font-variant-numeric:tabular-nums}
+  .stat .d{font-size:11.5px;color:var(--faint);margin-top:2px}
+  .bad{color:var(--crit)} .good{color:var(--ok)} .warn{color:var(--med)}
+
+  .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+  .chip{background:var(--panel);border:1px solid var(--line);color:var(--dim);
+    border-radius:999px;padding:4px 12px;font-size:12px;cursor:pointer;user-select:none}
+  .chip:hover{border-color:var(--faint);color:var(--fg)}
+  .chip.on{background:#1f6feb26;border-color:var(--accent);color:var(--accent)}
+  input[type=search],input[type=text]{background:var(--panel);border:1px solid var(--line);
+    color:var(--fg);border-radius:6px;padding:6px 11px;font:inherit;font-size:13px;min-width:230px}
+  input:focus{outline:none;border-color:var(--accent)}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin-bottom:9px;overflow:hidden}
+  .card.crit{border-left:3px solid var(--crit)}
+  .card.high{border-left:3px solid var(--high)}
+  .card.med{border-left:3px solid var(--med)}
+  .card.low{border-left:3px solid var(--low)}
+  .chead{display:flex;gap:11px;align-items:flex-start;padding:12px 14px;cursor:pointer}
+  .chead:hover{background:var(--panel2)}
+  .sev{font-size:9.5px;font-weight:700;letter-spacing:.6px;padding:3px 7px;border-radius:4px;
+    white-space:nowrap;margin-top:1px}
+  .sev.crit{background:#f8514922;color:var(--crit)}
+  .sev.high{background:#fd8c7322;color:var(--high)}
+  .sev.med{background:#d2992222;color:var(--med)}
+  .sev.low{background:#3fb95022;color:var(--low)}
+  .cid{font-family:var(--mono);font-size:12px;color:var(--faint);min-width:42px;margin-top:2px}
+  .ctitle{flex:1;font-weight:500}
+  .tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+  .tag{font-size:10.5px;color:var(--dim);background:var(--panel2);
+    border:1px solid var(--line);border-radius:4px;padding:1px 6px}
+  .tag.corrected{color:var(--med);border-color:#d2992255}
+  .tag.inference{color:var(--info);border-color:#58a6ff55}
+  .tag.bug{color:var(--crit);border-color:#f8514955}
+  .caret{color:var(--faint);transition:transform .15s;margin-top:2px}
+  .card.open .caret{transform:rotate(90deg)}
+  .cbody{display:none;padding:0 14px 14px 14px;border-top:1px solid var(--line)}
+  .card.open .cbody{display:block}
+  .cbody p{margin:11px 0}
+  .cbody ul{margin:9px 0;padding-left:19px}
+  .cbody li{margin:4px 0}
+
+  .ev{background:var(--bg);border:1px solid var(--line);border-radius:6px;margin:10px 0;overflow:hidden}
+  .ev-h{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--faint);
+    padding:7px 11px;border-bottom:1px solid var(--line);background:var(--panel2)}
+  .ev-r{display:flex;gap:11px;padding:6px 11px;border-bottom:1px solid #21262d;align-items:baseline}
+  .ev-r:last-child{border-bottom:0}
+  .ev-r .loc{font-family:var(--mono);font-size:12px;white-space:nowrap}
+  .ev-r .note{color:var(--dim);font-size:12.5px}
+
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th{text-align:left;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+    padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600}
+  td{padding:8px 10px;border-bottom:1px solid #21262d;vertical-align:top}
+  tr:last-child td{border-bottom:0}
+  .num{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono)}
+
+  .phase{margin-bottom:22px}
+  .ph-h{display:flex;align-items:center;gap:11px;margin-bottom:5px}
+  .ph-n{font-family:var(--mono);font-size:11px;color:var(--bg);background:var(--faint);
+    border-radius:4px;padding:2px 7px;font-weight:700}
+  .phase.done .ph-n{background:var(--ok)}
+  .ph-t{font-size:15px;font-weight:600}
+  .ph-d{color:var(--dim);font-size:12.5px;margin:0 0 11px}
+  .prog{height:3px;background:var(--panel2);border-radius:2px;overflow:hidden;margin-bottom:11px}
+  .prog i{display:block;height:100%;background:var(--ok);transition:width .25s}
+
+  .task{background:var(--panel);border:1px solid var(--line);border-radius:7px;margin-bottom:7px}
+  .t-h{display:flex;gap:11px;padding:11px 13px;align-items:flex-start}
+  .t-h input{margin:3px 0 0;accent-color:var(--ok);width:15px;height:15px;cursor:pointer;flex:none}
+  .t-main{flex:1;cursor:pointer}
+  .t-id{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-right:8px}
+  .t-t{font-weight:500}
+  .task.done .t-t,.task.done .t-id{text-decoration:line-through;color:var(--faint)}
+  .t-b{display:none;padding:0 13px 13px 40px;font-size:13px}
+  .task.open .t-b{display:block}
+  .t-b p{margin:8px 0}
+  .acc{background:#3fb95012;border-left:2px solid var(--ok);padding:8px 11px;border-radius:0 5px 5px 0;margin-top:9px}
+  .acc b{color:var(--ok);font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px}
+  .ref{font-size:11px;color:var(--faint);margin-left:7px}
+
+  .loc{color:var(--accent);cursor:pointer;border-bottom:1px dotted #58a6ff66}
+  .loc:hover{background:#58a6ff1a}
+
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:820px){.split{grid-template-columns:1fr}}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:15px 17px}
+  .box h3{margin:0 0 11px;font-size:13.5px}
+
+  .mini{height:6px;background:var(--panel2);border-radius:3px;overflow:hidden;min-width:70px;display:inline-block;vertical-align:middle}
+  .mini i{display:block;height:100%}
+  .del{background:var(--crit)} .keep{background:var(--ok)} .addb{background:var(--accent)}
+
+  .flow{display:flex;gap:11px;flex-wrap:wrap;margin:14px 0}
+  .surf{flex:1;min-width:210px;background:var(--panel);border:1px solid var(--line);
+    border-radius:8px;padding:13px 15px}
+  .surf h4{margin:0 0 3px;font-size:13.5px}
+  .surf .st{font-size:11.5px;margin-bottom:9px}
+  .surf ul{margin:0;padding-left:17px;font-size:12.5px;color:var(--dim)}
+  .surf li{margin:3px 0}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px}
+
+  footer{color:var(--faint);font-size:12px;padding:26px 0 40px;border-top:1px solid var(--line);margin-top:30px}
+  .rootcfg{display:flex;gap:9px;align-items:center;font-size:12px;color:var(--dim);padding:9px 0 13px}
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--panel);
+    border:1px solid var(--line);border-radius:7px;padding:9px 16px;font-size:12.5px;
+    opacity:0;pointer-events:none;transition:opacity .2s;z-index:50}
+  .toast.on{opacity:1}
+  .btn{background:var(--panel2);border:1px solid var(--line);color:var(--dim);border-radius:6px;
+    padding:5px 11px;font:inherit;font-size:12px;cursor:pointer}
+  .btn:hover{color:var(--fg);border-color:var(--faint)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="htop">
+      <h1>Desktop Client — Simplification Review</h1>
+      <span class="sub">sharepaste · <code>clients/desktop</code> · 2026-07-25</span>
+    </div>
+    <nav id="nav"></nav>
+  </div>
+</header>
+
+<main>
+  <div class="rootcfg">
+    <span>Repo root for editor links:</span>
+    <input type="text" id="root" value="C:/dev/sharepaste" style="min-width:250px" />
+    <button class="btn" id="reset">Reset checkboxes</button>
+    <span id="saved" style="color:var(--faint)"></span>
+  </div>
+
+  <!-- ============ OVERVIEW ============ -->
+  <section id="s-overview" class="on">
+    <div class="stats" id="stats"></div>
+
+    <div class="box" style="margin-bottom:18px">
+      <h3>The three intended surfaces, and what is broken in each</h3>
+      <div class="flow" id="flow"></div>
+      <p style="color:var(--dim);font-size:12.5px;margin:6px 0 0">
+        Each surface is fully built. The failures are not missing features — they are features
+        that are present, persisted and tested, yet inert.
+      </p>
+    </div>
+
+    <div class="split">
+      <div class="box">
+        <h3>Why the test suite could not see any of this</h3>
+        <p style="color:var(--dim);font-size:13px">
+          Three of the most severe findings share one root cause: the tests assert the
+          <em>plumbing</em> rather than the <em>effect</em>.
+        </p>
+        <table>
+          <tr><th>Finding</th><th>What the test proves</th><th>What it never proves</th></tr>
+          <tr><td><code>S1</code></td><td><code>listen()</code> mock resolves</td><td>the real ACL permits it</td></tr>
+          <tr><td><code>S13a</code></td><td>the boolean round-trips</td><td>the OS autostart entry exists</td></tr>
+          <tr><td><code>S14a</code></td><td>dedupe-by-<code>id</code> works</td><td>repeat copies are collapsed</td></tr>
+        </table>
+        <p style="color:var(--dim);font-size:12.5px;margin-bottom:0">
+          All 41 UI tests call <span class="loc" data-f="clients/desktop/ui/src/ipc/tauri.ts" data-l="17">tauri.ts:17</span>
+          <code>injectForTests</code>, replacing the exact layer S1 breaks.
+        </p>
+      </div>
+      <div class="box">
+        <h3>Correction log</h3>
+        <p style="color:var(--dim);font-size:13px">
+          One finding was overstated in the first pass and has been rewritten against the
+          pinned dependency rather than upstream <code>main</code>.
+        </p>
+        <table>
+          <tr><th>Claim</th><th>Status</th></tr>
+          <tr><td>“Entire main window is dead”</td><td class="bad">Wrong</td></tr>
+          <tr><td>Commands work from <code>main</code></td><td class="good">Confirmed by screenshot</td></tr>
+          <tr><td><code>listen()</code> denied from <code>main</code></td><td class="good">Holds — see S1</td></tr>
+        </table>
+        <p style="color:var(--dim);font-size:12.5px;margin-bottom:0">
+          Cause: the ACL guard was read from Tauri's dev branch. The lockfile pins
+          <code>tauri 2.11.0</code>, whose guard omits <code>|| !is_local</code>.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FINDINGS ============ -->
+  <section id="s-findings">
+    <div class="bar">
+      <input type="search" id="q" placeholder="Search findings, files, symbols…" />
+      <span style="flex:1"></span>
+      <span class="chip on" data-sev="all">All</span>
+      <span class="chip" data-sev="crit">Critical</span>
+      <span class="chip" data-sev="high">High</span>
+      <span class="chip" data-sev="med">Medium</span>
+      <span class="chip" data-sev="low">Low</span>
+      <button class="btn" id="expand">Expand all</button>
+    </div>
+    <div id="findings"></div>
+    <p id="nores" style="display:none;color:var(--faint);text-align:center;padding:34px">No findings match.</p>
+  </section>
+
+  <!-- ============ PLAN ============ -->
+  <section id="s-plan">
+    <div class="bar">
+      <span class="sub" id="planprog"></span>
+      <span style="flex:1"></span>
+      <button class="btn" id="expandt">Expand all</button>
+    </div>
+    <div id="plan"></div>
+  </section>
+
+  <!-- ============ TESTS ============ -->
+  <section id="s-tests">
+    <div class="stats" id="teststats"></div>
+    <div class="box" style="margin-bottom:16px">
+      <h3>Suite: 133 defined → 108, and all of them actually run</h3>
+      <table id="testtable"></table>
+    </div>
+    <div class="split">
+      <div class="box">
+        <h3>Deleted — and why that is safe</h3>
+        <div id="testdel"></div>
+      </div>
+      <div class="box">
+        <h3>Kept, against the audit's recommendation</h3>
+        <div id="testkeep"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FILES ============ -->
+  <section id="s-files">
+    <div class="bar"><span class="sub">Every file the plan touches. Click to open at the relevant line.</span></div>
+    <div class="box"><table id="filetable"></table></div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const F = [
+ {id:"S1",sev:"crit",surf:"main",tags:["corrected","bug"],
+  t:"Main window can invoke commands but cannot receive any event",
+  body:`<p>The only capability file grants its permissions to <code>"windows": ["popover","modal-*"]</code>.
+   The app creates <code>popover</code> and <code>main</code>. Nothing named <code>modal-*</code> exists — that
+   label is a leftover from the pre-streamlining topology the migration never cleaned up.</p>
+   <p><b>Verified against <code>tauri-2.11.0</code> as pinned in <code>Cargo.lock</code></b>, not upstream main.
+   The ACL guard is <code>if (plugin_command.is_some() || has_app_acl_manifest)</code>.
+   <code>has_app_acl_manifest</code> is <em>not</em> "capabilities exist" — it is
+   <code>acl.contains_key("__app-acl__")</code>, true only with an app-level <code>permissions/</code>
+   directory. This app has none, so the guard collapses to <code>plugin_command.is_some()</code>:</p>
+   <ul>
+     <li><code>invoke("list_accounts")</code> and every other <code>#[tauri::command]</code> — not
+       <code>plugin:</code>-prefixed, <b>not checked, works</b>. This is why the Accounts tab renders.</li>
+     <li><code>listen()</code> → <code>plugin:event|listen</code> — <b>rejected</b>:
+       <code>Command plugin:event|listen not allowed by ACL</code>.</li>
+   </ul>
+   <p><b>So the window renders and its commands work; it is deaf.</b> Both subscription blocks are bare
+   async IIFEs with no <code>catch</code>, so the first rejection aborts the rest and nothing surfaces.</p>`,
+  ev:[["clients/desktop/src-tauri/capabilities/default.json",5,"windows: [popover, modal-*] — main absent, modal-* matches nothing"],
+      ["clients/desktop/src-tauri/src/lib.rs",426,"the main window is created here"],
+      ["clients/desktop/src-tauri/src/lib.rs",422,"emit_to(\"main\") succeeds on the Rust side, reaches no listener"],
+      ["clients/desktop/ui/src/views/sections/PairingSection.tsx",35,"onPairClaimed — never registers, so pairing never confirms"],
+      ["clients/desktop/ui/src/views/Main.tsx",30,"onMainNavigate — tray → Settings… cannot switch tabs"],
+      ["clients/desktop/ui/src/views/sections/AccountsSection.tsx",32,"4 listeners — list never updates live"],
+      ["docs/superpowers/specs/2026-05-05-ui-window-streamlining-design.md",88,"the migration step that was missed"]]},
+
+ {id:"S13a",sev:"crit",surf:"capture",tags:["bug"],
+  t:"“Launch at login” is a checkbox that does nothing",
+  body:`<p><code>update_settings</code> persists the <code>autostart</code> boolean and the checkbox renders,
+   but no code ever calls the autostart plugin. <code>tauri_plugin_autostart</code> is only <code>init</code>'d;
+   <code>ManagerExt::autolaunch().enable()</code> appears nowhere in <code>src-tauri/src</code>.</p>
+   <p>Its siblings are all genuinely wired — <code>hotkey</code> → <code>apply_hotkey</code>,
+   <code>capture_enabled</code> and <code>deny_list</code> → the capture filter. <code>autostart</code> is the one
+   setting with a control, persistence, a <em>passing round-trip test</em>, and no effect.</p>
+   <p>It breaks surface 1 directly: the app cannot start itself, so nothing is captured until
+   the user launches it by hand.</p>`,
+  ev:[["clients/desktop/src-tauri/src/commands.rs",551,"persists the boolean and stops there"],
+      ["clients/desktop/src-tauri/src/lib.rs",37,"plugin init — the only autostart reference in the crate"],
+      ["clients/desktop/ui/src/views/sections/SettingsSection.tsx",38,"the checkbox that lies"],
+      ["clients/desktop/src-tauri/src/core/storage/settings.rs",158,"the test that passes anyway — it only asserts persistence"]]},
+
+ {id:"S14a",sev:"high",surf:"popover",tags:["bug"],
+  t:"Nothing deduplicates clipboard entries by content",
+  body:`<p>A live popover shows one path three times and a cron line twice. Three layers could
+   collapse these; none does.</p>
+   <ul>
+     <li><b>Capture filter</b> — skips only if the text equals the app's <em>own</em> last write inside
+       <code>SELF_WRITE_WINDOW</code>. That is echo suppression for copying <em>from</em> the popover.
+       Re-copying from another app is captured every time.</li>
+     <li><b><code>dedupePrepend</code></b> — dedupes by <code>id</code>, and distinct captures always get
+       distinct ids. For repeated copies it collapses nothing; the name oversells it.</li>
+     <li><b><code>entries_cache</code></b> — no content uniqueness constraint.</li>
+   </ul>
+   <p>Every repeat is encrypted, queued, uploaded and stored. With the popover capped at 100 rows and
+   the cache capped by <code>MAX_PER_USER</code>, duplicates evict genuinely distinct history — the exact
+   failure a clipboard manager exists to prevent.</p>
+   <p>The fix belongs in the Rust filter, <b>not</b> the store: collapsing in the UI would still burn a
+   server row, a cache slot and an upload.</p>`,
+  ev:[["clients/desktop/src-tauri/src/core/capture/filter.rs",56,"self-write check — the only text comparison that exists"],
+      ["clients/desktop/ui/src/store/history.ts",20,"dedupePrepend — by id, never by content"],
+      ["clients/desktop/ui/src/store/history.ts",22,"100-row cap that duplicates consume"]]},
+
+ {id:"S2",sev:"high",surf:"build",tags:["bug"],
+  t:"No desktop test runs in CI, and `cargo test` is red on a clean machine",
+  body:`<p><code>desktop-build.yml</code> builds and uploads artifacts; it never runs <code>cargo test</code>
+   or <code>npm test</code>. <code>server-ci.yml</code> does run the server suite, so the gap is desktop-specific.</p>
+   <p>The three integration tests hard-code a server URL, a Docker container name and a
+   container-internal DB path, then <b>panic</b> rather than skip when the server is absent. Verified:</p>
+   <pre style="background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:9px 11px;overflow:auto;font-size:12px"><code>$ cargo test --test flow1_invite
+panicked at tests\\common\\mod.rs:40:10:
+server not reachable at 127.0.0.1:8443
+test result: FAILED. 0 passed; 1 failed</code></pre>
+   <p><code>cargo test --lib</code> is green (87/0/2). It is the default <code>cargo test</code> — what any
+   contributor or CI job runs — that fails.</p>`,
+  ev:[["clients/desktop/src-tauri/tests/common/mod.rs",40,"expect() panics instead of skipping"],
+      ["clients/desktop/src-tauri/tests/common/mod.rs",57,"shells out to `docker exec`"],
+      [".github/workflows/desktop-build.yml",1,"builds only — no test step anywhere"]]},
+
+ {id:"S4",sev:"high",surf:"popover",tags:["bug"],
+  t:"Three events are half-wired; two cause silent bugs, one is documented but unimplemented",
+  body:`<table>
+   <tr><th>Event</th><th>Rust</th><th>TS</th><th>Reality</th></tr>
+   <tr><td><code>capture-skipped</code></td><td class="bad">never emitted</td><td>defined, unused</td>
+       <td>fully dead — yet the README tells testers to confirm its toast</td></tr>
+   <tr><td><code>history-changed</code></td><td class="good">emitted ×2</td><td>defined, unused</td>
+       <td class="warn">popover does not refresh after backfill or clear</td></tr>
+   <tr><td><code>decryption-error</code></td><td class="good">emitted</td><td>defined, unused</td>
+       <td class="warn">decryption failures are silent</td></tr>
+   </table>`,
+  ev:[["clients/desktop/src-tauri/src/events.rs",11,"CAPTURE_SKIPPED — declared, never emitted"],
+      ["clients/desktop/src-tauri/src/lib.rs",822,"the skip path only logs"],
+      ["clients/desktop/ui/src/ipc/events.ts",11,"onHistoryChanged — no subscriber"],
+      ["clients/desktop/README.md",95,"documents a toast that does not exist"]]},
+
+ {id:"S13b",sev:"high",surf:"popover",tags:["bug"],
+  t:"No hotkey ships by default, so the popover has no keyboard entry point",
+  body:`<p><code>Settings::default()</code> sets <code>hotkey: None</code>, and
+   <code>register_initial_hotkey</code> no-ops on <code>None</code>. Until the user finds the Settings text
+   field and types a valid accelerator, the popover is reachable only by clicking the tray icon —
+   so surface 2's intended entry point does not exist out of the box.</p>`,
+  ev:[["clients/desktop/src-tauri/src/core/storage/settings.rs",21,"hotkey: None"],
+      ["clients/desktop/src-tauri/src/lib.rs",877,"no-ops when unset"]]},
+
+ {id:"S3",sev:"med",surf:"main",tags:[],
+  t:"Six of eighteen Tauri commands are unreachable from the UI",
+  body:`<table>
+    <tr><th>Command</th><th>TS wrapper</th><th>Disposition</th></tr>
+    <tr><td><code>delete_entry</code></td><td>exists, uncalled</td><td class="good">wire — privacy need</td></tr>
+    <tr><td><code>clear_history</code></td><td>exists, uncalled</td><td class="good">wire into Settings</td></tr>
+    <tr><td><code>get_status</code></td><td>exists, uncalled</td><td class="bad">delete — redundant</td></tr>
+    <tr><td><code>search_history</code></td><td>exists, uncalled</td><td class="bad">delete</td></tr>
+    <tr><td><code>revoke_device</code></td><td>exists, uncalled</td><td class="bad">delete</td></tr>
+    <tr><td><code>get_entry_full</code></td><td class="bad">none written</td><td class="bad">delete</td></tr>
+  </table>
+  <p><code>get_status</code> is redundant: <code>list_accounts</code> already returns <code>status</code> and
+  <code>pending</code>. It also hardcodes <code>last_error: None</code>, so it could not report an error if called.
+  <code>cmd.openMainWindow</code> is dead too — <code>openSection</code> inlines both invokes instead.</p>`,
+  ev:[["clients/desktop/src-tauri/src/lib.rs",52,"generate_handler! — all 18 registered"],
+      ["clients/desktop/ui/src/ipc/commands.ts",13,"6 wrappers with no callsite"],
+      ["clients/desktop/src-tauri/src/commands.rs",27,"AccountSummary already carries status + pending"],
+      ["clients/desktop/ui/src/views/EntryRow.tsx",20,"a bare div — no delete affordance"]]},
+
+ {id:"S10",sev:"med",surf:"build",tags:[],
+  t:"Everything is `pub`, which disables rustc's dead-code lint",
+  body:`<p><code>lib.rs</code> declares all seven modules <code>pub</code>, and nearly every item is <code>pub</code>.
+   rustc exempts items reachable from a library's public API from <code>dead_code</code>. That is why
+   <code>cargo check --all-targets</code> reports <b>zero warnings</b> while six commands, one event and
+   <code>InMemoryKeychain</code> sit unused.</p>
+   <p>Only <code>src-tauri/tests/*</code> consumes the public surface, and only four paths. Everything else can
+   be <code>pub(crate)</code> — which turns the compiler into the dead-code detector this review had to be.</p>`,
+  ev:[["clients/desktop/src-tauri/src/lib.rs",1,"seven pub modules"]]},
+
+ {id:"S14b",sev:"med",surf:"popover",tags:["bug"],
+  t:"Arrow-key selection never scrolls into view",
+  body:`<p><code>HistoryList</code> moves <code>selectedIndex</code> on ArrowUp/ArrowDown and <code>EntryRow</code>
+   renders the highlight, but no <code>scrollIntoView</code> call exists anywhere in <code>ui/src/views</code>.
+   The list is <code>overflow-auto</code> holding up to 100 rows in a 480px window showing ~13, so arrowing past
+   the fold moves an invisible selection and Enter copies an entry the user cannot see.</p>
+   <p>Handled correctly and worth not breaking: <code>setSearch</code> resets <code>selectedIndex</code> to 0,
+   so filtering can never strand the selection out of bounds.</p>`,
+  ev:[["clients/desktop/ui/src/views/HistoryList.tsx",22,"selection moves, viewport does not follow"],
+      ["clients/desktop/ui/src/store/ui.ts",18,"the bounds case that IS handled"]]},
+
+ {id:"S5",sev:"med",surf:"build",tags:[],
+  t:"`spawn_sync` is a 258-line function",
+  body:`<p>It performs slot registration, membership loading, the whole SSE lifecycle (158 lines) and the
+   uploader wiring. It also declares a trait implementation <em>inside a spawned closure</em>, nested two
+   levels into an <code>async move</code> block. Its siblings already live in <code>core/sync/</code>.</p>`,
+  ev:[["clients/desktop/src-tauri/src/lib.rs",511,"function start"],
+      ["clients/desktop/src-tauri/src/lib.rs",725,"trait impl inside a closure"]]},
+
+ {id:"S6",sev:"low",surf:"build",tags:[],
+  t:"270 lines of popover geometry live in `lib.rs`",
+  body:`<p>Nine functions plus an enum, in the crate root beside app setup and tray wiring.
+   <code>PopoverPlacement</code> serves one caller. <code>select_popover_tray_rect</code> is a ten-line function
+   whose entire <code>Fallback</code> branch is <code>None</code> — it exists so that returning <code>None</code>
+   can be unit-tested.</p>`,
+  ev:[["clients/desktop/src-tauri/src/lib.rs",143,"geometry block starts"],
+      ["clients/desktop/src-tauri/src/lib.rs",237,"function that exists to be testable"],
+      ["clients/desktop/src-tauri/src/lib.rs",988,"the test written for it"]]},
+
+ {id:"S7",sev:"low",surf:"build",tags:[],
+  t:"`qr.rs` has two copies of the same hex encoder, a needless sha2 wrapper, and no QR code",
+  body:`<p><code>hex_lower</code> and <code>hex_lower_static</code> are the same function written twice in one
+   file. Both are redundant — <code>data-encoding</code> is already a dependency and already used in this very
+   file. <code>mod sha2_local</code> wraps <code>sha2::Sha256</code> in a unit struct for a single call site.
+   The module is named for a QR code it does not contain.</p>`,
+  ev:[["clients/desktop/src-tauri/src/core/pairing/qr.rs",24,"hex_lower"],
+      ["clients/desktop/src-tauri/src/core/pairing/qr.rs",110,"hex_lower_static — identical"],
+      ["clients/desktop/src-tauri/src/core/pairing/qr.rs",120,"data_encoding already imported here"]]},
+
+ {id:"S8",sev:"low",surf:"build",tags:[],
+  t:"`InMemoryKeychain` is production code used only by tests",
+  body:`<p>Every reference is inside a <code>#[cfg(test)]</code> block. It ships in the binary regardless.</p>`,
+  ev:[["clients/desktop/src-tauri/src/core/keychain.rs",45,"struct + impl, no production caller"]]},
+
+ {id:"S9",sev:"low",surf:"build",tags:[],
+  t:"The entry DTO is defined three times",
+  body:`<p><code>commands::EntryViewDto</code> and <code>events::EntryView</code> declare the same six fields with
+   the same types and serialize identically; <code>types.ts</code> mirrors them. Two Rust structs where one
+   suffices — deleting one leaves the TS side untouched.</p>`,
+  ev:[["clients/desktop/src-tauri/src/commands.rs",33,"EntryViewDto"],
+      ["clients/desktop/src-tauri/src/events.rs",37,"EntryView — identical shape"]]},
+
+ {id:"S13c",sev:"low",surf:"main",tags:[],
+  t:"The hotkey field re-registers a global shortcut on every keystroke",
+  body:`<p><code>onChange</code> fires <code>update_settings</code> per character. Typing
+   <code>Ctrl+Shift+V</code> triggers ~13 calls, each running <code>unregister_all()</code> then re-register.
+   Intermediate values fail and are swallowed as warnings. The final value lands, so this is not a
+   correctness bug — but the shortcut is transiently unbound throughout and every keystroke writes to SQLite.</p>`,
+  ev:[["clients/desktop/ui/src/views/sections/SettingsSection.tsx",58,"onChange → update()"],
+      ["clients/desktop/src-tauri/src/lib.rs",888,"unregister_all on every call"]]},
+
+ {id:"S14c",sev:"low",surf:"popover",tags:["inference"],
+  t:"Enter is ambiguous when a footer button holds focus",
+  body:`<p><code>HistoryList</code>'s keydown handler is bound to <code>window</code> with no check on
+   <code>e.target</code>. Focus can sit on the Accounts/Settings buttons — a live instance shows exactly that.
+   Enter should then fire both the button's <code>openSection</code> and the list's copy-and-hide.</p>
+   <p><b>[INFERENCE]</b> — read from the handlers, not reproduced in a running build.</p>`,
+  ev:[["clients/desktop/ui/src/views/HistoryList.tsx",28,"window-scoped Enter handler"],
+      ["clients/desktop/ui/src/views/Footer.tsx",16,"the focusable buttons"]]},
+
+ {id:"S11",sev:"low",surf:"build",tags:[],
+  t:"`verify-release-packaging.mjs` asserts source text and is never invoked",
+  body:`<p>52 lines checking that <code>main.rs</code> contains a literal attribute string, that a favicon file
+   exists, and that two HTML files contain a literal <code>&lt;link&gt;</code>. These assert file contents, not
+   behaviour — a build producing a broken binary with the right source text passes. It is wired to
+   <code>npm run test:packaging</code> and invoked by nothing.</p>`,
+  ev:[["clients/desktop/scripts/verify-release-packaging.mjs",1,"the whole script"],
+      ["clients/desktop/package.json",9,"the script entry nothing calls"]]},
+
+ {id:"S12",sev:"low",surf:"build",tags:[],
+  t:"Config, Makefile and README drift",
+  body:`<ul>
+    <li><code>tauri.macos.conf.json</code> carries one boolean via a CI <code>--config</code> arg, while
+      <code>Cargo.toml</code> already enables the same feature unconditionally for macOS.</li>
+    <li>Every Makefile target is gated on <code>check-macos</code>, yet CI builds Windows.</li>
+    <li>The README says Windows output "depends on the selected bundle target"; CI builds <code>--bundles nsis</code>.</li>
+  </ul>`,
+  ev:[["clients/desktop/src-tauri/tauri.macos.conf.json",1,"five lines, one boolean"],
+      ["Makefile",14,"check-macos gates everything"],
+      ["clients/desktop/README.md",59,"contradicted by the workflow"]]}
+];
+
+const P = [
+ {n:1,t:"Make the main window hear events, and guard it",
+  d:"The window works; it receives nothing. One line fixes it, one test keeps it fixed.",
+  tasks:[
+   {id:"1.1",r:"S1",t:"Cover the `main` window",
+    b:`Change <code>"windows"</code> to <code>["main","popover"]</code>. Delete <code>"modal-*"</code>.`,
+    f:[["clients/desktop/src-tauri/capabilities/default.json",5]],
+    a:"Tray → Pair device… → claim the code from a second instance; the window advances to the paired state. Before the fix it sits on the code screen forever."},
+   {id:"1.2",r:"S1",t:"Add a regression guard that does not mock the ACL",
+    b:`Parse the capability file at test time via <code>include_str!</code> and assert its <code>windows</code> array covers every label the app builds. Drive both the builders and the test from one <code>WINDOW_LABELS</code> const.`,
+    f:[["clients/desktop/src-tauri/src/lib.rs",964]],
+    a:"The test fails if \"main\" is removed from the capability file. This is the single most valuable test in the plan — it catches the class of bug 133 existing tests could not."},
+   {id:"1.3",r:"S2",t:"Run the desktop suite in CI",
+    b:`Add a <code>test</code> job (macOS + Windows) running <code>cargo test --lib</code> and <code>npm test</code>. Make <code>build</code> depend on it.`,
+    f:[[".github/workflows/desktop-build.yml",1]],
+    a:"Both matrix legs pass; a deliberately broken assertion fails the workflow."},
+   {id:"1.4",r:"S2",t:"Stop `cargo test` failing on a clean machine",
+    b:`<code>start()</code> returns <code>Option&lt;TestServer&gt;</code> and skips with a notice instead of panicking. Read the URL from <code>SHAREPASTE_TEST_SERVER</code>.`,
+    f:[["clients/desktop/src-tauri/tests/common/mod.rs",40]],
+    a:"`cargo test` with no server running is green and reports the three tests as skipped."},
+   {id:"1.5",r:"S2",t:"Add an opt-in CI job for the live-server tests",
+    b:`<code>docker compose up -d</code>, wait for <code>/healthz</code>, then run the two flow tests. Gate on dispatch plus pushes touching <code>core/http</code> or <code>core/pairing</code>.`,
+    f:[[".github/workflows/desktop-build.yml",1]],
+    a:"The job passes with the compose stack up."}]},
+
+ {n:2,t:"Make the three surfaces behave as designed",
+  d:"Behaviour fixes only. Every item is a feature present in the code but broken, inert or unreachable.",
+  tasks:[
+   {id:"2.1",r:"S13a",t:"Make “Launch at login” actually work",g:"Auto-capture",
+    b:`Call <code>autolaunch().enable()/.disable()</code> via <code>ManagerExt</code> on change, and reconcile at startup so OS state matches the stored setting.`,
+    f:[["clients/desktop/src-tauri/src/commands.rs",551]],
+    a:"Tick the box, then inspect the OS entry — Registry Run key on Windows, LaunchAgents plist on macOS. The existing round-trip tests do NOT cover this; that is exactly how it shipped broken."},
+   {id:"2.2",r:"S14a",t:"Drop consecutive duplicate captures",g:"Auto-capture",
+    b:`Extend <code>CaptureContext</code> with the previous plaintext; return <code>SkipReason::Duplicate</code> on a match. Must run <em>before</em> encrypt+enqueue so a repeat costs no row, slot or upload. Pick one rule — drop the repeat (recommended) or bump to top — not both.`,
+    f:[["clients/desktop/src-tauri/src/core/capture/filter.rs",56],["clients/desktop/src-tauri/src/state.rs",25]],
+    a:"New table-driven cases: same text twice yields Capture then Skip(Duplicate); same text with another capture between yields Capture twice."},
+   {id:"2.3",r:"S13b",t:"Ship a default hotkey",g:"Popover",
+    b:`<code>hotkey: Some("CmdOrCtrl+Shift+V")</code>. Check against OS-reserved combinations; <code>apply_hotkey</code> already tolerates an unregistrable value, and clearing the field still unbinds.`,
+    f:[["clients/desktop/src-tauri/src/core/storage/settings.rs",21]],
+    a:"Fresh profile, press the hotkey, popover appears — without visiting Settings first."},
+   {id:"2.4",r:"S14b",t:"Keep the keyboard selection visible",g:"Popover",
+    b:`Ref the selected row and <code>scrollIntoView({block:"nearest"})</code> from an effect keyed on <code>selectedIndex</code>.`,
+    f:[["clients/desktop/ui/src/views/HistoryList.tsx",22]],
+    a:"With >20 entries, holding ArrowDown keeps the highlighted row on screen to the last entry."},
+   {id:"2.5",r:"S14c",t:"Disambiguate Enter",g:"Popover",
+    b:`Ignore keydown events whose target is a <code>button</code>, or scope the listener to the list container instead of <code>window</code>.`,
+    f:[["clients/desktop/ui/src/views/HistoryList.tsx",28]],
+    a:"Focus the footer Accounts button, press Enter — the main window opens and no entry is copied."},
+   {id:"2.6",r:"S3",t:"Give entries a delete affordance",g:"Popover",
+    b:`<code>delete_entry</code> is complete and tested with no UI. Add a per-row control; the wrapper already exists. <b>Privacy requirement, not tidiness</b> — a live popover shows a Shadowsocks URL with embedded credentials and no way to remove one entry.`,
+    f:[["clients/desktop/ui/src/views/EntryRow.tsx",20]],
+    a:"Deleting a row removes it from the popover and the server."},
+   {id:"2.7",r:"S4",t:"Fix the two silent event bugs",g:"Popover",
+    b:`Subscribe <code>onHistoryChanged</code> (re-run <code>listHistory</code>) and surface <code>onDecryptionError</code>. The events are already emitted; only listeners are missing.`,
+    f:[["clients/desktop/ui/src/views/Popover.tsx",40]],
+    a:"clear_history empties the popover list without reopening it."},
+   {id:"2.8",r:"S3",t:"Add “Clear history” to Settings",g:"Main window",
+    b:`<code>clear_history</code> has no affordance either; Settings is its home. Confirm destructively — it deletes server-side for every device.`,
+    f:[["clients/desktop/ui/src/views/sections/SettingsSection.tsx",24]],
+    a:"Empties popover and server. With 2.6, no command remains registered without a UI caller."},
+   {id:"2.9",r:"S13c",t:"Stop the hotkey field thrashing the shortcut",g:"Main window",
+    b:`Move <code>update()</code> from <code>onChange</code> to <code>onBlur</code> plus Enter, holding the in-progress string locally.`,
+    f:[["clients/desktop/ui/src/views/sections/SettingsSection.tsx",58]],
+    a:"Typing a full accelerator produces exactly one update_settings call."}]},
+
+ {n:3,t:"Delete the surface nothing reaches",
+  d:"After Phase 2, so the wire-or-delete decisions are already settled.",
+  tasks:[
+   {id:"3.1",r:"S3",t:"Delete the redundant status path",
+    b:`Remove <code>get_status</code>, <code>StatusResp</code>, the handler entry and <code>cmd.getStatus</code>. <code>list_accounts</code> already carries status and pending.`,
+    f:[["clients/desktop/src-tauri/src/commands.rs",583]],a:""},
+   {id:"3.2",r:"S3",t:"Delete the unused window wrapper",
+    b:`Remove <code>cmd.openMainWindow</code>; <code>openSection</code> keeps inlining both invokes.`,
+    f:[["clients/desktop/ui/src/ipc/commands.ts",26]],a:""},
+   {id:"3.3",r:"S3",t:"Delete `revoke_device` and `search_history`",
+    b:`Client-side filtering already covers the 100-row cache. Drop both commands, both wrappers, and <code>entries_cache::search</code> with its test. The HTTP method stays — the integration test uses <code>ServerClient</code> directly.`,
+    f:[["clients/desktop/src-tauri/src/commands.rs",406]],a:""},
+   {id:"3.4",r:"S3",t:"Delete `get_entry_full`",
+    b:`The only command with no TS side. <code>copy_to_clipboard</code> covers the need without handing plaintext to the webview — the safer design. Keep <code>entries_cache::get_full</code>.`,
+    f:[["clients/desktop/src-tauri/src/commands.rs",435]],a:""},
+   {id:"3.5",r:"S4",t:"Delete `capture-skipped`",
+    b:`Remove the const, the struct, the TS listener and the README step. Note 2.2 adds a real skip reason — if a toast is wanted, spec it then.`,
+    f:[["clients/desktop/src-tauri/src/events.rs",11]],a:""}]},
+
+ {n:4,t:"Let the compiler find dead code",
+  d:"Do this after Phase 3, not before — otherwise you hide the evidence.",
+  tasks:[
+   {id:"4.1",r:"S10",t:"Narrow the public surface",
+    b:`Keep <code>pub</code> only on what <code>tests/*</code> imports (four paths) plus commands and <code>launch</code>. Everything else → <code>pub(crate)</code>.`,
+    f:[["clients/desktop/src-tauri/src/lib.rs",1]],
+    a:"cargo check still clean; then orphan a function and confirm rustc now reports `never used`. Delete whatever the lint surfaces."},
+   {id:"4.2",r:"S8",t:"Gate `InMemoryKeychain` to tests",
+    b:`<code>#[cfg(test)]</code> on the struct and impl, or a dev-only feature if <code>tests/*</code> needs it.`,
+    f:[["clients/desktop/src-tauri/src/core/keychain.rs",45]],a:""}]},
+
+ {n:5,t:"Break up the two oversized modules",
+  d:"Pure moves. No behaviour change; existing tests must pass untouched.",
+  tasks:[
+   {id:"5.1",r:"S6",t:"Extract popover geometry",
+    b:`New <code>popover.rs</code> taking the constants, builders, positioning and monitor helpers plus their tests. Drop <code>PopoverPlacement</code> and <code>select_popover_tray_rect</code>; pass a bool instead.`,
+    f:[["clients/desktop/src-tauri/src/lib.rs",143]],
+    a:"The two geometry tests pass unchanged."},
+   {id:"5.2",r:"S5",t:"Move `spawn_sync` into `core/sync/`",
+    b:`New <code>session.rs</code> split into <code>run_session</code>, <code>run_sse_loop</code>, <code>run_uploader</code>. Hoist the <code>ServerUpload</code> impl to module scope — a trait impl does not belong inside a closure.`,
+    f:[["clients/desktop/src-tauri/src/lib.rs",511]],
+    a:"cargo test --lib unchanged; smoke — pair, copy text, confirm sync and pending count drop."},
+   {id:"5.3",r:"S7",t:"Clean up `qr.rs`",
+    b:`Delete both hand-rolled hex encoders and the sha2 wrapper; use <code>data_encoding::HEXLOWER</code> and <code>sha2</code> directly. Rename to <code>payload.rs</code>.`,
+    f:[["clients/desktop/src-tauri/src/core/pairing/qr.rs",11]],a:""},
+   {id:"5.4",r:"S9",t:"Collapse the duplicate entry DTO",
+    b:`Delete <code>EntryViewDto</code>; return <code>events::EntryView</code>. Identical serialization, so the TS side is untouched.`,
+    f:[["clients/desktop/src-tauri/src/commands.rs",33]],a:""}]},
+
+ {n:6,t:"Build and docs",d:"Housekeeping, gated on everything above working.",
+  tasks:[
+   {id:"6.1",r:"S11",t:"Delete `verify-release-packaging.mjs`",
+    b:`Remove the script and its npm entry. The CI build producing an <code>.exe</code> protects the real invariant better than a string match.`,
+    f:[["clients/desktop/scripts/verify-release-packaging.mjs",1]],a:""},
+   {id:"6.2",r:"S12",t:"Fold `tauri.macos.conf.json` into the main config",
+    b:`Move the one boolean into <code>tauri.conf.json</code> and drop the <code>--config</code> matrix arg.`,
+    f:[["clients/desktop/src-tauri/tauri.macos.conf.json",1]],
+    a:"macOS CI leg still builds app + dmg."},
+   {id:"6.3",r:"S12",t:"Correct the README",
+    b:`State what CI actually produces, delete the phantom capture-skipped step, note the Makefile is macOS-only.`,
+    f:[["clients/desktop/README.md",59]],a:""},
+   {id:"6.4",r:"S12",t:"Document the Makefile's platform scope",
+    b:`One comment pointing Windows users at <code>npm run build</code>. No new targets.`,
+    f:[["Makefile",14]],a:""}]}
+];
+
+const TESTS=[
+ ["capture/filter.rs",9,2,"9 near-identical bodies → one table-driven case set"],
+ ["capture/windows.rs",2,0,"both #[ignore]d “does not panic” calls — never ran"],
+ ["storage/settings.rs",8,5,"three deny-list default tests → one parameterized"],
+ ["lib.rs / popover.rs",3,3,"−1 test for a deleted function, +1 capability guard"],
+ ["commands.rs",3,3,"−1 tautology, +1 real is_valid_section test"],
+ ["other Rust modules",64,64,"unchanged — cheap, fast, load-bearing"],
+ ["Rust integration",3,2,"0 runnable → 2 runnable; auth_revoke duplicated server-side"],
+ ["openSection.test.ts",1,0,"asserts a 4-line helper issues two mocked invokes"],
+ ["HistoryList.test.tsx",3,2,"ordering is the store's job"],
+ ["Popover.test.tsx",3,2,"60 lines of mock for 38 of assertion"],
+ ["PairingSection.test.tsx",11,6,"keep the state machine, drop mock-echo cases"],
+ ["AccountsSection.test.tsx",7,5,"drop what store.test.ts already owns"],
+ ["Main.test.tsx",6,4,"merge two URL-routing cases"],
+ ["SettingsSection.test.tsx",2,2,"keep, tighten mock"],
+ ["store.test.ts",8,8,"keep all"]
+];
+
+const DEL=[
+ ["<code>open_main_window_args_rejects_unknown_section</code>","Calls no production code. It asserts its own five fixture strings are absent from a hardcoded copy of the valid list — it cannot fail unless the test itself is edited.","Replaced by a real test of an extracted <code>is_valid_section</code>"],
+ ["<code>fallback_placement_ignores_cached_tray_rect</code>","Tests a function that exists only to be testable and returns <code>None</code> unconditionally on that branch.","Deleted with the function in 5.1"],
+ ["<code>capture/windows.rs</code> ×2","Both <code>#[ignore]</code>d FFI smoke calls with no assertions — the 2 ignored tests in the baseline. They have never run.","README Windows smoke checklist"],
+ ["<code>openSection.test.ts</code>","Pure plumbing over mocks. If <code>openSection</code> breaks, both footer buttons break visibly.","Nothing needed"],
+ ["<code>auth_revoke.rs</code>","Contract owned server-side by <code>auth.test.ts</code> + <code>devices.test.ts</code>, which actually run in CI. 401→Auth mapping is already unit-tested in <code>client.rs</code>.","server-ci.yml"]
+];
+
+const KEEP=[
+ ["<code>decryptor.rs</code> AAD test","The audit called it a duplicate of <code>crypto.rs</code>. It is not: crypto asserts decryption <em>fails</em>; decryptor asserts the row is <em>marked undecryptable and persisted</em>. Different contracts, different layers."],
+ ["<code>HistoryList</code> search filtering","Filtering is client-side in the component, not in <code>entries_cache</code>. Nothing else covers it."],
+ ["<code>store.test.ts</code> (all 8)","Cheap, fast, and they own contracts the component tests should stop duplicating."]
+];
+
+/* ---------- render ---------- */
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const SEVN={crit:"Critical",high:"High",med:"Medium",low:"Low"};
+const esc=s=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const root=()=>$("#root").value.replace(/\/+$/,"");
+const loc=(f,l)=>`<span class="loc" data-f="${f}" data-l="${l}">${f.split("/").pop()}:${l}</span>`;
+
+function open_(f,l){
+  const u=`vscode://file/${root()}/${f}:${l}`;
+  window.location.href=u;
+  toast(`Opening ${f.split("/").pop()}:${l} in VS Code`);
+}
+let tt;
+function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("on");
+  clearTimeout(tt);tt=setTimeout(()=>t.classList.remove("on"),1900);}
+
+document.addEventListener("click",e=>{
+  const l=e.target.closest(".loc");
+  if(l){e.preventDefault();e.stopPropagation();open_(l.dataset.f,+l.dataset.l);}
+});
+
+// nav
+const TABS=[["overview","Overview"],["findings","Findings"],["plan","Plan"],["tests","Tests"],["files","Files"]];
+$("#nav").innerHTML=TABS.map(([k,n],i)=>`<button data-k="${k}" class="${i?'':'on'}">${n}</button>`).join("");
+$$("#nav button").forEach(b=>b.onclick=()=>{
+  $$("#nav button").forEach(x=>x.classList.toggle("on",x===b));
+  $$("section").forEach(s=>s.classList.toggle("on",s.id==="s-"+b.dataset.k));
+  window.scrollTo(0,0);
+});
+
+// stats
+const cnt=s=>F.filter(f=>f.sev===s).length;
+$("#stats").innerHTML=[
+ ["Findings",F.length,`${cnt("crit")} critical · ${cnt("high")} high`,""],
+ ["Tasks",P.reduce((a,p)=>a+p.tasks.length,0),`across ${P.length} phases`,""],
+ ["Tests defined","133 → 108","−25, and all of them run","warn"],
+ ["Desktop tests in CI","0 → all","none run today","bad"],
+ ["<code>cargo test</code>","RED","passes only with --lib","bad"],
+ ["<code>cargo check</code>","0 warnings","every item is pub — lint is off","warn"]
+].map(([k,v,d,c])=>`<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="d">${d}</div></div>`).join("");
+
+$("#flow").innerHTML=[
+ ["capture","Auto-capture","Runs, but over-collects and cannot self-start",
+  ["S13a — “Launch at login” does nothing","S14a — no content dedupe"],"var(--crit)"],
+ ["popover","Hotkey popover","Works. The one surface covered by a capability",
+  ["S13b — no default hotkey ships","S14b — selection scrolls off-screen","S3 — no delete affordance"],"var(--med)"],
+ ["main","Main window","Renders and invokes fine — but is deaf",
+  ["S1 — every listen() denied by ACL","S4 — dead + unsubscribed events"],"var(--crit)"]
+].map(([k,t,st,is,c])=>`<div class="surf"><h4><span class="dot" style="background:${c}"></span>${t}</h4>
+  <div class="st" style="color:${c}">${st}</div><ul>${is.map(i=>`<li>${i}</li>`).join("")}</ul></div>`).join("");
+
+// findings
+function drawF(){
+  const q=$("#q").value.toLowerCase(), sev=$(".chip.on[data-sev]").dataset.sev;
+  let n=0;
+  $("#findings").innerHTML=F.filter(f=>{
+    if(sev!=="all"&&f.sev!==sev)return false;
+    if(!q)return true;
+    return (f.id+f.t+f.body+JSON.stringify(f.ev)).toLowerCase().includes(q);
+  }).map(f=>{n++;return `
+   <div class="card ${f.sev}" data-id="${f.id}">
+     <div class="chead">
+       <span class="caret">▸</span>
+       <span class="sev ${f.sev}">${SEVN[f.sev].toUpperCase()}</span>
+       <span class="cid">${f.id}</span>
+       <span class="ctitle">${f.t}
+         ${f.tags.length?`<div class="tags">${f.tags.map(t=>`<span class="tag ${t}">${t}</span>`).join("")}</div>`:""}
+       </span>
+     </div>
+     <div class="cbody">${f.body}
+       <div class="ev"><div class="ev-h">Evidence</div>
+       ${f.ev.map(([file,line,note])=>`<div class="ev-r"><span class="loc" data-f="${file}" data-l="${line}">${file.replace("clients/desktop/","")}:${line}</span><span class="note">${esc(note)}</span></div>`).join("")}
+       </div>
+     </div>
+   </div>`}).join("");
+  $("#nores").style.display=n?"none":"block";
+  $$("#findings .chead").forEach(h=>h.onclick=()=>h.parentElement.classList.toggle("open"));
+}
+$("#q").oninput=drawF;
+$$(".chip[data-sev]").forEach(c=>c.onclick=()=>{
+  $$(".chip[data-sev]").forEach(x=>x.classList.toggle("on",x===c));drawF();});
+$("#expand").onclick=()=>{
+  const any=$$("#findings .card.open").length===0;
+  $$("#findings .card").forEach(c=>c.classList.toggle("open",any));
+  $("#expand").textContent=any?"Collapse all":"Expand all";};
+drawF();
+
+// plan
+const KEY="sp-desktop-plan-v1";
+let done=JSON.parse(localStorage.getItem(KEY)||"{}");
+function save(){localStorage.setItem(KEY,JSON.stringify(done));
+  $("#saved").textContent="saved";setTimeout(()=>$("#saved").textContent="",1200);}
+function drawP(){
+  $("#plan").innerHTML=P.map(p=>{
+    const dn=p.tasks.filter(t=>done[t.id]).length, pc=Math.round(dn/p.tasks.length*100);
+    let g=null;
+    return `<div class="phase ${dn===p.tasks.length?'done':''}">
+      <div class="ph-h"><span class="ph-n">PHASE ${p.n}</span><span class="ph-t">${p.t}</span>
+        <span style="flex:1"></span><span class="sub">${dn}/${p.tasks.length}</span></div>
+      <p class="ph-d">${p.d}</p>
+      <div class="prog"><i style="width:${pc}%"></i></div>
+      ${p.tasks.map(t=>{
+        let hdr="";
+        if(t.g&&t.g!==g){g=t.g;hdr=`<div class="sub" style="margin:13px 0 6px;font-weight:600;color:var(--dim)">${t.g}</div>`;}
+        return hdr+`<div class="task ${done[t.id]?'done':''}" data-id="${t.id}">
+         <div class="t-h">
+           <input type="checkbox" ${done[t.id]?"checked":""} data-cb="${t.id}" />
+           <div class="t-main"><span class="t-id">${t.id}</span><span class="t-t">${t.t}</span>
+             <span class="ref">${t.r}</span></div>
+         </div>
+         <div class="t-b"><p>${t.b}</p>
+           ${t.f.length?`<p style="color:var(--faint);font-size:12px">${t.f.map(([f,l])=>loc(f,l)).join(" · ")}</p>`:""}
+           ${t.a?`<div class="acc"><b>Acceptance</b>${esc(t.a)}</div>`:""}
+         </div></div>`}).join("")}
+    </div>`}).join("");
+  const total=P.reduce((a,p)=>a+p.tasks.length,0), d2=Object.values(done).filter(Boolean).length;
+  $("#planprog").textContent=`${d2} of ${total} tasks complete`;
+  $$("#plan .t-main").forEach(m=>m.onclick=()=>m.closest(".task").classList.toggle("open"));
+  $$("#plan input[data-cb]").forEach(cb=>cb.onchange=()=>{done[cb.dataset.cb]=cb.checked;save();drawP();});
+}
+$("#expandt").onclick=()=>{
+  const any=$$("#plan .task.open").length===0;
+  $$("#plan .task").forEach(c=>c.classList.toggle("open",any));
+  $("#expandt").textContent=any?"Collapse all":"Expand all";};
+$("#reset").onclick=()=>{if(confirm("Clear all task checkboxes?")){done={};save();drawP();}};
+drawP();
+
+// tests
+const tb=TESTS.reduce((a,r)=>[a[0]+r[1],a[1]+r[2]],[0,0]);
+$("#teststats").innerHTML=[
+ ["Defined today",133,"89 Rust inline · 3 integration · 41 UI",""],
+ ["After",108,"−25 tests, ~200 fewer lines","good"],
+ ["Runnable today","130 / 133","3 integration tests cannot run","bad"],
+ ["Runnable after","108 / 108","plus an opt-in live-server job","good"]
+].map(([k,v,d,c])=>`<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="d">${d}</div></div>`).join("");
+
+$("#testtable").innerHTML=`<tr><th>Area</th><th class="num">Now</th><th class="num">After</th><th style="width:44%">Rationale</th></tr>`+
+ TESTS.map(([n,a,b,why])=>{
+  const cls=b<a?"bad":b>a?"good":"", d=b-a;
+  return `<tr><td><code>${n}</code></td><td class="num">${a}</td>
+   <td class="num ${cls}">${b}${d?` <span style="font-size:11px">(${d>0?"+":""}${d})</span>`:""}</td>
+   <td style="color:var(--dim);font-size:12.5px">${why}</td></tr>`}).join("")+
+ `<tr style="font-weight:600"><td>Total</td><td class="num">${tb[0]}</td><td class="num good">${tb[1]}</td><td></td></tr>`;
+
+$("#testdel").innerHTML=DEL.map(([w,why,by])=>
+ `<div style="padding:9px 0;border-bottom:1px solid #21262d">
+   <div style="font-weight:500;margin-bottom:3px">${w}</div>
+   <div style="color:var(--dim);font-size:12.5px">${why}</div>
+   <div style="color:var(--faint);font-size:11.5px;margin-top:3px">covered by: ${by}</div></div>`).join("");
+
+$("#testkeep").innerHTML=KEEP.map(([w,why])=>
+ `<div style="padding:9px 0;border-bottom:1px solid #21262d">
+   <div style="font-weight:500;margin-bottom:3px">${w}</div>
+   <div style="color:var(--dim);font-size:12.5px">${why}</div></div>`).join("");
+
+// files
+const fmap={};
+F.forEach(f=>f.ev.forEach(([file,line])=>{
+  (fmap[file]=fmap[file]||{f:new Set(),t:new Set(),line}).f.add(f.id);}));
+P.forEach(p=>p.tasks.forEach(t=>t.f.forEach(([file,line])=>{
+  (fmap[file]=fmap[file]||{f:new Set(),t:new Set(),line}).t.add(t.id);})));
+$("#filetable").innerHTML=`<tr><th>File</th><th>Findings</th><th>Tasks</th></tr>`+
+ Object.entries(fmap).sort((a,b)=>(b[1].f.size+b[1].t.size)-(a[1].f.size+a[1].t.size))
+ .map(([file,v])=>`<tr>
+   <td><span class="loc" data-f="${file}" data-l="${v.line}">${file}</span></td>
+   <td>${[...v.f].map(x=>`<span class="tag">${x}</span>`).join(" ")||'<span style="color:var(--faint)">—</span>'}</td>
+   <td>${[...v.t].map(x=>`<span class="tag">${x}</span>`).join(" ")||'<span style="color:var(--faint)">—</span>'}</td>
+  </tr>`).join("");
+
+$("#root").oninput=()=>localStorage.setItem("sp-root",$("#root").value);
+const sr=localStorage.getItem("sp-root"); if(sr)$("#root").value=sr;
+</script>
+</body>
+</html>
