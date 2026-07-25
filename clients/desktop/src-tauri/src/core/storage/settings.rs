@@ -18,7 +18,7 @@ impl Default for Settings {
             capture_enabled: true,
             deny_list: Vec::new(),
             autostart: false,
-            hotkey: None,
+            hotkey: Some(DEFAULT_HOTKEY.to_string()),
             last_active_user_id: None,
         };
         append_builtin_deny_list_entries(&mut settings);
@@ -27,6 +27,9 @@ impl Default for Settings {
 }
 
 const KEY: &str = "settings";
+/// Shipped so the popover has a keyboard entry point on a fresh profile; the
+/// user can rebind or clear it from Settings.
+pub const DEFAULT_HOTKEY: &str = "CmdOrCtrl+Shift+V";
 const BUILTIN_DENY_LIST_ENTRIES: &[&str] = &[
     "com.1password.1password",
     "com.bitwarden.desktop",
@@ -82,28 +85,102 @@ mod tests {
     use super::*;
     use crate::core::storage::open_in_memory;
 
-    #[test]
-    fn load_returns_default_when_unset() {
-        let c = open_in_memory().unwrap();
-        let s = load(&c).unwrap();
-        assert!(s.capture_enabled);
-        assert!(!s.autostart);
-        assert!(s.hotkey.is_none());
+    fn store(conn: &Connection, json: &str) {
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)",
+            params![KEY, json],
+        )
+        .unwrap();
     }
 
     #[test]
-    fn default_deny_list_includes_macos_and_windows_password_managers() {
-        let s = Settings::default();
+    fn defaults_enable_capture_bind_a_hotkey_and_deny_password_managers() {
+        let c = open_in_memory().unwrap();
+        let s = load(&c).unwrap();
+        assert_eq!(s, Settings::default(), "load() on an empty table must yield the defaults");
 
-        for app_id in [
-            "com.1password.1password",
-            "com.bitwarden.desktop",
-            "1Password.exe",
-            "Bitwarden.exe",
-        ] {
-            assert!(
-                s.deny_list.iter().any(|entry| entry == app_id),
-                "missing default deny-list entry: {app_id}"
+        assert!(s.capture_enabled);
+        assert!(!s.autostart);
+        // The popover must be reachable by keyboard on a fresh profile, without
+        // the user first discovering the Settings field.
+        assert_eq!(s.hotkey.as_deref(), Some(DEFAULT_HOTKEY));
+        assert!(s.last_active_user_id.is_none());
+        assert_eq!(s.deny_list.as_slice(), BUILTIN_DENY_LIST_ENTRIES);
+    }
+
+    #[test]
+    fn every_persisted_deny_list_gains_the_builtin_entries_exactly_once() {
+        fn from_legacy_row() -> Vec<String> {
+            let c = open_in_memory().unwrap();
+            store(
+                &c,
+                r#"{"capture_enabled":true,"deny_list":["com.1password.1password","com.bitwarden.desktop","CustomApp.exe"],"autostart":true,"hotkey":"Ctrl+Shift+V"}"#,
+            );
+            load(&c).unwrap().deny_list
+        }
+
+        fn from_mixed_case_row() -> Vec<String> {
+            let c = open_in_memory().unwrap();
+            store(
+                &c,
+                r#"{"capture_enabled":true,"deny_list":["com.1password.1password","com.bitwarden.desktop","1password.exe","bitwarden.exe"],"autostart":false,"hotkey":null}"#,
+            );
+            load(&c).unwrap().deny_list
+        }
+
+        fn from_save_of_custom_only_list() -> Vec<String> {
+            let c = open_in_memory().unwrap();
+            save(
+                &c,
+                &Settings {
+                    deny_list: vec!["CustomApp.exe".into()],
+                    ..Settings::default()
+                },
+            )
+            .unwrap();
+            load(&c).unwrap().deny_list
+        }
+
+        // (label, how the stored list was produced, custom entries that must survive)
+        let cases: &[(&str, fn() -> Vec<String>, &[&str])] = &[
+            (
+                "row written before the Windows managers existed",
+                from_legacy_row,
+                &["CustomApp.exe"],
+            ),
+            (
+                "row whose builtin entries differ from ours only by case",
+                from_mixed_case_row,
+                &[],
+            ),
+            (
+                "list that went through save() carrying only a custom entry",
+                from_save_of_custom_only_list,
+                &["CustomApp.exe"],
+            ),
+        ];
+
+        for (label, produce, customs) in cases {
+            let list = produce();
+            for builtin in BUILTIN_DENY_LIST_ENTRIES {
+                assert_eq!(
+                    list.iter()
+                        .filter(|e| e.eq_ignore_ascii_case(builtin))
+                        .count(),
+                    1,
+                    "{label}: expected exactly one {builtin} in {list:?}"
+                );
+            }
+            for custom in *customs {
+                assert!(
+                    list.iter().any(|e| e == custom),
+                    "{label}: dropped custom entry {custom} from {list:?}"
+                );
+            }
+            assert_eq!(
+                list.len(),
+                BUILTIN_DENY_LIST_ENTRIES.len() + customs.len(),
+                "{label}: unexpected deny list {list:?}"
             );
         }
     }
@@ -113,55 +190,10 @@ mod tests {
         let c = open_in_memory().unwrap();
         let mut s = Settings::default();
         s.capture_enabled = false;
+        s.autostart = true;
         s.hotkey = Some("Cmd+Shift+V".into());
         save(&c, &s).unwrap();
         assert_eq!(load(&c).unwrap(), s);
-    }
-
-    #[test]
-    fn load_upgrades_existing_persisted_deny_list_with_windows_password_managers() {
-        let c = open_in_memory().unwrap();
-        c.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2)",
-            params![
-                KEY,
-                r#"{"capture_enabled":true,"deny_list":["com.1password.1password","com.bitwarden.desktop","CustomApp.exe"],"autostart":true,"hotkey":"Ctrl+Shift+V"}"#
-            ],
-        )
-        .unwrap();
-
-        let s = load(&c).unwrap();
-
-        assert_eq!(s.capture_enabled, true);
-        assert_eq!(s.autostart, true);
-        assert_eq!(s.hotkey, Some("Ctrl+Shift+V".into()));
-        assert!(s.deny_list.contains(&"CustomApp.exe".into()));
-        assert!(s.deny_list.contains(&"1Password.exe".into()));
-        assert!(s.deny_list.contains(&"Bitwarden.exe".into()));
-    }
-
-    #[test]
-    fn save_persists_normalized_deny_list_and_preserves_custom_entries() {
-        let c = open_in_memory().unwrap();
-        let s = Settings {
-            capture_enabled: false,
-            deny_list: vec!["CustomApp.exe".into()],
-            autostart: true,
-            hotkey: Some("Ctrl+Shift+V".into()),
-            last_active_user_id: None,
-        };
-
-        save(&c, &s).unwrap();
-
-        let loaded = load(&c).unwrap();
-        assert_eq!(loaded.capture_enabled, false);
-        assert_eq!(loaded.autostart, true);
-        assert_eq!(loaded.hotkey, Some("Ctrl+Shift+V".into()));
-        assert!(loaded.deny_list.contains(&"CustomApp.exe".into()));
-        assert!(loaded.deny_list.contains(&"com.1password.1password".into()));
-        assert!(loaded.deny_list.contains(&"com.bitwarden.desktop".into()));
-        assert!(loaded.deny_list.contains(&"1Password.exe".into()));
-        assert!(loaded.deny_list.contains(&"Bitwarden.exe".into()));
     }
 
     #[test]
@@ -177,42 +209,14 @@ mod tests {
     #[test]
     fn load_returns_none_for_last_active_user_id_when_field_missing() {
         let c = open_in_memory().unwrap();
-        let legacy = r#"{"capture_enabled":true,"deny_list":[],"autostart":false,"hotkey":null}"#;
-        c.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2)",
-            params![KEY, legacy],
-        ).unwrap();
+        store(
+            &c,
+            r#"{"capture_enabled":true,"deny_list":[],"autostart":false,"hotkey":null}"#,
+        );
         let s = load(&c).unwrap();
         assert!(s.last_active_user_id.is_none());
-    }
-
-    #[test]
-    fn load_does_not_add_case_insensitive_duplicate_deny_list_entries() {
-        let c = open_in_memory().unwrap();
-        c.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2)",
-            params![
-                KEY,
-                r#"{"capture_enabled":true,"deny_list":["com.1password.1password","com.bitwarden.desktop","1password.exe","bitwarden.exe"],"autostart":false,"hotkey":null}"#
-            ],
-        )
-        .unwrap();
-
-        let s = load(&c).unwrap();
-
-        assert_eq!(
-            s.deny_list
-                .iter()
-                .filter(|entry| entry.eq_ignore_ascii_case("1Password.exe"))
-                .count(),
-            1
-        );
-        assert_eq!(
-            s.deny_list
-                .iter()
-                .filter(|entry| entry.eq_ignore_ascii_case("Bitwarden.exe"))
-                .count(),
-            1
-        );
+        // A persisted null hotkey means the user cleared it; the default must not
+        // silently rebind it.
+        assert!(s.hotkey.is_none());
     }
 }

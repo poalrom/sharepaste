@@ -1,13 +1,9 @@
+use std::io::Write;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const SERVER_URL: &str = "http://127.0.0.1:8443";
-// Path inside the `sharepaste` Docker container; the host bind-mounts
-// ./db/db.sqlite to this path. The CLI must run *inside* the container so
-// it shares better-sqlite3's WAL state with the running server — running
-// from the host raced and produced FK / "invite not found" errors.
-const SERVER_DB_IN_CONTAINER: &str = "/var/lib/sharepaste/db.sqlite";
+const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:8443";
 const SERVER_CONTAINER: &str = "sharepaste";
 
 static NONCE: AtomicU64 = AtomicU64::new(0);
@@ -16,17 +12,23 @@ pub struct TestServer {
     pub url: String,
 }
 
-pub fn start() -> TestServer {
-    // Verify the running server reachable; do not spawn — user manages it.
+/// Returns `None` — after printing a skip notice — when no server answers
+/// `/healthz`. These tests need a live stack, so a missing one is a skip, not
+/// a failure: plain `cargo test` must stay green on a clean machine.
+pub fn start() -> Option<TestServer> {
+    let url = std::env::var("SHAREPASTE_TEST_SERVER")
+        .unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
+
     // Run the health check on a dedicated thread so we don't construct a
     // tokio runtime inside the outer #[tokio::test] async context.
-    let handle = std::thread::spawn(|| -> Result<(), String> {
+    let probe_url = url.clone();
+    let handle = std::thread::spawn(move || -> Result<(), String> {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(3))
             .build()
             .map_err(|e| e.to_string())?;
         let resp = client
-            .get(format!("{SERVER_URL}/healthz"))
+            .get(format!("{probe_url}/healthz"))
             .send()
             .map_err(|e| e.to_string())?;
         if !resp.status().is_success() {
@@ -34,12 +36,23 @@ pub fn start() -> TestServer {
         }
         Ok(())
     });
-    handle
-        .join()
-        .expect("healthz thread panicked")
-        .expect("server not reachable at 127.0.0.1:8443; start sharepaste serve first");
-    TestServer {
-        url: SERVER_URL.into(),
+
+    match handle.join().expect("healthz thread panicked") {
+        Ok(()) => Some(TestServer { url }),
+        Err(why) => {
+            // Written straight to the process stderr rather than via
+            // `eprintln!`, which libtest captures and then discards for a
+            // passing test — the notice would never reach the contributor it
+            // exists to inform.
+            let _ = std::io::stderr().write_all(
+                format!(
+                    "SKIP: no server at {url} ({why}); \
+                     set SHAREPASTE_TEST_SERVER or run docker compose up -d\n"
+                )
+                .as_bytes(),
+            );
+            None
+        }
     }
 }
 
@@ -54,15 +67,26 @@ fn unique_username(prefix: &str) -> String {
 
 pub fn create_invite(_server: &TestServer, prefix: &str) -> (String, String) {
     let username = unique_username(prefix);
-    let out = Command::new("docker")
-        .arg("exec")
-        .arg(SERVER_CONTAINER)
-        .arg("node")
-        .arg("/app/dist/src/index.js")
-        .arg("user")
-        .arg("create")
-        .arg("--db")
-        .arg(SERVER_DB_IN_CONTAINER)
+    // The CLI must run *inside* the container so it shares better-sqlite3's
+    // WAL state with the running server — running from the host raced and
+    // produced FK / "invite not found" errors. `--db` is left off so the CLI
+    // resolves the path exactly as the server does (the container's `DB_PATH`,
+    // else the server's own default); the two must agree or the invite lands
+    // in a database the server never reads. `SHAREPASTE_TEST_DB` overrides it
+    // for a non-standard mount.
+    let mut cmd = Command::new("docker");
+    cmd.args([
+        "exec",
+        SERVER_CONTAINER,
+        "node",
+        "/app/dist/src/index.js",
+        "user",
+        "create",
+    ]);
+    if let Ok(db) = std::env::var("SHAREPASTE_TEST_DB") {
+        cmd.arg("--db").arg(db);
+    }
+    let out = cmd
         .arg(&username)
         .output()
         .expect("spawn docker exec sharepaste user create");

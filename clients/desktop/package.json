@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
-    "test:packaging": "node scripts/verify-release-packaging.mjs",
     "tauri": "tauri"
   },
   "devDependencies": {

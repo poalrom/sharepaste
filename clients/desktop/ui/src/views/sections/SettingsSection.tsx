@@ -1,14 +1,42 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Settings } from "../../types";
 import { cmd } from "../../ipc/commands";
+import { useAccountsStore } from "../../store";
 
 export default function SettingsSection() {
+  const activeUserId = useAccountsStore((s) => s.active);
+  const hydrateAccounts = useAccountsStore((s) => s.hydrate);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [error, setError] = useState<string>();
+  const [hotkeyDraft, setHotkeyDraft] = useState("");
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  const committedHotkey = useRef<string | null>(null);
 
   useEffect(() => {
-    cmd.getSettings().then(setSettings).catch((e) => setError(String(e)));
+    let cancelled = false;
+    cmd.getSettings().then((s) => {
+      if (cancelled) return;
+      setSettings(s);
+      setHotkeyDraft(s.hotkey ?? "");
+      committedHotkey.current = s.hotkey ?? null;
+    }).catch((e) => {
+      if (!cancelled) setError(String(e));
+    });
+    return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (activeUserId) return;
+    let cancelled = false;
+    cmd.listAccounts()
+      .then((accs) => {
+        if (!cancelled && !useAccountsStore.getState().active) hydrateAccounts(accs);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => { cancelled = true; };
+  }, [activeUserId, hydrateAccounts]);
 
   if (!settings) return <div className="p-6 text-sm">Loading…</div>;
 
@@ -16,6 +44,25 @@ export default function SettingsSection() {
     try {
       const next = await cmd.updateSettings(patch);
       setSettings(next);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  // The hotkey is only persisted on blur or Enter: every update_settings re-registers
+  // the global shortcut, so committing per keystroke would leave it unbound while typing.
+  const commitHotkey = () => {
+    const hotkey = hotkeyDraft || null;
+    if (hotkey === committedHotkey.current) return;
+    committedHotkey.current = hotkey;
+    update({ hotkey });
+  };
+
+  const clearHistory = async () => {
+    if (!activeUserId) return;
+    try {
+      await cmd.clearHistory({ user_id: activeUserId });
+      setConfirmingClear(false);
     } catch (e) {
       setError(String(e));
     }
@@ -58,9 +105,61 @@ export default function SettingsSection() {
       <input
         data-testid="hotkey"
         className="rounded bg-zinc-800 px-2 py-1 font-mono text-xs"
-        value={settings.hotkey ?? ""}
-        onChange={(e) => update({ hotkey: e.target.value || null })}
+        value={hotkeyDraft}
+        onChange={(e) => setHotkeyDraft(e.target.value)}
+        onBlur={commitHotkey}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commitHotkey();
+          }
+        }}
       />
+
+      <div className="rounded border border-zinc-700">
+        <div className="flex items-center justify-between p-3">
+          <div>
+            <div className="font-semibold">Clear history</div>
+            <div className="text-xs text-zinc-400">
+              Deletes every stored entry on the server and on all of your devices.
+            </div>
+          </div>
+          <button
+            data-testid="clear-history"
+            disabled={!activeUserId}
+            className="rounded border border-zinc-700 px-2 py-1 text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+            onClick={() => setConfirmingClear(true)}
+          >
+            Clear…
+          </button>
+        </div>
+        {confirmingClear && (
+          <div
+            data-testid="confirm-strip-clear-history"
+            className="border-t border-zinc-700 bg-zinc-900/40 p-3 flex items-center justify-between gap-3"
+          >
+            <div className="text-xs text-zinc-300">
+              Erase all clipboard history for every device on this account?
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                data-testid="cancel-clear-history"
+                className="rounded border border-zinc-700 px-2 py-1 text-zinc-200 hover:bg-zinc-800"
+                onClick={() => setConfirmingClear(false)}
+              >
+                Cancel
+              </button>
+              <button
+                data-testid="confirm-clear-history"
+                className="rounded bg-red-600 px-2 py-1 text-white hover:bg-red-500"
+                onClick={clearHistory}
+              >
+                Clear history
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {error && <div className="text-xs text-red-400">{error}</div>}
     </div>

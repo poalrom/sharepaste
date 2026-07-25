@@ -15,7 +15,8 @@
       "iconPath": "icons/tray-template.png",
       "iconAsTemplate": true,
       "id": "main"
-    }
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,

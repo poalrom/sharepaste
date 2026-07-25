@@ -23,6 +23,9 @@ pub struct AppState {
     pub upload_triggers: Mutex<HashMap<String, Arc<Notify>>>,
     pub conn_states: Mutex<HashMap<String, ConnectionState>>,
     pub last_self_write: Mutex<Option<(std::time::Instant, String)>>,
+    /// Plaintext of the last clipboard capture that was enqueued, used to drop
+    /// consecutive duplicates before they cost an encrypt, upload or server row.
+    pub last_capture: Mutex<Option<String>>,
     pub last_tray_rect: Mutex<Option<tauri::Rect>>,
 }
 
@@ -42,6 +45,7 @@ impl AppState {
             upload_triggers: Mutex::new(HashMap::new()),
             conn_states: Mutex::new(HashMap::new()),
             last_self_write: Mutex::new(None),
+            last_capture: Mutex::new(None),
             last_tray_rect: Mutex::new(None),
         }
     }

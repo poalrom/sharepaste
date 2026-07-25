@@ -56,9 +56,8 @@ npm run build
 macOS output: `src-tauri/target/release/bundle/macos/sharepaste.app`
 and a `.dmg` alongside.
 
-Windows output depends on the selected Tauri bundle target. For the first
-Windows pass, `cargo check` and `npm.cmd run tauri dev` are the supported
-compile/launch checks.
+Windows output: a standalone NSIS installer `.exe`.
+For local development, `npm.cmd run tauri dev` and `cargo check --manifest-path src-tauri/Cargo.toml` suffice for iteration.
 
 ## Install (unsigned)
 
@@ -92,7 +91,11 @@ open /Applications/sharepaste.app
 4. Revoke instance A from the server CLI; instance A's tray flips red and the
    popover shows the **Re-pair this device** banner.
 5. Toggle **Capture clipboard changes** off; copying does nothing. Toggle on,
-   copy a 1Password password (concealed flag), confirm a `capture-skipped`
-   toast and that nothing reaches the server.
+   copy a 1Password password (concealed flag), and verify that nothing reaches the server.
 6. Force-quit during an offline-pending burst, restart; verify the pending
    queue flushes once connectivity returns.
+
+## Build tools
+
+The root `Makefile` provides macOS-only convenience targets. On Windows or Linux, use npm directly:
+`npm --prefix clients/desktop run build` or other scripts from `clients/desktop/package.json`.
