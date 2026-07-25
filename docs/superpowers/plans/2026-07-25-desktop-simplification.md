@@ -1,6 +1,8 @@
 # Desktop Client Simplification & Test Consolidation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+
+> **STATUS: EXECUTED 2026-07-25** on branch `desktop-simplification`, six commits. All 40 tasks across Phases 1-6 and T1-T4 are complete and verified. Two defects that only became visible *after* Task 4.1 re-enabled the `dead_code` lint were fixed on top of the plan and are recorded in the Execution Record at the end of this document.
 
 **Goal:** Fix the ACL regression that leaves the main window unable to receive events, close three gaps against the intended clipboard→popover→main-window flow, delete the dead command/event surface those bugs hid, get the desktop suite running in CI, and cut 133 defined tests to ~108 without losing a covered contract.
 
@@ -199,23 +201,23 @@ The fix belongs in `capture/filter.rs`, **not** the UI: collapsing in the store 
 
 The window works; it receives nothing. One line fixes it, and one test keeps it fixed.
 
-- [ ] **Task 1.1: Cover the `main` window (S1).**
+- [x] **Task 1.1: Cover the `main` window (S1).**
   `capabilities/default.json`: change `"windows"` to `["main", "popover"]`. Delete `"modal-*"`.
   Acceptance: open the tray menu → **Pair device… → I want to pair another device**, claim the code from a second instance, and confirm the window advances to the "paired" state. Before the fix it sits on the code screen forever, with `Command plugin:event|listen not allowed by ACL` in the webview console. Second check: with the window already open, tray → **Settings…** switches the tab.
 
-- [ ] **Task 1.2: Add a regression guard that does not mock the ACL (S1).**
+- [x] **Task 1.2: Add a regression guard that does not mock the ACL (S1).**
   New Rust test in `lib.rs` (or a small `capabilities.rs`): parse `capabilities/default.json` at test time via `include_str!`, and assert the `windows` array covers every label the app builds. Keep a single `const WINDOW_LABELS: [&str; 2] = ["main", "popover"]` used by both `build_popover_window`/`open_main_window_impl` and the test, so adding a window without a capability fails the build.
   Acceptance: the test fails if `"main"` is removed from the capability file.
 
-- [ ] **Task 1.3: Run the desktop suite in CI (S2).**
+- [x] **Task 1.3: Run the desktop suite in CI (S2).**
   `.github/workflows/desktop-build.yml`: add a `test` job (macOS + Windows matrix) running `cargo test --lib --manifest-path clients/desktop/src-tauri/Cargo.toml` and `npm --prefix clients/desktop/ui ci && npm --prefix clients/desktop/ui test`. Make `build` depend on it.
   Acceptance: both matrix legs pass; a deliberately broken assertion fails the workflow.
 
-- [ ] **Task 1.4: Stop `cargo test` failing on a clean machine (S2).**
+- [x] **Task 1.4: Stop `cargo test` failing on a clean machine (S2).**
   `tests/common/mod.rs`: `start()` returns `Option<TestServer>`; on an unreachable health check, print a skip notice and return `None` instead of `expect`-panicking (`:40`). Each integration test returns early on `None`. Read the server URL from `SHAREPASTE_TEST_SERVER` with the current value as default.
   Acceptance: `cargo test` (all targets, no server running) is green and reports the three tests as skipped.
 
-- [ ] **Task 1.5: Add an opt-in CI job for the live-server tests (S2).**
+- [x] **Task 1.5: Add an opt-in CI job for the live-server tests (S2).**
   Separate job: `docker compose up -d --build`, wait for `/healthz`, then `cargo test --test flow1_invite --test flow2_pairing`. Gate on `workflow_dispatch` plus pushes touching `clients/desktop/src-tauri/src/core/http/**` or `core/pairing/**`.
   Acceptance: the job passes with the compose stack up.
 
@@ -225,45 +227,45 @@ Behaviour fixes only. Every item here is a feature that is present in the code b
 
 **Auto-capture (surface 1)**
 
-- [ ] **Task 2.1: Make "Launch at login" actually work (S13a).**
+- [x] **Task 2.1: Make "Launch at login" actually work (S13a).**
   `update_settings` must call the autostart plugin, not just persist the boolean: on `autostart` change, `app.autolaunch().enable()` / `.disable()` via `tauri_plugin_autostart::ManagerExt`. Reconcile at startup too, so the OS state matches the stored setting after a reinstall.
   Acceptance: tick the box, then inspect the OS autostart entry — Registry `Run` key on Windows, `LaunchAgents` plist on macOS. Untick, confirm it is removed. The existing `settings.rs` round-trip tests do **not** cover this; they only prove the boolean persists, which is exactly how this shipped broken.
 
-- [ ] **Task 2.2: Drop consecutive duplicate captures (S14a).**
+- [x] **Task 2.2: Drop consecutive duplicate captures (S14a).**
   `capture/filter.rs`: extend `CaptureContext` with the previously captured plaintext and return a new `SkipReason::Duplicate` when the incoming text matches. Store it beside `last_self_write` in `AppState` (`state.rs:25`) and set it in `spawn_clipboard_capture` after a successful enqueue (`lib.rs:842-858`). It must run *before* encrypt+enqueue so a repeat costs no server row, no cache slot, and no upload.
   Decide and document one rule: drop the repeat (recommended, simplest) or bump the existing entry to the top. Do not implement both.
   Acceptance: new cases in the Task T3 table-driven test — same text twice in a row yields `Capture` then `Skip(Duplicate)`; the same text with a different capture in between yields `Capture` twice.
 
 **Popover (surface 2)**
 
-- [ ] **Task 2.3: Ship a default hotkey (S13b).**
+- [x] **Task 2.3: Ship a default hotkey (S13b).**
   `Settings::default()` (`settings.rs:21`) → `hotkey: Some("CmdOrCtrl+Shift+V".into())`. Check it against OS-reserved combinations on both platforms; `apply_hotkey` already tolerates an unregistrable value by logging and continuing (`lib.rs:878-880`), and clearing the field still unbinds.
   Acceptance: fresh profile (`SHAREPASTE_DATA_DIR=/tmp/sp-fresh`), press the hotkey, popover appears — without visiting Settings first.
 
-- [ ] **Task 2.4: Keep the keyboard selection visible (S14b).**
+- [x] **Task 2.4: Keep the keyboard selection visible (S14b).**
   `HistoryList.tsx`: give the selected `EntryRow` a ref and call `scrollIntoView({ block: "nearest" })` from an effect keyed on `selectedIndex`.
   Acceptance: with >20 entries, holding ArrowDown keeps the highlighted row on screen to the last entry.
 
-- [ ] **Task 2.5: Disambiguate Enter (S14c).**
+- [x] **Task 2.5: Disambiguate Enter (S14c).**
   `HistoryList.tsx:20-42`: ignore keydown events whose `e.target` is a `button`, or scope the listener to the list container instead of `window`.
   Acceptance: focus the footer **Accounts** button, press Enter — the main window opens and no entry is copied.
 
-- [ ] **Task 2.6: Give entries a delete affordance (S3).**
+- [x] **Task 2.6: Give entries a delete affordance (S3).**
   `delete_entry` is a complete, tested backend feature with no UI — `EntryRow.tsx:20-22` renders a bare `<div>` and nothing else. Add a per-row delete control; the wrapper already exists (`commands.ts:20`).
   This is a privacy requirement, not tidiness: a live popover shows a Shadowsocks URL with embedded credentials and there is no way to remove a single entry short of purging everything from the server CLI.
   Acceptance: deleting a row removes it from the popover and the server.
 
-- [ ] **Task 2.7: Fix the two silent event bugs (S4).**
+- [x] **Task 2.7: Fix the two silent event bugs (S4).**
   Subscribe `onHistoryChanged` in `Popover.tsx` (re-run `cmd.listHistory` for the active user) and surface `onDecryptionError` somewhere visible. The events are already emitted; only the listeners are missing.
   Acceptance: `clear_history` empties the popover list without reopening it.
 
 **Main window (surface 3)**
 
-- [ ] **Task 2.8: Add "Clear history" to Settings (S3).**
+- [x] **Task 2.8: Add "Clear history" to Settings (S3).**
   `clear_history` has no affordance either; `SettingsSection.tsx` is its home. Wrapper exists (`commands.ts:21`). Confirm destructively (it deletes server-side for every device).
   Acceptance: the action empties both the popover and the server. Combined with Task 2.6, no command remains registered without a UI caller.
 
-- [ ] **Task 2.9: Stop the hotkey field thrashing the global shortcut (S13c).**
+- [x] **Task 2.9: Stop the hotkey field thrashing the global shortcut (S13c).**
   `SettingsSection.tsx:58-63`: move `update({ hotkey })` from `onChange` to `onBlur` plus Enter, holding the in-progress string in local state.
   Acceptance: typing a full accelerator produces exactly one `update_settings` call.
 
@@ -271,66 +273,66 @@ Behaviour fixes only. Every item here is a feature that is present in the code b
 
 Run this *after* Phase 2, so the delete/wire decisions are already settled.
 
-- [ ] **Task 3.1: Delete the redundant status path (S3).**
+- [x] **Task 3.1: Delete the redundant status path (S3).**
   Remove `get_status` (`commands.rs:583-602`), `StatusResp` (`commands.rs:576-581`), the `generate_handler!` entry (`lib.rs:68`), and `cmd.getStatus` (`commands.ts:24-25`). `list_accounts` already carries `status` and `pending`.
 
-- [ ] **Task 3.2: Delete the unused window wrapper (S3).**
+- [x] **Task 3.2: Delete the unused window wrapper (S3).**
   Remove `cmd.openMainWindow` (`commands.ts:26-27`). `openSection` stays and keeps inlining both invokes.
 
-- [ ] **Task 3.3: Delete `revoke_device` and `search_history` (S3).**
+- [x] **Task 3.3: Delete `revoke_device` and `search_history` (S3).**
   `search_history` duplicates client-side filtering that already works over the 100-row cache (`HistoryList.tsx:13-16`); server-side search only matters past that cap. Delete both commands, both wrappers, and the `revoke_device` command layer. Drop `entries_cache::search` and its test with it.
   Note `revoke_device` is exercised by `tests/auth_revoke.rs` against `ServerClient` directly, not through the command — the HTTP method stays either way.
 
-- [ ] **Task 3.4: Delete `get_entry_full` (S3).**
+- [x] **Task 3.4: Delete `get_entry_full` (S3).**
   The only command with no TS side at all. `copy_to_clipboard` already covers "user wants the plaintext" without handing it to the webview, which is the safer design. Remove `get_entry_full` (`commands.rs:435-443`) and its handler entry (`lib.rs:62`); keep `entries_cache::get_full`, which `copy_to_clipboard` uses (`commands.rs:475`).
 
-- [ ] **Task 3.5: Delete `capture-skipped` (S4).**
+- [x] **Task 3.5: Delete `capture-skipped` (S4).**
   Remove `CAPTURE_SKIPPED` (`events.rs:11`), `CaptureSkipped` (`events.rs:53-54`), `onCaptureSkipped` (`events.ts:13`), and the `README.md:95` smoke step promising the toast.
   Note Task 2.2 adds a *new* skip reason; if a skip toast is genuinely wanted, spec it then — do not keep an unemitted constant lying next to a `tracing::debug!` in the meantime.
 
 ### Phase 4 — Let the compiler find dead code (do this after Phase 3, not before)
 
-- [ ] **Task 4.1: Narrow the public surface (S10).**
+- [x] **Task 4.1: Narrow the public surface (S10).**
   Keep `pub` only on what `src-tauri/tests/*` imports: `core::crypto::{encrypt, decrypt, random_user_key}`, `core::http::ServerClient`, `core::pairing::qr::{base64_encode, base64_decode}`, `errors::AppError`. Everything else → `pub(crate)`. Keep `pub` on `#[tauri::command]` functions and `launch`.
   Acceptance: `cargo check --all-targets` still clean; then deliberately orphan a function and confirm rustc now reports `never used`. Record any genuine dead code the lint surfaces and delete it.
 
-- [ ] **Task 4.2: Gate `InMemoryKeychain` to tests (S8).**
+- [x] **Task 4.2: Gate `InMemoryKeychain` to tests (S8).**
   `#[cfg(test)]` on the struct and its `impl` (`keychain.rs:45-62`). If `tests/*` needs it, use `#[cfg(any(test, feature = "test-support"))]` with a dev-only feature rather than shipping it.
 
 ### Phase 5 — Break up the two oversized modules
 
 Pure moves. No behaviour change; the tests that exist must pass untouched.
 
-- [ ] **Task 5.1: Extract popover geometry (S6).**
+- [x] **Task 5.1: Extract popover geometry (S6).**
   New `src-tauri/src/popover.rs` taking `lib.rs:143-411` — the constants, `build_popover_window`, `toggle_popover*`, positioning, monitor helpers — plus the three geometry tests (`lib.rs:964-1003`).
   Simultaneously drop `PopoverPlacement` and `select_popover_tray_rect`: give `toggle_popover(app, tray_rect: Option<Rect>, use_cached: bool)` the one behavioural bit the enum carried, and pass `false` at the Windows hotkey call site (`lib.rs:899`). Delete `fallback_placement_ignores_cached_tray_rect` (`lib.rs:988-1002`) with the function it was written for.
   Acceptance: `positions_popover_above_bottom_tray_and_inside_work_area` and `falls_back_to_bottom_right_when_taskbar_reduces_bottom_work_area` pass unchanged.
 
-- [ ] **Task 5.2: Move `spawn_sync` into `core/sync/` (S5).**
+- [x] **Task 5.2: Move `spawn_sync` into `core/sync/` (S5).**
   New `core/sync/session.rs`. Split the 258-line body into: `run_session` (slot registration + membership + task spawn), `run_sse_loop` (`lib.rs:557-714`), and `run_uploader` (`lib.rs:716-767`). Hoist `struct ServerUpload` + its `UploadTransport` impl (`lib.rs:725-731`) to module scope — a trait impl does not belong inside a closure.
   `lib.rs` keeps only `set_conn_state` and `spawn_sync_for_existing_accounts`, or those move too.
   Acceptance: `cargo test --lib` unchanged; manual smoke — pair, copy text, confirm it syncs and the pending count drops.
 
-- [ ] **Task 5.3: Clean up `qr.rs` (S7).**
+- [x] **Task 5.3: Clean up `qr.rs` (S7).**
   Delete `mod sha2_local` (`:11-22`) and `hex_lower_static` (`:110-117`); use `sha2::{Digest, Sha256}` directly and `data_encoding::HEXLOWER` for both hex sites. Rename the file to `core/pairing/payload.rs` and update `core/pairing/mod.rs` plus the three `tests/*.rs` imports.
   Acceptance: `cargo test --lib` green; `flow2_pairing` still passes against a live server.
 
-- [ ] **Task 5.4: Collapse the duplicate entry DTO (S9).**
+- [x] **Task 5.4: Collapse the duplicate entry DTO (S9).**
   Delete `commands::EntryViewDto` (`commands.rs:33-40`); have `list_history`/`search_history` return `events::EntryView`. Both already serialize identically, so `ui/src/types.ts` is untouched.
 
 ### Phase 6 — Build and docs
 
-- [ ] **Task 6.1: Delete `verify-release-packaging.mjs` (S11).**
+- [x] **Task 6.1: Delete `verify-release-packaging.mjs` (S11).**
   Remove the script and the `test:packaging` entry (`package.json:9`). The Windows-subsystem attribute it checks is better protected by the CI build actually producing an `.exe`; the favicon checks protect nothing.
 
-- [ ] **Task 6.2: Fold `tauri.macos.conf.json` into the main config (S12).**
+- [x] **Task 6.2: Fold `tauri.macos.conf.json` into the main config (S12).**
   Move `macOSPrivateApi: true` into `tauri.conf.json`'s `app` block, delete the file, and drop `--config src-tauri/tauri.macos.conf.json` from the macOS matrix arg (`desktop-build.yml:27`).
   Acceptance: macOS CI leg still builds `app,dmg`.
 
-- [ ] **Task 6.3: Correct the README (S12, S4).**
+- [x] **Task 6.3: Correct the README (S12, S4).**
   Fix `README.md:59-61` to state what CI actually produces (NSIS installer on Windows). Delete the `capture-skipped` toast step (`:95`). Add one line noting the `Makefile` is a macOS convenience wrapper and that Windows/Linux use `npm run` directly.
 
-- [ ] **Task 6.4: Document the Makefile's platform scope (S12).**
+- [x] **Task 6.4: Document the Makefile's platform scope (S12).**
   One comment at the top of the `Makefile` stating macOS-only and pointing Windows users at `npm --prefix clients/desktop run build`. No new targets.
 
 ---
@@ -345,8 +347,8 @@ The headline problem is not count, it is S1: 41 green UI tests while the window 
 
 `injectForTests` + `vi.fn()` scaffolding is rebuilt in six files (`AccountsSection.test.tsx:8-41`, `Main.test.tsx:8-19`, `PairingSection.test.tsx:10-23`, `Popover.test.tsx:10-41` plus per-test re-injection at `:66-67,85-86`, `SettingsSection.test.tsx:6-22`, `openSection.test.ts:6-13`). `Popover.test.tsx` spends ~60 lines on mock setup for ~38 lines of assertion.
 
-- [ ] Add `ui/src/__tests__/helpers.ts` exporting `mockIpc({ invoke?, listen? })` that installs the mocks, returns the spies, and registers `afterEach` cleanup. Replace all six ad-hoc blocks.
-- [ ] Remove the per-test re-injection in `Popover.test.tsx:66-67,85-86` — the shared `beforeEach` covers it.
+- [x] Add `ui/src/__tests__/helpers.ts` exporting `mockIpc({ invoke?, listen? })` that installs the mocks, returns the spies, and registers `afterEach` cleanup. Replace all six ad-hoc blocks.
+- [x] Remove the per-test re-injection in `Popover.test.tsx:66-67,85-86` — the shared `beforeEach` covers it.
 
 ### Task T2: Delete duplicated and tautological tests
 
@@ -366,19 +368,19 @@ Keep, against the initial audit's recommendation:
 
 ### Task T3: Consolidate over-granular tests
 
-- [ ] **`capture/filter.rs` 9 → 2.** `filter.rs:74-160` walks one decision tree with nine near-identical bodies. Replace with a table-driven test: one `cases: &[(CaptureContext, SniffResult, FilterDecision)]` array covering all nine, plus one focused test for the self-write time window (the only case with non-trivial timing). Same coverage, ~60 fewer lines.
-- [ ] **`storage/settings.rs` 8 → 5.** Three tests cover deny-list defaulting (`load_returns_default_when_unset`, deny-list defaults, `load_upgrades_existing_persisted_deny_list_with_windows_password_managers`). Collapse to one parameterized test over (stored value → expected list). Keep round-trip, `last_active_user_id` round-trip, missing-field, and case-insensitive dedup as-is.
-- [ ] **`Main.test.tsx` 6 → 4.** Merge the two URL-routing tests (valid section, fallback) into one parameterized case. Keep tab click, no-pairing-tab, and the navigate-event test.
-- [ ] **`AccountsSection.test.tsx` 7 → 5.** Drop the two tests that re-assert store hydrate/remove already owned by `store.test.ts:*`; keep badge rendering, the confirm strip, and the two invoke assertions (`set_active_account`, `forget_account`) which are the component's actual contract.
-- [ ] **`PairingSection.test.tsx` 11 → 6.** This is the largest UI file (182 lines) and its state machine (`chooser → invite → code → show-code → paired`) is genuinely the component's job — keep that. Drop the cases whose only assertion is that a mocked invoke resolved with the value the mock was configured to return. Keep: chooser rendering, show-code-disabled-without-account, code validation, shortcode display on `pair-shortcode`, `paired` on `pair-claimed`, and error rendering.
-- [ ] **`Popover.test.tsx` 3 → 2.** Merge the two navigate-on-empty-state cases (choose-account, empty-pair) — same assertion, different button.
+- [x] **`capture/filter.rs` 9 → 2.** `filter.rs:74-160` walks one decision tree with nine near-identical bodies. Replace with a table-driven test: one `cases: &[(CaptureContext, SniffResult, FilterDecision)]` array covering all nine, plus one focused test for the self-write time window (the only case with non-trivial timing). Same coverage, ~60 fewer lines.
+- [x] **`storage/settings.rs` 8 → 5.** Three tests cover deny-list defaulting (`load_returns_default_when_unset`, deny-list defaults, `load_upgrades_existing_persisted_deny_list_with_windows_password_managers`). Collapse to one parameterized test over (stored value → expected list). Keep round-trip, `last_active_user_id` round-trip, missing-field, and case-insensitive dedup as-is.
+- [x] **`Main.test.tsx` 6 → 4.** Merge the two URL-routing tests (valid section, fallback) into one parameterized case. Keep tab click, no-pairing-tab, and the navigate-event test.
+- [x] **`AccountsSection.test.tsx` 7 → 5.** Drop the two tests that re-assert store hydrate/remove already owned by `store.test.ts:*`; keep badge rendering, the confirm strip, and the two invoke assertions (`set_active_account`, `forget_account`) which are the component's actual contract.
+- [x] **`PairingSection.test.tsx` 11 → 6.** This is the largest UI file (182 lines) and its state machine (`chooser → invite → code → show-code → paired`) is genuinely the component's job — keep that. Drop the cases whose only assertion is that a mocked invoke resolved with the value the mock was configured to return. Keep: chooser rendering, show-code-disabled-without-account, code validation, shortcode display on `pair-shortcode`, `paired` on `pair-claimed`, and error rendering.
+- [x] **`Popover.test.tsx` 3 → 2.** Merge the two navigate-on-empty-state cases (choose-account, empty-pair) — same assertion, different button.
 
 ### Task T4: Retire the un-runnable integration duplication
 
 After Task 1.4 makes them skip cleanly:
 
-- [ ] **Delete `tests/auth_revoke.rs`.** Its contract — a revoked device token 401s on subsequent calls — is owned server-side by `server/tests/integration/auth.test.ts` and `devices.test.ts`, which run in `server-ci.yml` against real Fastify and real SQLite. The client adds nothing: `AppError::Auth` mapping from a 401 is already unit-tested at `core/http/client.rs` (`map_status`).
-- [ ] **Keep `flow1_invite.rs` and `flow2_pairing.rs`.** These exercise client-side crypto against a real server — the invite round trip and the pairing-payload encrypt/decrypt — which no server test covers. Both run in the Task 1.5 job.
+- [x] **Delete `tests/auth_revoke.rs`.** Its contract — a revoked device token 401s on subsequent calls — is owned server-side by `server/tests/integration/auth.test.ts` and `devices.test.ts`, which run in `server-ci.yml` against real Fastify and real SQLite. The client adds nothing: `AppError::Auth` mapping from a 401 is already unit-tested at `core/http/client.rs` (`map_status`).
+- [x] **Keep `flow1_invite.rs` and `flow2_pairing.rs`.** These exercise client-side crypto against a real server — the invite round trip and the pairing-payload encrypt/decrypt — which no server test covers. Both run in the Task 1.5 job.
 
 ### Resulting suite
 
@@ -436,3 +438,58 @@ Phase 1 additionally requires a manual check, because the whole finding is that 
 Phase 2 requires checking the two settings that were silently inert: tick **Launch at login** and confirm the OS autostart entry appears (Registry `Run` key on Windows, `LaunchAgents` plist on macOS); then on a fresh profile confirm the default hotkey opens the popover before Settings is ever visited.
 
 Phase 5 is a pure refactor: `cargo test --lib` must pass with the moved tests unmodified, plus one end-to-end smoke — pair, copy text in another app, confirm the entry appears in the popover and the pending count returns to zero.
+
+---
+
+## Execution Record — 2026-07-25
+
+Branch `desktop-simplification`, six implementation commits, executed by five waves of subagents.
+
+| Commit | Covers |
+|---|---|
+| `23aabc2` | Tasks 1.1, 1.2 — the ACL fix and its guard |
+| `e34f273` | Tasks 1.3–1.5, 2.1–2.9, 6.1–6.4, T3 (Rust), T4 |
+| `d3f5720` | Tasks 3.1–3.5, 4.2, 5.3, T1, T2, T3 (UI) |
+| `356d20e` | Tasks 5.1, 5.4 |
+| `fb974dd` | Task 5.2 |
+| `c7ecbed` | Two defects found by Task 4.1 (below) |
+
+### Measured outcome
+
+| | Baseline | After |
+|---|---|---|
+| `cargo test` (all targets, clean machine) | **FAILS** — integration tests panic | **passes**, integration skips with a notice |
+| `cargo check --all-targets` | 0 warnings *(lint disabled by blanket `pub`)* | 0 warnings *(lint live)* |
+| Rust `pub` items | 374 | **64** (+283 `pub(crate)`) — 82.9% narrower |
+| `lib.rs` | 1,184 lines | **538** |
+| Rust lib tests | 89 defined / 87 run / 2 never run | **81, all run** |
+| Rust integration tests | 3 defined / **0 runnable** | **2, both pass live** |
+| UI tests | 41 | **44** |
+| Desktop tests in CI | **none** | every one, macOS + Windows |
+
+Total defined tests 133 → 127, but the comparison that matters is 130/133 runnable → **127/127**. The plan projected ~108; the extra 19 are genuine new coverage the plan did not budget for — 15 UI tests for the Phase 2 features (delete affordance, scroll-into-view, Enter disambiguation, the two event subscriptions, hotkey commit-on-blur, clear-history confirm), 3 capability-guard tests instead of 1, and a wire-format golden test added to de-risk Task 5.3. No planned deletion was skipped.
+
+### Two defects found by Task 4.1, fixed in `c7ecbed`
+
+Phase 4 predicted the `dead_code` lint would surface real problems once the crate stopped declaring everything public. It surfaced six warnings; four were dead code and deleted, two were bugs:
+
+1. **Stale plaintext survived a decryption failure.** `entries_cache::mark_undecryptable` was written, unit-tested, and never called. `upsert_and_prune` COALESCEs a NULL incoming plaintext onto the stored one — right for a ciphertext-only backfill, wrong for a decryption failure, which is exactly when `decryptor::ingest` passes NULL. An entry that decrypted once and stopped kept its old plaintext, and `copy_to_clipboard` handed it back while the same ingest emitted `decryption-error` to the UI. The two disagreed. Fixed, with a test that fails without the fix.
+2. **Pending-upload eviction was silent.** `EnqueueResult.dropped_oldest` counts un-uploaded entries discarded at the `MAX_PER_USER` cap. The capture loop discarded the value, so a user copying heavily while offline lost queued entries with nothing in the log. Now logged.
+
+Both are instances of the pattern this review kept hitting: a feature fully built, persisted and tested, but never wired to anything.
+
+### Corrections to this plan found during execution
+
+- **Task 2.5** offered "scope the listener to the list container" as an equal alternative. It is not viable — the popover opens with focus on the search input, so a container-scoped listener never sees the arrow keys. The `e.target` filter is the only workable branch.
+- **Task 2.8** did not account for `clear_history` being user-scoped while `SettingsSection` had no path to the active account; the section now hydrates the accounts store like `PairingSection` does.
+- **Task 3.3** said to keep `ServerClient::revoke_device` because `tests/auth_revoke.rs` exercised it. T4 deletes that test, leaving zero callers, so the HTTP method went too.
+- **Task 4.1**'s "keep `pub`" list was incomplete: `flow2_pairing.rs` also imports five items from `pairing::payload`, plus `pairing::shortcode::decode` and `pairing::invite::hex::decode_user_key`. `errors::AppError` stays public for a different reason than stated — no test imports it, but every public fallible signature returns it.
+- **Task 5.3** referred to `core::pairing::qr`; the module is renamed to `payload` by that same task.
+- **T2** said `capture/macos.rs` had 2 ignored smoke tests; it had 3.
+- The integration harness invoked `/app/dist/src/index.js`, which does not exist in the image, and passed `--db /var/lib/sharepaste/db.sqlite`, which the server never reads. Both fixed; the flows now pass against a live compose stack.
+
+### Still open (out of scope, worth tracking)
+
+- The image has no `sharepaste` on `PATH`: `server/package.json` declares a `bin` entry but the Dockerfile never links it, and `docker exec` bypasses the `ENTRYPOINT` that would otherwise supply it. The root `README.md` documents `docker exec sharepaste sharepaste user create alice`, which fails. Server-side fix.
+- `README.md:20` and `server/README.md:50` document `./db/db.sqlite`; the server uses `DB_PATH=/var/lib/sharepaste/sharepaste.sqlite`. Both databases exist in the volume. Tracked as task 2.5 of the server-simplification plan.
+- SSE reconnect after a dropped stream is still untested (coverage gap 3 of this document).
