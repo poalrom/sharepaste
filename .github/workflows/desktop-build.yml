@@ -178,6 +178,16 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # `db/` is gitignored, so a fresh checkout does not have it and Docker
+      # creates the bind-mount target as root. The image runs as `node`
+      # (uid 1000), so the server dies on boot with SQLITE_CANTOPEN and never
+      # answers /healthz. Docker Desktop on macOS/Windows masks this by
+      # ignoring ownership on bind mounts; native Linux does not, which means
+      # `docker compose up` also fails on a fresh clone on any Linux host.
+      # Tracked for a real fix server-side; this unblocks CI.
+      - name: Create a writable database volume
+        run: mkdir -p db && sudo chown -R 1000:1000 db
+
       - name: Start the server stack
         run: docker compose up -d --build
 

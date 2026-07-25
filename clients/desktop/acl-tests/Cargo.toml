@@ -29,5 +29,10 @@ tauri-plugin-global-shortcut = "2"
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
-[lib]
-path = "src/lib.rs"
+# `harness = false` so the checks run on the process main thread. The default
+# harness spawns a thread per test, and building the context creates the app's
+# tray icon, which is main-thread-only on macOS (`Tray(NotMainThread)`).
+[[test]]
+name = "acl"
+path = "tests/acl.rs"
+harness = false
