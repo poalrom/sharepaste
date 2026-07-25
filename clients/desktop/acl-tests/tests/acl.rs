@@ -64,13 +64,30 @@ fn window(app: &App<MockRuntime>, label: &str) -> WebviewWindow<MockRuntime> {
         .unwrap_or_else(|e| panic!("failed to build window {label:?}: {e}"))
 }
 
+/// The URL Tauri treats as a local origin.
+///
+/// `http://tauri.localhost` on Windows and Android, `tauri://localhost`
+/// everywhere else — mirrors `Manager::tauri_protocol_url`
+/// (tauri-2.11.0 `src/manager/mod.rs:339`). Hardcoding the Windows form made
+/// every request an `Origin::Remote` on macOS, and the capability is scoped to
+/// `URL: local`, so the checks failed there for a reason that had nothing to do
+/// with window coverage. Caught by CI's macOS leg, which is the entire point of
+/// running the suite on both.
+fn local_origin_url() -> &'static str {
+    if cfg!(windows) || cfg!(target_os = "android") {
+        "http://tauri.localhost"
+    } else {
+        "tauri://localhost"
+    }
+}
+
 /// A well-formed `plugin:event|listen` call — the exact command S1 denied.
 fn listen_request() -> InvokeRequest {
     InvokeRequest {
         cmd: "plugin:event|listen".into(),
         callback: CallbackFn(0),
         error: CallbackFn(1),
-        url: "http://tauri.localhost".parse().unwrap(),
+        url: local_origin_url().parse().unwrap(),
         body: InvokeBody::Json(serde_json::json!({
             "event": "sharepaste-acl-probe",
             "target": { "kind": "Any" },
