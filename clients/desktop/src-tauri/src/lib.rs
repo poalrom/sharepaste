@@ -11,19 +11,13 @@ use crate::config::Paths;
 use crate::core::account::AccountRegistry;
 use crate::core::keychain::SystemKeychain;
 use crate::core::storage::open as open_storage;
-use crate::events::{
-    ConnectionStateEvent, EntryAdded, EntryView, PendingCount, ACTIVE_CHANGED,
-    CONNECTION_STATE, ENTRY_ADDED, ENTRY_DELETED, HISTORY_CHANGED, PENDING_COUNT,
-};
+use crate::events::ACTIVE_CHANGED;
 use crate::popover::{build_popover_window, toggle_popover};
 use crate::state::AppState;
 use std::sync::Arc;
 use tauri::menu::{ContextMenu, MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
-use zeroize::Zeroizing;
 
 pub fn launch() {
     let paths = Paths::resolve();
@@ -251,287 +245,7 @@ fn spawn_sync_for_existing_accounts(app: tauri::AppHandle, state: Arc<AppState>)
                 user_id: Some(user_id.clone()),
             },
         );
-        spawn_sync(app.clone(), state.clone(), user_id).await;
-    });
-}
-
-pub fn set_conn_state(
-    app: &tauri::AppHandle,
-    state: &AppState,
-    user_id: &str,
-    new_state: crate::core::sync::ConnectionState,
-    last_error: Option<String>,
-) {
-    state
-        .conn_states
-        .lock()
-        .insert(user_id.to_string(), new_state);
-    let _ = app.emit(
-        CONNECTION_STATE,
-        ConnectionStateEvent {
-            user_id: user_id.to_string(),
-            state: new_state,
-            last_error,
-        },
-    );
-}
-
-pub async fn spawn_sync(app: tauri::AppHandle, state: Arc<AppState>, user_id: String) {
-    let cancel = CancellationToken::new();
-    {
-        let mut tasks = state.sync_tasks.lock();
-        if let Some(prev) = tasks.insert(
-            user_id.clone(),
-            crate::state::SyncSlot {
-                user_id: user_id.clone(),
-                cancel: cancel.clone(),
-            },
-        ) {
-            prev.cancel.cancel();
-        }
-    }
-    let m = match state.registry.load_active_membership(&user_id).await {
-        Ok(m) => m,
-        Err(e) => {
-            set_conn_state(
-                &app,
-                &state,
-                &user_id,
-                crate::core::sync::ConnectionState::AuthFailed,
-                Some(e.to_string()),
-            );
-            return;
-        }
-    };
-    let server_for_sse_task = m.server.clone();
-    let server_for_upload = m.server.clone();
-    // UserKey is Zeroizing<[u8;32]> with no Clone; clone the inner array via a fresh
-    // Zeroizing wrapper so each spawned task owns its own key.
-    let user_key_for_sse: crate::core::crypto::UserKey = Zeroizing::new(*m.user_key);
-    let app2 = app.clone();
-    let state2 = state.clone();
-    let cancel2 = cancel.clone();
-    let user_id_for_sse = user_id.clone();
-
-    // Register the upload trigger up-front so the SSE task can notify it on each
-    // successful (re)connect, even before the uploader task has started.
-    let upload_trigger = std::sync::Arc::new(tokio::sync::Notify::new());
-    state
-        .upload_triggers
-        .lock()
-        .insert(user_id.clone(), upload_trigger.clone());
-
-    let upload_trigger_for_sse = upload_trigger.clone();
-    tauri::async_runtime::spawn(async move {
-        let server = server_for_sse_task;
-        let mut backoff = crate::core::sync::BackoffPlan::new();
-        loop {
-            if cancel2.is_cancelled() {
-                return;
-            }
-            set_conn_state(
-                &app2,
-                &state2,
-                &user_id_for_sse,
-                crate::core::sync::ConnectionState::Connecting,
-                None,
-            );
-            let last_seen = {
-                let conn = state2.conn.lock().await;
-                crate::core::storage::accounts::find(&conn, &user_id_for_sse)
-                    .ok()
-                    .flatten()
-                    .map(|a| a.last_seen_id)
-                    .unwrap_or(0)
-            };
-            match server.list_entries(last_seen, 500).await {
-                Ok(rows) => {
-                    let conn = state2.conn.lock().await;
-                    let mut new_last = last_seen;
-                    for row in rows {
-                        let _ = crate::core::sync::decryptor::ingest(
-                            &conn,
-                            &user_key_for_sse,
-                            &user_id_for_sse,
-                            &row,
-                            now_ms(),
-                        );
-                        if row.id > new_last {
-                            new_last = row.id;
-                        }
-                    }
-                    if new_last != last_seen {
-                        let _ = crate::core::storage::accounts::set_last_seen(
-                            &conn,
-                            &user_id_for_sse,
-                            new_last,
-                        );
-                        let _ = app2.emit(
-                            HISTORY_CHANGED,
-                            serde_json::json!({ "user_id": user_id_for_sse }),
-                        );
-                    }
-                }
-                Err(crate::errors::AppError::Auth(s)) => {
-                    set_conn_state(
-                        &app2,
-                        &state2,
-                        &user_id_for_sse,
-                        crate::core::sync::ConnectionState::AuthFailed,
-                        Some(s),
-                    );
-                    return;
-                }
-                Err(e) => {
-                    tracing::warn!(err = %e, "backfill failed; will retry");
-                    set_conn_state(
-                        &app2,
-                        &state2,
-                        &user_id_for_sse,
-                        crate::core::sync::ConnectionState::Connecting,
-                        Some(e.to_string()),
-                    );
-                    let delay = backoff.next_delay_secs();
-                    tokio::select! {
-                        _ = cancel2.cancelled() => return,
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(delay)) => {}
-                    }
-                    continue;
-                }
-            }
-
-            set_conn_state(
-                &app2,
-                &state2,
-                &user_id_for_sse,
-                crate::core::sync::ConnectionState::Online,
-                None,
-            );
-            backoff.reset();
-            // Server reachable again — push any queued entries.
-            upload_trigger_for_sse.notify_one();
-
-            let (tx, mut rx) = mpsc::channel::<crate::core::sync::sse::ServerEvent>(64);
-            let server_for_sse = server.clone();
-            let cancel_for_sse = cancel2.clone();
-            let sse_handle = tokio::spawn(async move {
-                crate::core::sync::sse::run(server_for_sse, tx, cancel_for_sse).await
-            });
-
-            'recv: loop {
-                tokio::select! {
-                    _ = cancel2.cancelled() => return,
-                    ev = rx.recv() => match ev {
-                        None => break 'recv,
-                        Some(crate::core::sync::sse::ServerEvent::Entry { id, ciphertext, created_at, device_id }) => {
-                            let row = crate::core::http::dto::EntryRow { id, ciphertext, created_at, device_id: device_id.clone() };
-                            let conn = state2.conn.lock().await;
-                            match crate::core::sync::decryptor::ingest(&conn, &user_key_for_sse, &user_id_for_sse, &row, now_ms()) {
-                                Ok(out) => {
-                                    let _ = crate::core::storage::accounts::set_last_seen(&conn, &user_id_for_sse, id);
-                                    let _ = app2.emit(ENTRY_ADDED, EntryAdded {
-                                        user_id: user_id_for_sse.clone(),
-                                        entry: EntryView {
-                                            id, user_id: user_id_for_sse.clone(),
-                                            preview: out.plaintext_preview.unwrap_or_default(),
-                                            created_at, device_id, device_label: None,
-                                        },
-                                    });
-                                    if out.undecryptable {
-                                        let _ = app2.emit(crate::events::DECRYPTION_ERROR, crate::events::DecryptionError {
-                                            user_id: user_id_for_sse.clone(), entry_id: id,
-                                        });
-                                    }
-                                }
-                                Err(e) => tracing::warn!(err = %e, "ingest failed"),
-                            }
-                        }
-                        Some(crate::core::sync::sse::ServerEvent::Delete { id }) => {
-                            let conn = state2.conn.lock().await;
-                            let _ = crate::core::storage::entries_cache::delete_one(&conn, &user_id_for_sse, id);
-                            let _ = app2.emit(ENTRY_DELETED, crate::events::EntryDeleted {
-                                user_id: user_id_for_sse.clone(), entry_id: id,
-                            });
-                        }
-                    }
-                }
-            }
-
-            // SSE dropped. Surface the error if any, then back off and reconnect.
-            let last_error = match sse_handle.await {
-                Ok(Err(e)) => Some(e.to_string()),
-                Ok(Ok(())) => None,
-                Err(e) => Some(e.to_string()),
-            };
-            if cancel2.is_cancelled() {
-                return;
-            }
-            set_conn_state(
-                &app2,
-                &state2,
-                &user_id_for_sse,
-                crate::core::sync::ConnectionState::Connecting,
-                last_error,
-            );
-            let delay = backoff.next_delay_secs();
-            tokio::select! {
-                _ = cancel2.cancelled() => return,
-                _ = tokio::time::sleep(std::time::Duration::from_secs(delay)) => {}
-            }
-        }
-    });
-
-    // Pending-queue uploader on its own task.
-    let conn_for_upload = state.conn.clone();
-    let app_for_upload = app.clone();
-    let state_for_upload = state.clone();
-    let cancel3 = cancel.clone();
-    let user_id2 = user_id.clone();
-    let upload_trigger_for_task = upload_trigger.clone();
-    tauri::async_runtime::spawn(async move {
-        use crate::core::sync::uploader::{UploadTransport, Uploader, UploaderEvents};
-        struct ServerUpload(crate::core::http::ServerClient);
-        #[async_trait::async_trait]
-        impl UploadTransport for ServerUpload {
-            async fn upload(&self, b64: &str) -> Result<i64, crate::errors::AppError> {
-                self.0.post_entry(b64).await.map(|r| r.id)
-            }
-        }
-        let app_pc = app_for_upload.clone();
-        let app_af = app_for_upload.clone();
-        let state_af = state_for_upload.clone();
-        let user_pc = user_id2.clone();
-        let user_af = user_id2.clone();
-        let events = UploaderEvents {
-            on_pending_count: Box::new(move |n| {
-                let _ = app_pc.emit(
-                    PENDING_COUNT,
-                    PendingCount {
-                        user_id: user_pc.clone(),
-                        count: n,
-                    },
-                );
-            }),
-            on_auth_failed: Box::new(move || {
-                set_conn_state(
-                    &app_af,
-                    &state_af,
-                    &user_af,
-                    crate::core::sync::ConnectionState::AuthFailed,
-                    None,
-                );
-            }),
-        };
-        let up = Uploader {
-            user_id: user_id2.clone(),
-            conn: conn_for_upload,
-            transport: std::sync::Arc::new(ServerUpload(server_for_upload)),
-            trigger: upload_trigger_for_task.clone(),
-            events,
-        };
-        // Fire trigger once to flush whatever might already be queued from a previous run.
-        upload_trigger_for_task.notify_one();
-        up.run(cancel3).await;
+        crate::core::sync::session::run_session(app.clone(), state.clone(), user_id).await;
     });
 }
 
@@ -543,6 +257,9 @@ fn spawn_clipboard_capture(app: tauri::AppHandle, state: Arc<AppState>) {
     use crate::core::capture::watcher;
     #[cfg(target_os = "windows")]
     use crate::core::capture::windows::{frontmost_process_name, WindowsClipboardSniffer};
+    use crate::events::{PendingCount, PENDING_COUNT};
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
 
     let (tx, mut rx) = mpsc::channel::<crate::core::capture::watcher::ClipboardEvent>(32);
     let watcher_cancel = CancellationToken::new();
@@ -739,7 +456,7 @@ pub fn apply_hotkey(app: &tauri::AppHandle, hotkey: Option<&str>) -> tauri::Resu
     Ok(())
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
