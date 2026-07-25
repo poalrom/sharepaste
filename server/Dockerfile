@@ -25,5 +25,5 @@ COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/package.json ./package.json
 VOLUME /var/lib/sharepaste
 EXPOSE 8443
-ENTRYPOINT ["node", "dist/src/index.js"]
+ENTRYPOINT ["node", "dist/index.js"]
 CMD ["serve"]

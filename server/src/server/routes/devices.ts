@@ -1,14 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import {
-  hashToken,
-  randomId,
-  randomToken,
-  sha256Hex,
-  timingSafeEqualHex,
-} from "../../crypto.js";
+import { hashToken, randomId, randomToken, sha256Hex } from "../../crypto.js";
 import { verifyBearer } from "../auth.js";
-
-const UUID_PATTERN = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
+import { verifySlotProof } from "../pairing-slot.js";
+import { DEVICE_LABEL, SECRET_PROOF, UUID } from "./schemas.js";
 
 export const registerDeviceRoutes = (app: FastifyInstance): void => {
   app.post<{ Body: { pair_id: string; secret_proof: string; label: string } }>(
@@ -20,9 +14,9 @@ export const registerDeviceRoutes = (app: FastifyInstance): void => {
           required: ["pair_id", "secret_proof", "label"],
           additionalProperties: false,
           properties: {
-            pair_id: { type: "string", pattern: UUID_PATTERN },
-            secret_proof: { type: "string", minLength: 16, maxLength: 256 },
-            label: { type: "string", minLength: 1, maxLength: 128 },
+            pair_id: UUID,
+            secret_proof: SECRET_PROOF,
+            label: DEVICE_LABEL,
           },
         },
       },
@@ -34,9 +28,8 @@ export const registerDeviceRoutes = (app: FastifyInstance): void => {
       const now = Date.now();
       if (pairing.consumed_at !== null) throw app.httpErrors.gone("pair slot consumed");
       if (pairing.expires_at <= now) throw app.httpErrors.gone("pair slot expired");
-      if (pairing.claimed_by === null) throw app.httpErrors.conflict("pair slot not claimed");
-      if (!timingSafeEqualHex(sha256Hex(secret_proof), pairing.secret_hash))
-        throw app.httpErrors.forbidden("wrong secret");
+      if (pairing.claimed_at === null) throw app.httpErrors.conflict("pair slot not claimed");
+      verifySlotProof(app, pairing, secret_proof, now);
 
       const deviceId = randomId();
       const token = randomToken();
@@ -47,6 +40,7 @@ export const registerDeviceRoutes = (app: FastifyInstance): void => {
           user_id: pairing.user_id,
           device_id: deviceId,
           device_token_hash: tokenHash,
+          token_sha256: sha256Hex(token),
           device_label: label,
           created_at: now,
           revoked_at: null,

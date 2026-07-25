@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { openDb } from "../db/index.js";
 import { migrate } from "../db/migrate.js";
 import { Repository } from "../db/repository.js";
@@ -9,8 +8,6 @@ export interface ServeOptions {
   dbPath: string;
   port: number;
   host: string;
-  tlsCertPath?: string | null;
-  tlsKeyPath?: string | null;
 }
 
 export interface ServerHandle {
@@ -22,6 +19,10 @@ export const startServer = async (opts: ServeOptions): Promise<ServerHandle> => 
   const db = openDb(opts.dbPath);
   migrate(db);
   const repo = new Repository(db);
+  repo.maintenance.sweep(Date.now());
+  const sweepTimer = setInterval(() => repo.maintenance.sweep(Date.now()), 60 * 60 * 1000);
+  // Otherwise the interval alone keeps the event loop alive after close().
+  sweepTimer.unref();
   const hub = new SseHub();
   const deps: AppDeps = {
     repo,
@@ -33,21 +34,12 @@ export const startServer = async (opts: ServeOptions): Promise<ServerHandle> => 
     maxPairingFailures: 3,
     logger: { level: process.env.LOG_LEVEL ?? "info" },
   };
-  const https =
-    opts.tlsCertPath && opts.tlsKeyPath
-      ? {
-          key: fs.readFileSync(opts.tlsKeyPath),
-          cert: fs.readFileSync(opts.tlsCertPath),
-        }
-      : undefined;
   const app = await buildApp(deps);
-  if (https) {
-    throw new Error("TLS not supported in this build; terminate TLS at a reverse proxy");
-  }
   const url = await app.listen({ port: opts.port, host: opts.host });
   return {
     url,
     close: async () => {
+      clearInterval(sweepTimer);
       await app.close();
       db.close();
     },

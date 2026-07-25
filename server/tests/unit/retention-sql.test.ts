@@ -1,36 +1,30 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { openDb } from "../../src/db/index.js";
-import { migrate } from "../../src/db/migrate.js";
+import { describe, it, expect, afterEach } from "vitest";
+import { openTempDb, cipherB64, type TempDb } from "../helpers.js";
 import { Repository } from "../../src/db/repository.js";
 
 const MAX_COUNT = 100;
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
-let tmp: string;
+let t: TempDb;
 let repo: Repository;
 
-beforeEach(() => {
-  tmp = mkdtempSync(path.join(tmpdir(), "sp-"));
-  const db = openDb(path.join(tmp, "t.sqlite"));
-  migrate(db);
-  repo = new Repository(db);
-  repo.users.create({ id: "u1", username: "alice" });
+afterEach(() => {
+  t.close();
 });
-
-afterEach(() => rmSync(tmp, { recursive: true, force: true }));
 
 describe("entries.insertAndPrune", () => {
   it("keeps only the most recent MAX_COUNT entries for that user", () => {
+    t = openTempDb();
+    repo = t.repo;
+    repo.users.create({ id: "u1", username: "alice" });
+
     const now = 1_700_000_000_000;
     for (let i = 0; i < MAX_COUNT + 10; i++) {
       repo.entries.insertAndPrune(
         {
           user_id: "u1",
           device_id: "d1",
-          ciphertext: Buffer.from([i]),
+          ciphertext_b64: cipherB64(String(i)),
           size: 1,
           created_at: now + i,
         },
@@ -42,12 +36,16 @@ describe("entries.insertAndPrune", () => {
   });
 
   it("drops entries older than MAX_AGE_MS even if under count cap", () => {
+    t = openTempDb();
+    repo = t.repo;
+    repo.users.create({ id: "u1", username: "alice" });
+
     const now = 1_700_000_000_000;
     repo.entries.insertAndPrune(
       {
         user_id: "u1",
         device_id: "d1",
-        ciphertext: Buffer.from("old"),
+        ciphertext_b64: cipherB64("old"),
         size: 3,
         created_at: now - MAX_AGE_MS - 1000,
       },
@@ -58,7 +56,7 @@ describe("entries.insertAndPrune", () => {
       {
         user_id: "u1",
         device_id: "d1",
-        ciphertext: Buffer.from("new"),
+        ciphertext_b64: cipherB64("new"),
         size: 3,
         created_at: now,
       },
@@ -69,17 +67,20 @@ describe("entries.insertAndPrune", () => {
   });
 
   it("does not affect other users", () => {
+    t = openTempDb();
+    repo = t.repo;
+    repo.users.create({ id: "u1", username: "alice" });
     repo.users.create({ id: "u2", username: "bob" });
     const now = 1_700_000_000_000;
     for (let i = 0; i < MAX_COUNT + 5; i++) {
       repo.entries.insertAndPrune(
-        { user_id: "u1", device_id: "d1", ciphertext: Buffer.from([i]), size: 1, created_at: now + i },
+        { user_id: "u1", device_id: "d1", ciphertext_b64: cipherB64(String(i)), size: 1, created_at: now + i },
         MAX_COUNT,
         MAX_AGE_MS
       );
     }
     repo.entries.insertAndPrune(
-      { user_id: "u2", device_id: "d2", ciphertext: Buffer.from("x"), size: 1, created_at: now },
+      { user_id: "u2", device_id: "d2", ciphertext_b64: cipherB64("x"), size: 1, created_at: now },
       MAX_COUNT,
       MAX_AGE_MS
     );

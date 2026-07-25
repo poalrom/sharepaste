@@ -1,0 +1,50 @@
+name: Server CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - server/**
+      - .github/workflows/server-ci.yml
+  pull_request:
+    paths:
+      - server/**
+      - .github/workflows/server-ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Server tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2025]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 25
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: server
+        run: npm run typecheck
+
+      - name: Run tests
+        working-directory: server
+        run: npm test

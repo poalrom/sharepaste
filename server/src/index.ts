@@ -5,7 +5,7 @@ import { runUserCreate, runUserList, runUserDelete } from "./cli/user.js";
 import { runDeviceList, runDeviceRevoke } from "./cli/device.js";
 import { runEntryPurge } from "./cli/entry.js";
 import { startServer } from "./cli/serve.js";
-import { loadServeConfig } from "./config.js";
+import { DEFAULT_DB_PATH, loadServeConfig } from "./config.js";
 
 const program = new Command()
   .name("sharepaste")
@@ -16,7 +16,7 @@ const dbPathOption = (cmd: Command) =>
   cmd.option(
     "--db <path>",
     "path to SQLite database file",
-    process.env.DB_PATH ?? "/var/lib/sharepaste/sharepaste.sqlite"
+    process.env.DB_PATH ?? DEFAULT_DB_PATH
   );
 
 const user = program.command("user").description("User management");
