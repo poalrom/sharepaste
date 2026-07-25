@@ -11,6 +11,7 @@ use crate::errors::AppError;
 use crate::events::{
     AccountAdded, EntryView, PairShortcode, ACCOUNT_ADDED, ACTIVE_CHANGED, HISTORY_CHANGED, PAIR_SHORTCODE,
 };
+use crate::now_ms;
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -19,14 +20,14 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use zeroize::Zeroizing;
 
 #[derive(Serialize)]
-pub struct AccountSummary {
-    pub user_id: String,
-    pub device_id: String,
-    pub label: String,
-    pub server_url: String,
-    pub status: ConnectionState,
-    pub pending: i64,
-    pub is_active: bool,
+pub(crate) struct AccountSummary {
+    pub(crate) user_id: String,
+    pub(crate) device_id: String,
+    pub(crate) label: String,
+    pub(crate) server_url: String,
+    pub(crate) status: ConnectionState,
+    pub(crate) pending: i64,
+    pub(crate) is_active: bool,
 }
 
 #[tauri::command]
@@ -59,16 +60,16 @@ pub async fn list_accounts(
 }
 
 #[derive(Deserialize)]
-pub struct PairWithInviteArgs {
-    pub server_url: String,
-    pub token: String,
-    pub device_label: String,
+pub(crate) struct PairWithInviteArgs {
+    pub(crate) server_url: String,
+    pub(crate) token: String,
+    pub(crate) device_label: String,
 }
 
 #[derive(Serialize)]
-pub struct PairWithInviteResp {
-    pub user_id: String,
-    pub device_id: String,
+pub(crate) struct PairWithInviteResp {
+    pub(crate) user_id: String,
+    pub(crate) device_id: String,
 }
 
 #[tauri::command]
@@ -107,14 +108,14 @@ pub async fn pair_with_invite(
 }
 
 #[derive(Deserialize)]
-pub struct PairStartArgs {
-    pub user_id: String,
+pub(crate) struct PairStartArgs {
+    pub(crate) user_id: String,
 }
 
 #[derive(Serialize)]
-pub struct PairStartResp {
-    pub code: String,
-    pub expires_at: i64,
+pub(crate) struct PairStartResp {
+    pub(crate) code: String,
+    pub(crate) expires_at: i64,
 }
 
 #[tauri::command]
@@ -193,15 +194,15 @@ pub async fn pair_start(
 }
 
 #[derive(Deserialize)]
-pub struct PairWithCodeArgs {
-    pub code: String,
-    pub device_label: String,
+pub(crate) struct PairWithCodeArgs {
+    pub(crate) code: String,
+    pub(crate) device_label: String,
 }
 
 #[derive(Serialize)]
-pub struct PairWithCodeResp {
-    pub user_id: String,
-    pub device_id: String,
+pub(crate) struct PairWithCodeResp {
+    pub(crate) user_id: String,
+    pub(crate) device_id: String,
 }
 
 #[tauri::command]
@@ -271,8 +272,8 @@ pub async fn pair_with_code(
 }
 
 #[derive(Deserialize)]
-pub struct UserScopedArgs {
-    pub user_id: String,
+pub(crate) struct UserScopedArgs {
+    pub(crate) user_id: String,
 }
 
 #[tauri::command]
@@ -287,8 +288,8 @@ pub async fn forget_account(
         .as_deref()
         == Some(args.user_id.as_str());
 
-    if let Some(slot) = state.sync_tasks.lock().remove(&args.user_id) {
-        slot.cancel.cancel();
+    if let Some(cancel) = state.sync_tasks.lock().remove(&args.user_id) {
+        cancel.cancel();
     }
     state.conn_states.lock().remove(&args.user_id);
 
@@ -345,10 +346,10 @@ pub async fn set_active_account(
 }
 
 #[derive(Deserialize)]
-pub struct ListHistoryArgs {
-    pub user_id: String,
-    pub before_id: Option<i64>,
-    pub limit: i64,
+pub(crate) struct ListHistoryArgs {
+    pub(crate) user_id: String,
+    pub(crate) before_id: Option<i64>,
+    pub(crate) limit: i64,
 }
 
 #[tauri::command]
@@ -372,9 +373,9 @@ pub async fn list_history(
 }
 
 #[derive(Deserialize)]
-pub struct EntryScopedArgs {
-    pub user_id: String,
-    pub entry_id: i64,
+pub(crate) struct EntryScopedArgs {
+    pub(crate) user_id: String,
+    pub(crate) entry_id: i64,
 }
 
 fn set_clipboard_text_with_self_write_guard<F>(
@@ -520,8 +521,8 @@ pub async fn update_settings(
 }
 
 #[derive(Deserialize)]
-pub struct OpenMainWindowArgs {
-    pub section: String,
+pub(crate) struct OpenMainWindowArgs {
+    pub(crate) section: String,
 }
 
 #[tauri::command]
@@ -556,14 +557,6 @@ async fn activate_and_sync(app: &AppHandle, state: &Arc<AppState>, user_id: &str
     );
     crate::core::sync::session::run_session(app.clone(), Arc::clone(state), user_id.to_string())
         .await;
-}
-
-fn now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

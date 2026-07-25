@@ -22,7 +22,7 @@ pub enum AppError {
 }
 
 impl AppError {
-    pub fn kind(&self) -> &'static str {
+    pub(crate) fn kind(&self) -> &'static str {
         match self {
             AppError::Network(_) => "Network",
             AppError::Auth(_) => "Auth",

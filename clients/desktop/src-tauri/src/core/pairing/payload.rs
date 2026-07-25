@@ -17,8 +17,8 @@ pub struct PairPayload {
 }
 
 pub struct PairStarted {
-    pub pair_id: Uuid,
-    pub pairing_secret: Zeroizing<[u8; 32]>,
+    pub(crate) pair_id: Uuid,
+    pub(crate) pairing_secret: Zeroizing<[u8; 32]>,
     pub shortcode: String,
 }
 

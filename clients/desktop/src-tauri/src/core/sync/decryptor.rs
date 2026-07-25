@@ -1,16 +1,16 @@
 use crate::core::crypto::{decrypt, UserKey};
 use crate::core::http::dto::EntryRow;
 use crate::core::pairing::payload::base64_decode;
-use crate::core::storage::entries_cache::{upsert_and_prune, NewCachedEntry};
+use crate::core::storage::entries_cache::{mark_undecryptable, upsert_and_prune, NewCachedEntry};
 use crate::errors::AppError;
 use rusqlite::Connection;
 
-pub struct DecryptOutcome {
-    pub plaintext_preview: Option<String>,
-    pub undecryptable: bool,
+pub(crate) struct DecryptOutcome {
+    pub(crate) plaintext_preview: Option<String>,
+    pub(crate) undecryptable: bool,
 }
 
-pub fn ingest(
+pub(crate) fn ingest(
     conn: &Connection,
     user_key: &UserKey,
     user_id: &str,
@@ -34,11 +34,19 @@ pub fn ingest(
         created_at: row.created_at,
         device_id: &row.device_id,
     }, now_ms)?;
+    if undecryptable {
+        // upsert_and_prune COALESCEs a NULL plaintext onto whatever is already
+        // stored, so an entry that decrypted once and no longer does would keep
+        // serving its old plaintext through get_full - and therefore through
+        // copy_to_clipboard - while this same ingest reports decryption-error
+        // to the UI. Clear it so the cache agrees with what we tell the user.
+        mark_undecryptable(conn, user_id, row.id)?;
+    }
     let preview = plaintext_str.as_ref().map(|s| build_preview(s));
     Ok(DecryptOutcome { plaintext_preview: preview, undecryptable })
 }
 
-pub fn build_preview(plaintext: &str) -> String {
+pub(crate) fn build_preview(plaintext: &str) -> String {
     let one_line: String = plaintext
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -88,6 +96,30 @@ mod tests {
         assert!(out.undecryptable);
         let pt = crate::core::storage::entries_cache::get_full(&c, "bob", 1).unwrap();
         assert!(pt.is_none());
+    }
+
+    #[test]
+    fn ingest_clears_stale_plaintext_when_an_entry_stops_decrypting() {
+        let c = open_in_memory().unwrap();
+        let good = key();
+        let r = row_for("u", 1, b"secret", &good);
+        ingest(&c, &good, "u", &r, 9_999).unwrap();
+        assert_eq!(
+            crate::core::storage::entries_cache::get_full(&c, "u", 1).unwrap().as_deref(),
+            Some("secret"),
+            "precondition: the entry decrypted and was cached"
+        );
+
+        // Same id, re-ingested under a rotated key: decryption now fails.
+        let rotated: UserKey = Zeroizing::new([6u8; 32]);
+        let reencrypted = row_for("u", 1, b"secret", &rotated);
+        let out = ingest(&c, &good, "u", &reencrypted, 10_000).unwrap();
+
+        assert!(out.undecryptable, "the app reports the failure to the UI");
+        assert!(
+            crate::core::storage::entries_cache::get_full(&c, "u", 1).unwrap().is_none(),
+            "and must not keep serving the old plaintext through copy_to_clipboard"
+        );
     }
 
     #[test]

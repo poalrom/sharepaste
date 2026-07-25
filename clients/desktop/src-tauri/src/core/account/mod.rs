@@ -9,37 +9,39 @@ use rusqlite::Connection;
 use std::sync::Arc;
 
 #[derive(Debug)]
-pub struct ActiveMembership {
-    pub account: Account,
-    pub server: ServerClient,
-    pub user_key: UserKey,
+pub(crate) struct ActiveMembership {
+    pub(crate) server: ServerClient,
+    pub(crate) user_key: UserKey,
 }
 
-pub struct AccountRegistry {
-    pub conn: Arc<tokio::sync::Mutex<Connection>>,
-    pub keychain: Arc<dyn Keychain>,
-    pub active: RwLock<Option<String>>,
+pub(crate) struct AccountRegistry {
+    pub(crate) conn: Arc<tokio::sync::Mutex<Connection>>,
+    pub(crate) keychain: Arc<dyn Keychain>,
+    pub(crate) active: RwLock<Option<String>>,
 }
 
 impl AccountRegistry {
-    pub fn new(conn: Arc<tokio::sync::Mutex<Connection>>, keychain: Arc<dyn Keychain>) -> Self {
+    pub(crate) fn new(conn: Arc<tokio::sync::Mutex<Connection>>, keychain: Arc<dyn Keychain>) -> Self {
         Self { conn, keychain, active: RwLock::new(None) }
     }
 
-    pub async fn list(&self) -> Result<Vec<Account>, AppError> {
+    pub(crate) async fn list(&self) -> Result<Vec<Account>, AppError> {
         let c = self.conn.lock().await;
         accounts::list(&c)
     }
 
-    pub fn active_user_id(&self) -> Option<String> {
+    pub(crate) fn active_user_id(&self) -> Option<String> {
         self.active.read().clone()
     }
 
-    pub fn set_active(&self, user_id: Option<String>) {
+    /// Test-only: production always goes through [`Self::set_active_persisted`]
+    /// so the choice survives a restart.
+    #[cfg(test)]
+    pub(crate) fn set_active(&self, user_id: Option<String>) {
         *self.active.write() = user_id;
     }
 
-    pub fn set_active_persisted_with(
+    pub(crate) fn set_active_persisted_with(
         &self,
         conn: &Connection,
         user_id: Option<String>,
@@ -51,12 +53,12 @@ impl AccountRegistry {
         Ok(())
     }
 
-    pub async fn set_active_persisted(&self, user_id: Option<String>) -> Result<(), AppError> {
+    pub(crate) async fn set_active_persisted(&self, user_id: Option<String>) -> Result<(), AppError> {
         let conn = self.conn.lock().await;
         self.set_active_persisted_with(&conn, user_id)
     }
 
-    pub async fn load_persisted_active(&self) -> Result<Option<String>, AppError> {
+    pub(crate) async fn load_persisted_active(&self) -> Result<Option<String>, AppError> {
         let conn = self.conn.lock().await;
         let s = crate::core::storage::settings::load(&conn)?;
         let Some(uid) = s.last_active_user_id else { return Ok(None) };
@@ -66,7 +68,7 @@ impl AccountRegistry {
         }
     }
 
-    pub async fn load_active_membership(&self, user_id: &str) -> Result<ActiveMembership, AppError> {
+    pub(crate) async fn load_active_membership(&self, user_id: &str) -> Result<ActiveMembership, AppError> {
         let acct = {
             let c = self.conn.lock().await;
             accounts::find(&c, user_id)?
@@ -82,10 +84,10 @@ impl AccountRegistry {
             .ok_or_else(|| AppError::Keychain(format!("missing user_key for {user_id}")))?;
         let user_key = decode_user_key(&key_hex)?;
         let server = ServerClient::new(&acct.server_url)?.with_token(token);
-        Ok(ActiveMembership { account: acct, server, user_key })
+        Ok(ActiveMembership { server, user_key })
     }
 
-    pub async fn forget(&self, user_id: &str) -> Result<Option<String>, AppError> {
+    pub(crate) async fn forget(&self, user_id: &str) -> Result<Option<String>, AppError> {
         self.keychain.delete(&user_key_account(user_id))?;
         self.keychain.delete(&token_account(user_id))?;
         let conn = self.conn.lock().await;

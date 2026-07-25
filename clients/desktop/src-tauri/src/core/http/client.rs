@@ -69,7 +69,7 @@ impl ServerClient {
         self.json_post("/claim-invite", &ClaimInviteReq { token, device_label: label }, false).await
     }
 
-    pub async fn pair_start(&self, secret_hash: &str) -> Result<PairStartResp, AppError> {
+    pub(crate) async fn pair_start(&self, secret_hash: &str) -> Result<PairStartResp, AppError> {
         self.json_post("/pair/start", &PairStartReq { secret_hash }, true).await
     }
 
@@ -83,14 +83,14 @@ impl ServerClient {
         Err(Self::map_status(status, body))
     }
 
-    pub async fn pair_payload_put(&self, pair_id: &str, encrypted_payload: &str) -> Result<(), AppError> {
+    pub(crate) async fn pair_payload_put(&self, pair_id: &str, encrypted_payload: &str) -> Result<(), AppError> {
         let _: serde_json::Value = self
             .json_post("/pair/payload", &PairPayloadReq { pair_id, encrypted_payload }, true)
             .await?;
         Ok(())
     }
 
-    pub async fn pair_payload_get(&self, pair_id: &str, secret_proof: &str) -> Result<PairPayloadResp, AppError> {
+    pub(crate) async fn pair_payload_get(&self, pair_id: &str, secret_proof: &str) -> Result<PairPayloadResp, AppError> {
         let resp = self.http.get(self.url("/pair/payload"))
             .query(&[("id", pair_id), ("proof", secret_proof)])
             .send().await?;
@@ -102,7 +102,7 @@ impl ServerClient {
         resp.json().await.map_err(|e| AppError::Network(e.to_string()))
     }
 
-    pub async fn pair_poll(&self, pair_id: &str, timeout_ms: u32) -> Result<PairPollResp, AppError> {
+    pub(crate) async fn pair_poll(&self, pair_id: &str, timeout_ms: u32) -> Result<PairPollResp, AppError> {
         let resp = self.http.get(self.url("/pair/poll"))
             .query(&[("id", pair_id), ("timeout_ms", &timeout_ms.to_string())])
             .headers(self.auth_headers()?)
@@ -136,7 +136,7 @@ impl ServerClient {
         resp.json().await.map_err(|e| AppError::Network(e.to_string()))
     }
 
-    pub async fn delete_entry(&self, id: i64) -> Result<(), AppError> {
+    pub(crate) async fn delete_entry(&self, id: i64) -> Result<(), AppError> {
         let resp = self.http.delete(self.url(&format!("/entries/{id}")))
             .headers(self.auth_headers()?)
             .send().await?;
@@ -146,7 +146,7 @@ impl ServerClient {
         Err(Self::map_status(status, body))
     }
 
-    pub async fn delete_all_entries(&self) -> Result<(), AppError> {
+    pub(crate) async fn delete_all_entries(&self) -> Result<(), AppError> {
         let resp = self.http.delete(self.url("/entries"))
             .headers(self.auth_headers()?)
             .send().await?;
@@ -156,8 +156,8 @@ impl ServerClient {
         Err(Self::map_status(status, body))
     }
 
-    pub fn base(&self) -> &str { &self.base }
-    pub fn token(&self) -> Option<&str> { self.token.as_deref() }
+    pub(crate) fn base(&self) -> &str { &self.base }
+    pub(crate) fn token(&self) -> Option<&str> { self.token.as_deref() }
 }
 
 #[cfg(test)]

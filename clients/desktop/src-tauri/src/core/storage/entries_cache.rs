@@ -2,29 +2,29 @@ use crate::errors::AppError;
 use rusqlite::{params, Connection, OptionalExtension};
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct CachedEntry {
-    pub user_id: String,
-    pub id: i64,
-    pub ciphertext: Vec<u8>,
-    pub plaintext: Option<String>,
-    pub created_at: i64,
-    pub device_id: String,
+pub(crate) struct CachedEntry {
+    pub(crate) user_id: String,
+    pub(crate) id: i64,
+    pub(crate) ciphertext: Vec<u8>,
+    pub(crate) plaintext: Option<String>,
+    pub(crate) created_at: i64,
+    pub(crate) device_id: String,
 }
 
 #[derive(Debug, Clone)]
-pub struct NewCachedEntry<'a> {
-    pub user_id: &'a str,
-    pub id: i64,
-    pub ciphertext: &'a [u8],
-    pub plaintext: Option<&'a str>,
-    pub created_at: i64,
-    pub device_id: &'a str,
+pub(crate) struct NewCachedEntry<'a> {
+    pub(crate) user_id: &'a str,
+    pub(crate) id: i64,
+    pub(crate) ciphertext: &'a [u8],
+    pub(crate) plaintext: Option<&'a str>,
+    pub(crate) created_at: i64,
+    pub(crate) device_id: &'a str,
 }
 
-pub const MAX_PER_USER: i64 = 100;
-pub const MAX_AGE_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+pub(crate) const MAX_PER_USER: i64 = 100;
+pub(crate) const MAX_AGE_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
-pub fn upsert_and_prune(conn: &Connection, e: NewCachedEntry<'_>, now_ms: i64) -> Result<(), AppError> {
+pub(crate) fn upsert_and_prune(conn: &Connection, e: NewCachedEntry<'_>, now_ms: i64) -> Result<(), AppError> {
     let tx = conn.unchecked_transaction()?;
     tx.execute(
         "INSERT INTO entries_cache (user_id, id, ciphertext, plaintext, created_at, device_id)
@@ -54,7 +54,7 @@ pub fn upsert_and_prune(conn: &Connection, e: NewCachedEntry<'_>, now_ms: i64) -
     Ok(())
 }
 
-pub fn list_recent(conn: &Connection, user_id: &str, before_id: Option<i64>, limit: i64) -> Result<Vec<CachedEntry>, AppError> {
+pub(crate) fn list_recent(conn: &Connection, user_id: &str, before_id: Option<i64>, limit: i64) -> Result<Vec<CachedEntry>, AppError> {
     let limit = limit.clamp(1, MAX_PER_USER);
     let mut rows: Vec<CachedEntry> = if let Some(before) = before_id {
         let mut stmt = conn.prepare(
@@ -79,7 +79,7 @@ pub fn list_recent(conn: &Connection, user_id: &str, before_id: Option<i64>, lim
     Ok(rows)
 }
 
-pub fn get_full(conn: &Connection, user_id: &str, id: i64) -> Result<Option<String>, AppError> {
+pub(crate) fn get_full(conn: &Connection, user_id: &str, id: i64) -> Result<Option<String>, AppError> {
     let pt: Option<Option<String>> = conn
         .query_row(
             "SELECT plaintext FROM entries_cache WHERE user_id = ?1 AND id = ?2",
@@ -90,7 +90,14 @@ pub fn get_full(conn: &Connection, user_id: &str, id: i64) -> Result<Option<Stri
     Ok(pt.flatten())
 }
 
-pub fn mark_undecryptable(conn: &Connection, user_id: &str, id: i64) -> Result<(), AppError> {
+/// Clears a cached plaintext once its entry stops decrypting.
+///
+/// Necessary because `upsert_and_prune` COALESCEs a NULL incoming plaintext
+/// onto the stored one, which is right for a ciphertext-only backfill and
+/// wrong for a decryption failure. `sync::decryptor::ingest` calls this on its
+/// `undecryptable` branch so `get_full` stops handing back plaintext the app
+/// has just told the user it cannot decrypt.
+pub(crate) fn mark_undecryptable(conn: &Connection, user_id: &str, id: i64) -> Result<(), AppError> {
     conn.execute(
         "UPDATE entries_cache SET plaintext = NULL WHERE user_id = ?1 AND id = ?2",
         params![user_id, id],
@@ -98,7 +105,7 @@ pub fn mark_undecryptable(conn: &Connection, user_id: &str, id: i64) -> Result<(
     Ok(())
 }
 
-pub fn delete_one(conn: &Connection, user_id: &str, id: i64) -> Result<usize, AppError> {
+pub(crate) fn delete_one(conn: &Connection, user_id: &str, id: i64) -> Result<usize, AppError> {
     let n = conn.execute(
         "DELETE FROM entries_cache WHERE user_id = ?1 AND id = ?2",
         params![user_id, id],
@@ -106,7 +113,7 @@ pub fn delete_one(conn: &Connection, user_id: &str, id: i64) -> Result<usize, Ap
     Ok(n)
 }
 
-pub fn delete_all(conn: &Connection, user_id: &str) -> Result<usize, AppError> {
+pub(crate) fn delete_all(conn: &Connection, user_id: &str) -> Result<usize, AppError> {
     let n = conn.execute("DELETE FROM entries_cache WHERE user_id = ?1", params![user_id])?;
     Ok(n)
 }

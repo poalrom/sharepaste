@@ -11,10 +11,10 @@ use objc2_foundation::NSString;
 /// Real implementation of [`PasteboardSniff`] backed by the macOS general
 /// pasteboard. Cheap to construct; holds no state — every call walks
 /// AppKit fresh, so the caller is responsible for change-count gating.
-pub struct NSPasteboardSniffer;
+pub(crate) struct NSPasteboardSniffer;
 
 impl NSPasteboardSniffer {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self
     }
 }
@@ -63,7 +63,7 @@ impl PasteboardSniff for NSPasteboardSniffer {
 /// encoding check abort the process at the first `count` /
 /// `countByEnumeratingWithState:` call. CoreGraphics' window-list API is
 /// pure C and sidesteps that.
-pub fn find_tray_rect() -> Option<tauri::Rect> {
+pub(crate) fn find_tray_rect() -> Option<tauri::Rect> {
     if let Some(r) = find_tray_rect_via_appkit() {
         return Some(r);
     }
@@ -296,7 +296,7 @@ fn find_tray_rect_via_cgwindow() -> Option<tauri::Rect> {
 /// foreground, e.g. `"com.apple.Safari"`. Returns `None` when no app is
 /// frontmost (rare) or the frontmost process has no bundle id (some
 /// background helpers / unsigned binaries).
-pub fn frontmost_bundle_id() -> Option<String> {
+pub(crate) fn frontmost_bundle_id() -> Option<String> {
     // SAFETY: `sharedWorkspace` returns a singleton; `frontmostApplication`
     // is safe to call from any thread per Apple docs. We copy the bundle
     // id out before returning, so no autoreleased object escapes.

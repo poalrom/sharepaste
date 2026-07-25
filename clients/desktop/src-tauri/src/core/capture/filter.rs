@@ -1,10 +1,10 @@
 use std::time::{Duration, Instant};
 
-pub const MAX_BYTES: usize = 64 * 1024;
-pub const SELF_WRITE_WINDOW: Duration = Duration::from_secs(1);
+pub(crate) const MAX_BYTES: usize = 64 * 1024;
+pub(crate) const SELF_WRITE_WINDOW: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SkipReason {
+pub(crate) enum SkipReason {
     Disabled,
     Transient,
     NonText,
@@ -14,27 +14,27 @@ pub enum SkipReason {
     Duplicate,
 }
 
-pub struct CaptureContext<'a> {
-    pub capture_enabled: bool,
-    pub deny_list: &'a [String],
-    pub frontmost_bundle_id: Option<&'a str>,
-    pub last_self_write: Option<(Instant, &'a str)>,
+pub(crate) struct CaptureContext<'a> {
+    pub(crate) capture_enabled: bool,
+    pub(crate) deny_list: &'a [String],
+    pub(crate) frontmost_bundle_id: Option<&'a str>,
+    pub(crate) last_self_write: Option<(Instant, &'a str)>,
     /// Plaintext of the most recent capture that made it past this filter.
-    pub last_capture: Option<&'a str>,
+    pub(crate) last_capture: Option<&'a str>,
 }
 
-pub trait PasteboardSniff {
+pub(crate) trait PasteboardSniff {
     fn types(&self) -> Vec<String>;
     fn read_text(&self) -> Option<String>;
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum FilterDecision {
+pub(crate) enum FilterDecision {
     Capture(String),
     Skip(SkipReason),
 }
 
-pub fn evaluate(ctx: &CaptureContext<'_>, sniff: &dyn PasteboardSniff, now: Instant) -> FilterDecision {
+pub(crate) fn evaluate(ctx: &CaptureContext<'_>, sniff: &dyn PasteboardSniff, now: Instant) -> FilterDecision {
     if !ctx.capture_enabled {
         return FilterDecision::Skip(SkipReason::Disabled);
     }

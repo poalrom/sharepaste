@@ -2,21 +2,21 @@
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum ConnectionState {
+pub(crate) enum ConnectionState {
     Disconnected,
     Connecting,
     Online,
     AuthFailed,
 }
 
-pub struct BackoffPlan {
+pub(crate) struct BackoffPlan {
     schedule: &'static [u64],
     cap_secs: u64,
     cursor: usize,
 }
 
 impl BackoffPlan {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             schedule: &[1, 2, 4, 8, 16, 30],
             cap_secs: 30,
@@ -24,7 +24,7 @@ impl BackoffPlan {
         }
     }
 
-    pub fn next_delay_secs(&mut self) -> u64 {
+    pub(crate) fn next_delay_secs(&mut self) -> u64 {
         let pick = if self.cursor >= self.schedule.len() {
             self.cap_secs
         } else {
@@ -34,7 +34,7 @@ impl BackoffPlan {
         pick
     }
 
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.cursor = 0;
     }
 }
