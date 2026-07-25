@@ -319,7 +319,7 @@ pub async fn forget_account(
     result?;
 
     if let Some(uid) = new_active {
-        crate::spawn_sync(app.clone(), Arc::clone(state.inner()), uid).await;
+        crate::core::sync::session::run_session(app.clone(), Arc::clone(state.inner()), uid).await;
     }
 
     Ok(())
@@ -339,7 +339,8 @@ pub async fn set_active_account(
         },
     )
     .ok();
-    crate::spawn_sync(app.clone(), Arc::clone(state.inner()), args.user_id).await;
+    crate::core::sync::session::run_session(app.clone(), Arc::clone(state.inner()), args.user_id)
+        .await;
     Ok(())
 }
 
@@ -553,7 +554,8 @@ async fn activate_and_sync(app: &AppHandle, state: &Arc<AppState>, user_id: &str
             user_id: Some(user_id.to_string()),
         },
     );
-    crate::spawn_sync(app.clone(), Arc::clone(state), user_id.to_string()).await;
+    crate::core::sync::session::run_session(app.clone(), Arc::clone(state), user_id.to_string())
+        .await;
 }
 
 fn now_ms() -> i64 {

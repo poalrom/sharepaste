@@ -79,7 +79,10 @@ pub fn create_invite(_server: &TestServer, prefix: &str) -> (String, String) {
         "exec",
         SERVER_CONTAINER,
         "node",
-        "/app/dist/src/index.js",
+        // The image has no `sharepaste` on PATH: package.json declares a `bin`
+        // entry, but the Dockerfile never links it, and `docker exec` bypasses
+        // the ENTRYPOINT that would otherwise supply `node dist/index.js`.
+        "/app/dist/index.js",
         "user",
         "create",
     ]);
