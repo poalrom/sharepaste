@@ -140,6 +140,15 @@ fn build_tray(app: &mut tauri::App, _state: Arc<AppState>) -> tauri::Result<()> 
     Ok(())
 }
 
+/// Every webview window label this app builds.
+///
+/// `capabilities/default.json` must cover all of these; a label with no matching
+/// capability is denied every IPC command and event listener at runtime. The
+/// `capability_guard` tests below enforce that in both directions.
+const WINDOW_LABEL_MAIN: &str = "main";
+const WINDOW_LABEL_POPOVER: &str = "popover";
+const WINDOW_LABELS: [&str; 2] = [WINDOW_LABEL_MAIN, WINDOW_LABEL_POPOVER];
+
 const POPOVER_W: f64 = 360.0;
 const POPOVER_H: f64 = 480.0;
 const POPOVER_GAP: f64 = 4.0;
@@ -151,7 +160,11 @@ enum PopoverPlacement {
 }
 
 fn build_popover_window(app: &mut tauri::App) -> tauri::Result<()> {
-    let win = WebviewWindowBuilder::new(app, "popover", WebviewUrl::App("popover.html".into()))
+    let win = WebviewWindowBuilder::new(
+        app,
+        WINDOW_LABEL_POPOVER,
+        WebviewUrl::App("popover.html".into()),
+    )
         .title("sharepaste")
         .inner_size(POPOVER_W, POPOVER_H)
         .resizable(false)
@@ -417,13 +430,13 @@ fn open_main_window_impl(app: &tauri::AppHandle, section: &str) -> tauri::Result
             "unknown section: {section}"
         ))));
     }
-    if let Some(win) = app.get_webview_window("main") {
+    if let Some(win) = app.get_webview_window(WINDOW_LABEL_MAIN) {
         win.set_focus()?;
-        let _ = app.emit_to("main", crate::events::MAIN_NAVIGATE, section);
+        let _ = app.emit_to(WINDOW_LABEL_MAIN, crate::events::MAIN_NAVIGATE, section);
         return Ok(());
     }
     let url = format!("main.html?section={section}");
-    let win = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(url.into()))
+    let win = WebviewWindowBuilder::new(app, WINDOW_LABEL_MAIN, WebviewUrl::App(url.into()))
         .title("sharepaste")
         .inner_size(720.0, 560.0)
         .resizable(true)
@@ -1008,4 +1021,77 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Guards the invariant behind S1: the capability file must name every window the
+/// app builds. This reads the shipped JSON rather than mocking the ACL, so it fails
+/// if a window is added, renamed, or dropped from the capability file.
+#[cfg(test)]
+mod capability_guard {
+    use super::WINDOW_LABELS;
+
+    const CAPABILITY_JSON: &str = include_str!("../capabilities/default.json");
+
+    /// Tauri matches capability `windows` entries against window labels with glob
+    /// syntax. Only `*` matters for the patterns this app can legitimately use.
+    fn pattern_matches(pattern: &str, label: &str) -> bool {
+        match pattern.split_once('*') {
+            None => pattern == label,
+            Some((prefix, suffix)) => {
+                label.len() >= prefix.len() + suffix.len()
+                    && label.starts_with(prefix)
+                    && label.ends_with(suffix)
+            }
+        }
+    }
+
+    fn declared_patterns() -> Vec<String> {
+        let parsed: serde_json::Value = serde_json::from_str(CAPABILITY_JSON)
+            .expect("capabilities/default.json must be valid JSON");
+        parsed["windows"]
+            .as_array()
+            .expect("capabilities/default.json must declare a `windows` array")
+            .iter()
+            .map(|w| {
+                w.as_str()
+                    .expect("every `windows` entry must be a string")
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_window_label_is_covered_by_a_capability() {
+        let patterns = declared_patterns();
+        for label in WINDOW_LABELS {
+            assert!(
+                patterns.iter().any(|p| pattern_matches(p, label)),
+                "window {label:?} matches no pattern in capabilities/default.json {patterns:?}. \
+                 Tauri denies by default, so that window would silently lose every event \
+                 listener at runtime while still rendering."
+            );
+        }
+    }
+
+    #[test]
+    fn no_capability_pattern_matches_a_window_that_does_not_exist() {
+        let patterns = declared_patterns();
+        for pattern in &patterns {
+            assert!(
+                WINDOW_LABELS.iter().any(|l| pattern_matches(pattern, l)),
+                "capabilities/default.json declares {pattern:?}, which matches none of the \
+                 windows this app builds {WINDOW_LABELS:?}. It is a leftover from an older \
+                 window topology - delete it."
+            );
+        }
+    }
+
+    #[test]
+    fn pattern_matcher_handles_globs() {
+        assert!(pattern_matches("main", "main"));
+        assert!(!pattern_matches("main", "main-2"));
+        assert!(pattern_matches("modal-*", "modal-settings"));
+        assert!(!pattern_matches("modal-*", "main"));
+        assert!(pattern_matches("*", "anything"));
+    }
 }
