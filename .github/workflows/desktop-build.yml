@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+    paths:
+      - clients/desktop/**
+      - .github/workflows/desktop-build.yml
   workflow_dispatch:
 
 permissions:
