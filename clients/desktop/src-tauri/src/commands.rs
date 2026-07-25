@@ -9,7 +9,7 @@ use crate::core::storage::{accounts as accounts_repo, entries_cache, pending, se
 use crate::core::sync::ConnectionState;
 use crate::errors::AppError;
 use crate::events::{
-    AccountAdded, PairShortcode, ACCOUNT_ADDED, ACTIVE_CHANGED, HISTORY_CHANGED, PAIR_SHORTCODE,
+    AccountAdded, EntryView, PairShortcode, ACCOUNT_ADDED, ACTIVE_CHANGED, HISTORY_CHANGED, PAIR_SHORTCODE,
 };
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
@@ -27,16 +27,6 @@ pub struct AccountSummary {
     pub status: ConnectionState,
     pub pending: i64,
     pub is_active: bool,
-}
-
-#[derive(Serialize)]
-pub struct EntryViewDto {
-    pub id: i64,
-    pub user_id: String,
-    pub preview: String,
-    pub created_at: i64,
-    pub device_id: String,
-    pub device_label: Option<String>,
 }
 
 #[tauri::command]
@@ -364,12 +354,12 @@ pub struct ListHistoryArgs {
 pub async fn list_history(
     args: ListHistoryArgs,
     state: State<'_, Arc<AppState>>,
-) -> Result<Vec<EntryViewDto>, AppError> {
+) -> Result<Vec<EntryView>, AppError> {
     let conn = state.conn.lock().await;
     let rows = entries_cache::list_recent(&conn, &args.user_id, args.before_id, args.limit)?;
     Ok(rows
         .into_iter()
-        .map(|r| EntryViewDto {
+        .map(|r| EntryView {
             id: r.id,
             user_id: r.user_id,
             preview: r.plaintext.unwrap_or_default(),
