@@ -536,6 +536,7 @@ pub async fn update_settings(
     app: AppHandle,
 ) -> Result<settings::Settings, AppError> {
     let mut hotkey_changed: Option<Option<String>> = None;
+    let mut autostart_changed: Option<bool> = None;
     let s = {
         let conn = state.conn.lock().await;
         let mut s = settings::load(&conn)?;
@@ -549,6 +550,9 @@ pub async fn update_settings(
                 .collect();
         }
         if let Some(v) = patch.get("autostart").and_then(|v| v.as_bool()) {
+            if v != s.autostart {
+                autostart_changed = Some(v);
+            }
             s.autostart = v;
         }
         if let Some(v) = patch.get("hotkey") {
@@ -568,6 +572,13 @@ pub async fn update_settings(
     if let Some(new_hotkey) = hotkey_changed {
         if let Err(e) = crate::apply_hotkey(&app, new_hotkey.as_deref()) {
             tracing::warn!(err = %e, "re-register hotkey failed");
+        }
+    }
+    // The choice is already persisted above; a failed login-item write is logged
+    // and swallowed so the user does not silently lose the setting.
+    if let Some(enabled) = autostart_changed {
+        if let Err(e) = crate::set_autostart(&app, enabled) {
+            tracing::warn!(err = %e, enabled, "update autostart registration failed");
         }
     }
     Ok(s)

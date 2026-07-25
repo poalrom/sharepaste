@@ -47,6 +47,7 @@ pub fn launch() {
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             spawn_clipboard_capture(app.handle().clone(), app_state.clone());
             register_initial_hotkey(app.handle().clone(), app_state.clone());
+            reconcile_autostart(app.handle().clone(), app_state.clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -145,9 +146,12 @@ fn build_tray(app: &mut tauri::App, _state: Arc<AppState>) -> tauri::Result<()> 
 /// `capabilities/default.json` must cover all of these; a label with no matching
 /// capability is denied every IPC command and event listener at runtime. The
 /// `capability_guard` tests below enforce that in both directions.
-const WINDOW_LABEL_MAIN: &str = "main";
-const WINDOW_LABEL_POPOVER: &str = "popover";
-const WINDOW_LABELS: [&str; 2] = [WINDOW_LABEL_MAIN, WINDOW_LABEL_POPOVER];
+///
+/// The named scalars below index into it, so the array is load-bearing in the
+/// production build and cannot drift from the labels actually passed to Tauri.
+const WINDOW_LABELS: [&str; 2] = ["main", "popover"];
+const WINDOW_LABEL_MAIN: &str = WINDOW_LABELS[0];
+const WINDOW_LABEL_POPOVER: &str = WINDOW_LABELS[1];
 
 const POPOVER_W: f64 = 360.0;
 const POPOVER_H: f64 = 480.0;
@@ -822,11 +826,13 @@ fn spawn_clipboard_capture(app: tauri::AppHandle, state: Arc<AppState>) {
 
             let last_self = state.last_self_write.lock().clone();
             let last_self_ref = last_self.as_ref().map(|(t, s)| (*t, s.as_str()));
+            let last_capture = state.last_capture.lock().clone();
             let ctx = CaptureContext {
                 capture_enabled: settings.capture_enabled,
                 deny_list: &settings.deny_list,
                 frontmost_bundle_id: frontmost.as_deref(),
                 last_self_write: last_self_ref,
+                last_capture: last_capture.as_deref(),
             };
             let decision =
                 evaluate(&ctx, &sniffer as &dyn PasteboardSniff, std::time::Instant::now());
@@ -869,6 +875,9 @@ fn spawn_clipboard_capture(app: tauri::AppHandle, state: Arc<AppState>) {
                     },
                 );
             }
+            // Only remembered once the entry is durably queued, so a failed
+            // enqueue does not suppress the user's next copy of the same text.
+            *state.last_capture.lock() = Some(text);
             if let Some(trigger) = state.upload_triggers.lock().get(&user_id).cloned() {
                 trigger.notify_one();
             } else {
@@ -876,6 +885,61 @@ fn spawn_clipboard_capture(app: tauri::AppHandle, state: Arc<AppState>) {
             }
         }
         let _ = watcher_cancel;
+    });
+}
+
+/// Register or unregister the app with the OS login-items mechanism.
+///
+/// Callers persist the user's choice independently of this call and only log a
+/// failure: a LaunchAgent or registry write that fails must not discard the
+/// setting the user just made.
+pub fn set_autostart(
+    app: &tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), tauri_plugin_autostart::Error> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    }
+}
+
+/// Bring the OS login-items entry back in line with the stored setting.
+///
+/// The two drift apart whenever the app is reinstalled, moved, or the entry is
+/// removed by hand — without this the checkbox keeps claiming a state the OS no
+/// longer has.
+fn reconcile_autostart(app: tauri::AppHandle, state: Arc<AppState>) {
+    tauri::async_runtime::spawn(async move {
+        let desired = {
+            let conn = state.conn.lock().await;
+            match crate::core::storage::settings::load(&conn) {
+                Ok(s) => s.autostart,
+                Err(e) => {
+                    tracing::warn!(err = %e, "load settings for autostart reconcile");
+                    return;
+                }
+            }
+        };
+        let actual = {
+            use tauri_plugin_autostart::ManagerExt;
+            match app.autolaunch().is_enabled() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(err = %e, "read autostart registration");
+                    return;
+                }
+            }
+        };
+        if actual == desired {
+            return;
+        }
+        match set_autostart(&app, desired) {
+            Ok(()) => tracing::info!(desired, "autostart registration reconciled"),
+            Err(e) => tracing::warn!(err = %e, desired, "reconcile autostart failed"),
+        }
     });
 }
 
