@@ -14,10 +14,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 /// Real implementation of [`PasteboardSniff`] backed by the Windows clipboard.
 /// This adapter only exposes plain text for the first Windows capture pass.
-pub struct WindowsClipboardSniffer;
+pub(crate) struct WindowsClipboardSniffer;
 
 impl WindowsClipboardSniffer {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self
     }
 }
@@ -47,7 +47,7 @@ impl PasteboardSniff for WindowsClipboardSniffer {
 /// process, for example `1Password.exe`. Returns `None` when there is no
 /// foreground window, process access is denied, or the image path cannot be
 /// queried.
-pub fn frontmost_process_name() -> Option<String> {
+pub(crate) fn frontmost_process_name() -> Option<String> {
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.is_null() {

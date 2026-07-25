@@ -1,25 +1,33 @@
 use crate::errors::AppError;
 use rusqlite::{params, Connection};
 
-pub const MAX_PER_USER: i64 = 1000;
+pub(crate) const MAX_PER_USER: i64 = 1000;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PendingUpload {
-    pub rowid: i64,
-    pub user_id: String,
-    pub ciphertext: Vec<u8>,
-    pub captured_at: i64,
-    pub attempts: i64,
-    pub last_error: Option<String>,
+pub(crate) struct PendingUpload {
+    pub(crate) rowid: i64,
+    pub(crate) user_id: String,
+    pub(crate) ciphertext: Vec<u8>,
+    pub(crate) captured_at: i64,
+    pub(crate) attempts: i64,
+    pub(crate) last_error: Option<String>,
 }
 
+/// `rowid` is the insert handle the unit tests drive `ack` / `record_failure`
+/// with; production re-reads the queue head instead and never needs it.
+///
+/// `dropped_oldest` counts pending clipboard entries evicted at the
+/// `MAX_PER_USER` cap - entries the user copied that will now never upload.
+/// The capture loop logs a warning when it is non-zero; without that the loss
+/// is completely silent.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug)]
-pub struct EnqueueResult {
-    pub rowid: i64,
-    pub dropped_oldest: usize,
+pub(crate) struct EnqueueResult {
+    pub(crate) rowid: i64,
+    pub(crate) dropped_oldest: usize,
 }
 
-pub fn enqueue(
+pub(crate) fn enqueue(
     conn: &Connection,
     user_id: &str,
     ciphertext: &[u8],
@@ -46,7 +54,7 @@ pub fn enqueue(
     Ok(EnqueueResult { rowid, dropped_oldest })
 }
 
-pub fn head(conn: &Connection, user_id: &str) -> Result<Option<PendingUpload>, AppError> {
+pub(crate) fn head(conn: &Connection, user_id: &str) -> Result<Option<PendingUpload>, AppError> {
     let mut stmt = conn.prepare(
         "SELECT rowid, user_id, ciphertext, captured_at, attempts, last_error
          FROM pending_uploads
@@ -66,7 +74,7 @@ pub fn head(conn: &Connection, user_id: &str) -> Result<Option<PendingUpload>, A
     Ok(row)
 }
 
-pub fn count(conn: &Connection, user_id: &str) -> Result<i64, AppError> {
+pub(crate) fn count(conn: &Connection, user_id: &str) -> Result<i64, AppError> {
     let n: i64 = conn.query_row(
         "SELECT COUNT(*) FROM pending_uploads WHERE user_id = ?1",
         params![user_id],
@@ -75,12 +83,12 @@ pub fn count(conn: &Connection, user_id: &str) -> Result<i64, AppError> {
     Ok(n)
 }
 
-pub fn ack(conn: &Connection, rowid: i64) -> Result<(), AppError> {
+pub(crate) fn ack(conn: &Connection, rowid: i64) -> Result<(), AppError> {
     conn.execute("DELETE FROM pending_uploads WHERE rowid = ?1", params![rowid])?;
     Ok(())
 }
 
-pub fn record_failure(conn: &Connection, rowid: i64, err: &str) -> Result<i64, AppError> {
+pub(crate) fn record_failure(conn: &Connection, rowid: i64, err: &str) -> Result<i64, AppError> {
     conn.execute(
         "UPDATE pending_uploads SET attempts = attempts + 1, last_error = ?2 WHERE rowid = ?1",
         params![rowid, err],

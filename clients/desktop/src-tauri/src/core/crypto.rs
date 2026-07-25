@@ -3,8 +3,8 @@ use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use zeroize::Zeroizing;
 
-pub const KEY_LEN: usize = 32;
-pub const NONCE_LEN: usize = 24;
+pub(crate) const KEY_LEN: usize = 32;
+pub(crate) const NONCE_LEN: usize = 24;
 
 pub type UserKey = Zeroizing<[u8; KEY_LEN]>;
 

@@ -16,7 +16,7 @@ use crate::events::{
     ConnectionStateEvent, DecryptionError, EntryAdded, EntryDeleted, EntryView, PendingCount,
     CONNECTION_STATE, DECRYPTION_ERROR, ENTRY_ADDED, ENTRY_DELETED, HISTORY_CHANGED, PENDING_COUNT,
 };
-use crate::state::{AppState, SyncSlot};
+use crate::state::AppState;
 use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::{mpsc, Notify};
@@ -68,14 +68,8 @@ pub(crate) async fn run_session(app: tauri::AppHandle, state: Arc<AppState>, use
     let cancel = CancellationToken::new();
     {
         let mut tasks = state.sync_tasks.lock();
-        if let Some(prev) = tasks.insert(
-            user_id.clone(),
-            SyncSlot {
-                user_id: user_id.clone(),
-                cancel: cancel.clone(),
-            },
-        ) {
-            prev.cancel.cancel();
+        if let Some(prev) = tasks.insert(user_id.clone(), cancel.clone()) {
+            prev.cancel();
         }
     }
     let ctx = SessionCtx {

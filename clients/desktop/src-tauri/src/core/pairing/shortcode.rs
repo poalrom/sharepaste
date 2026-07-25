@@ -7,12 +7,12 @@ const SECRET_LEN: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShortcodePayload {
-    pub server_url: String,
+    pub(crate) server_url: String,
     pub pair_id: Uuid,
     pub pairing_secret: [u8; SECRET_LEN],
 }
 
-pub fn encode(p: &ShortcodePayload) -> Result<String, AppError> {
+pub(crate) fn encode(p: &ShortcodePayload) -> Result<String, AppError> {
     let url_bytes = p.server_url.as_bytes();
     let url_len: u16 = url_bytes
         .len()
@@ -61,7 +61,7 @@ pub fn decode(s: &str) -> Result<ShortcodePayload, AppError> {
     Ok(ShortcodePayload { server_url, pair_id, pairing_secret: secret })
 }
 
-pub fn group_for_display(code: &str) -> String {
+pub(crate) fn group_for_display(code: &str) -> String {
     code.chars()
         .collect::<Vec<_>>()
         .chunks(5)

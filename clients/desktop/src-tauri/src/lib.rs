@@ -1,9 +1,9 @@
-pub mod config;
+pub(crate) mod config;
 pub mod errors;
-pub mod logging;
-pub mod state;
-pub mod events;
-pub mod commands;
+pub(crate) mod logging;
+pub(crate) mod state;
+pub(crate) mod events;
+pub(crate) mod commands;
 pub mod core;
 mod popover;
 
@@ -27,7 +27,7 @@ pub fn launch() {
     let conn = Arc::new(tokio::sync::Mutex::new(conn));
     let keychain: Arc<dyn core::keychain::Keychain> = Arc::new(SystemKeychain::default());
     let registry = Arc::new(AccountRegistry::new(conn.clone(), keychain.clone()));
-    let app_state = Arc::new(AppState::new(paths, conn, keychain, registry));
+    let app_state = Arc::new(AppState::new(conn, keychain, registry));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
@@ -328,11 +328,27 @@ fn spawn_clipboard_capture(app: tauri::AppHandle, state: Arc<AppState>) {
                 };
             {
                 let conn = state.conn.lock().await;
-                if let Err(e) =
-                    crate::core::storage::pending::enqueue(&conn, &user_id, &ciphertext, now_ms())
-                {
-                    tracing::warn!(err = %e, "enqueue failed");
-                    continue;
+                match crate::core::storage::pending::enqueue(
+                    &conn,
+                    &user_id,
+                    &ciphertext,
+                    now_ms(),
+                ) {
+                    Err(e) => {
+                        tracing::warn!(err = %e, "enqueue failed");
+                        continue;
+                    }
+                    Ok(res) if res.dropped_oldest > 0 => {
+                        // The queue is at MAX_PER_USER, so the oldest entries the
+                        // user copied while offline have just been discarded
+                        // un-uploaded. Nothing else surfaces this.
+                        tracing::warn!(
+                            %user_id,
+                            dropped = res.dropped_oldest,
+                            "pending upload queue full; evicted oldest un-uploaded entries"
+                        );
+                    }
+                    Ok(_) => {}
                 }
                 let count = crate::core::storage::pending::count(&conn, &user_id).unwrap_or(0);
                 let _ = app.emit(
@@ -361,7 +377,7 @@ fn spawn_clipboard_capture(app: tauri::AppHandle, state: Arc<AppState>) {
 /// Callers persist the user's choice independently of this call and only log a
 /// failure: a LaunchAgent or registry write that fails must not discard the
 /// setting the user just made.
-pub fn set_autostart(
+pub(crate) fn set_autostart(
     app: &tauri::AppHandle,
     enabled: bool,
 ) -> Result<(), tauri_plugin_autostart::Error> {
@@ -427,7 +443,7 @@ fn register_initial_hotkey(app: tauri::AppHandle, state: Arc<AppState>) {
     });
 }
 
-pub fn apply_hotkey(app: &tauri::AppHandle, hotkey: Option<&str>) -> tauri::Result<()> {
+pub(crate) fn apply_hotkey(app: &tauri::AppHandle, hotkey: Option<&str>) -> tauri::Result<()> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutEvent, ShortcutState};
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();

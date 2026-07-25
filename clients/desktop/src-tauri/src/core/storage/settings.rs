@@ -3,13 +3,13 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Settings {
-    pub capture_enabled: bool,
-    pub deny_list: Vec<String>,
-    pub autostart: bool,
-    pub hotkey: Option<String>,
+pub(crate) struct Settings {
+    pub(crate) capture_enabled: bool,
+    pub(crate) deny_list: Vec<String>,
+    pub(crate) autostart: bool,
+    pub(crate) hotkey: Option<String>,
     #[serde(default)]
-    pub last_active_user_id: Option<String>,
+    pub(crate) last_active_user_id: Option<String>,
 }
 
 impl Default for Settings {
@@ -29,7 +29,7 @@ impl Default for Settings {
 const KEY: &str = "settings";
 /// Shipped so the popover has a keyboard entry point on a fresh profile; the
 /// user can rebind or clear it from Settings.
-pub const DEFAULT_HOTKEY: &str = "CmdOrCtrl+Shift+V";
+pub(crate) const DEFAULT_HOTKEY: &str = "CmdOrCtrl+Shift+V";
 const BUILTIN_DENY_LIST_ENTRIES: &[&str] = &[
     "com.1password.1password",
     "com.bitwarden.desktop",
@@ -49,7 +49,7 @@ fn append_builtin_deny_list_entries(settings: &mut Settings) {
     }
 }
 
-pub fn load(conn: &Connection) -> Result<Settings, AppError> {
+pub(crate) fn load(conn: &Connection) -> Result<Settings, AppError> {
     let json: Option<String> = conn
         .query_row(
             "SELECT value FROM settings WHERE key = ?1",
@@ -68,7 +68,7 @@ pub fn load(conn: &Connection) -> Result<Settings, AppError> {
     }
 }
 
-pub fn save(conn: &Connection, s: &Settings) -> Result<(), AppError> {
+pub(crate) fn save(conn: &Connection, s: &Settings) -> Result<(), AppError> {
     let mut settings = s.clone();
     append_builtin_deny_list_entries(&mut settings);
     let j = serde_json::to_string(&settings).map_err(|e| AppError::Storage(e.to_string()))?;

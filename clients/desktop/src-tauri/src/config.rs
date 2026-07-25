@@ -1,19 +1,19 @@
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
-pub struct Paths {
-    pub data_dir: PathBuf,
-    pub log_dir: PathBuf,
-    pub cache_dir: PathBuf,
-    pub db_path: PathBuf,
+pub(crate) struct Paths {
+    pub(crate) data_dir: PathBuf,
+    pub(crate) log_dir: PathBuf,
+    pub(crate) cache_dir: PathBuf,
+    pub(crate) db_path: PathBuf,
 }
 
 impl Paths {
-    pub fn resolve() -> Self {
+    pub(crate) fn resolve() -> Self {
         Self::resolve_with_env(std::env::var_os("SHAREPASTE_DATA_DIR"))
     }
 
-    pub fn resolve_with_env(override_data_dir: Option<std::ffi::OsString>) -> Self {
+    pub(crate) fn resolve_with_env(override_data_dir: Option<std::ffi::OsString>) -> Self {
         let data_dir = match override_data_dir {
             Some(p) => PathBuf::from(p),
             None => default_data_dir(),
@@ -24,7 +24,7 @@ impl Paths {
         Self { data_dir, log_dir, cache_dir, db_path }
     }
 
-    pub fn ensure_dirs(&self) -> std::io::Result<()> {
+    pub(crate) fn ensure_dirs(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.data_dir)?;
         std::fs::create_dir_all(&self.log_dir)?;
         std::fs::create_dir_all(&self.cache_dir)?;

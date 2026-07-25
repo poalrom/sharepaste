@@ -6,10 +6,9 @@ use std::thread;
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Debug, Clone)]
-pub struct ClipboardEvent {
-    pub at: std::time::SystemTime,
-}
+/// A bare notification that the OS clipboard changed; the payload is read from
+/// the pasteboard on the receiving side, so the event itself carries nothing.
+pub(crate) struct ClipboardEvent;
 
 struct Handler {
     sink: Sender<ClipboardEvent>,
@@ -21,9 +20,7 @@ impl ClipboardHandler for Handler {
         if self.cancel.is_cancelled() {
             return CallbackResult::Stop;
         }
-        let _ = self.sink.try_send(ClipboardEvent {
-            at: std::time::SystemTime::now(),
-        });
+        let _ = self.sink.try_send(ClipboardEvent);
         CallbackResult::Next
     }
 
@@ -33,7 +30,7 @@ impl ClipboardHandler for Handler {
     }
 }
 
-pub fn spawn(
+pub(crate) fn spawn(
     sink: Sender<ClipboardEvent>,
     cancel: CancellationToken,
 ) -> Result<thread::JoinHandle<()>, AppError> {
