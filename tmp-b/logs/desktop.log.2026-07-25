@@ -1,0 +1,2 @@
+{"timestamp":"2026-07-25T22:31:04.848767Z","level":"INFO","fields":{"message":"logging initialized"},"target":"sharepaste_desktop_lib::logging"}
+{"timestamp":"2026-07-25T22:31:05.082568Z","level":"WARN","fields":{"message":"register global shortcut failed","err":"register shortcut: HotKey already registered: HotKey { mods: Modifiers(CONTROL | SHIFT), key: KeyV, id: 34078760 }","hotkey":"CmdOrCtrl+Shift+V"},"target":"sharepaste_desktop_lib"}
