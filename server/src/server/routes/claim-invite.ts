@@ -37,6 +37,7 @@ export const registerClaimInviteRoute = (app: FastifyInstance): void => {
           user_id: invite.user_id,
           device_id: deviceId,
           device_token_hash: deviceTokenHash,
+          token_sha256: sha256Hex(deviceToken),
           device_label,
           created_at: now,
           revoked_at: null,

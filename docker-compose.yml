@@ -5,7 +5,7 @@ services:
     container_name: sharepaste
     restart: unless-stopped
     environment:
-      DB_PATH: /var/lib/sharepaste/db.sqlite
+      DB_PATH: /var/lib/sharepaste/sharepaste.sqlite
     ports:
       - "8443:8443"
     volumes:

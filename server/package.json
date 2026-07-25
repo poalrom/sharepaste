@@ -3,13 +3,14 @@
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "sharepaste": "dist/src/index.js"
+    "sharepaste": "dist/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "tsx src/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@fastify/sensible": "^6.0.4",

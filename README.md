@@ -24,8 +24,10 @@ Mounts `./db` → `/var/lib/sharepaste` inside the container. SQLite file lives 
 ```bash
 cd server
 npm install
-npm start -- serve   # uses DB_PATH from server/.env (defaults to ../db/db.sqlite)
+DB_PATH=../db/db.sqlite npm start -- serve
 ```
+
+`DB_PATH` defaults to `/var/lib/sharepaste/sharepaste.sqlite` (the container path), so set it explicitly for local dev.
 
 ## Operator CLI
 

@@ -1,29 +1,31 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import type { MembershipRow } from "../db/repository.js";
-import { verifyToken } from "../crypto.js";
+import { sha256Hex, verifyToken } from "../crypto.js";
 
 export interface AuthedMembership {
   user_id: string;
   device_id: string;
 }
 
-const extractToken = (req: FastifyRequest): string | null => {
-  const h = req.headers.authorization;
-  if (h && h.startsWith("Bearer ")) return h.slice("Bearer ".length).trim();
-  const q = (req.query as Record<string, unknown> | undefined)?.token;
-  return typeof q === "string" && q.length > 0 ? q : null;
-};
-
 export const verifyBearer = async (
   app: FastifyInstance,
   req: FastifyRequest
 ): Promise<AuthedMembership> => {
-  const token = extractToken(req);
+  const header = req.headers.authorization;
+  if (!header?.startsWith("Bearer "))
+    throw app.httpErrors.unauthorized("missing bearer token");
+  const token = header.slice("Bearer ".length).trim();
   if (!token) throw app.httpErrors.unauthorized("missing bearer token");
 
-  const candidates: MembershipRow[] = app.deps.repo.memberships.listActive();
-  for (const m of candidates) {
+  const hash = sha256Hex(token);
+  const indexed = app.deps.repo.memberships.findActiveByTokenSha256(hash);
+  if (indexed) return { user_id: indexed.user_id, device_id: indexed.device_id };
+
+  // Backfill path for memberships issued before the sha256 index existed: each
+  // costs one argon2 scan, after which the row is indexed and never scanned
+  // again. Delete this loop once no active membership has a null token_sha256.
+  for (const m of app.deps.repo.memberships.listUnindexed()) {
     if (await verifyToken(m.device_token_hash, token)) {
+      app.deps.repo.memberships.setTokenSha256(m.user_id, m.device_id, hash);
       return { user_id: m.user_id, device_id: m.device_id };
     }
   }

@@ -10,23 +10,33 @@ export const registerEntryRoutes = (app: FastifyInstance): void => {
           type: "object",
           required: ["ciphertext"],
           additionalProperties: false,
-          properties: { ciphertext: { type: "string", minLength: 1 } },
+          properties: {
+            ciphertext: {
+              type: "string",
+              minLength: 1,
+              pattern: "^[A-Za-z0-9+/]+={0,2}$",
+            },
+          },
         },
       },
     },
     async (req, reply) => {
       const auth = await verifyBearer(app, req);
-      const buf = Buffer.from(req.body.ciphertext, "base64");
-      if (buf.length === 0) throw app.httpErrors.badRequest("empty ciphertext");
-      if (buf.length > app.deps.maxEntryBytes)
+      const { ciphertext } = req.body;
+      if (ciphertext.length % 4 !== 0)
+        throw app.httpErrors.badRequest("malformed base64");
+      const padding = ciphertext.endsWith("==") ? 2 : ciphertext.endsWith("=") ? 1 : 0;
+      const size = (ciphertext.length / 4) * 3 - padding;
+      if (size === 0) throw app.httpErrors.badRequest("empty ciphertext");
+      if (size > app.deps.maxEntryBytes)
         throw app.httpErrors.payloadTooLarge("ciphertext exceeds maxEntryBytes");
       const now = Date.now();
       const row = app.deps.repo.entries.insertAndPrune(
         {
           user_id: auth.user_id,
           device_id: auth.device_id,
-          ciphertext: buf,
-          size: buf.length,
+          ciphertext_b64: ciphertext,
+          size,
           created_at: now,
         },
         app.deps.maxEntries,
@@ -35,7 +45,7 @@ export const registerEntryRoutes = (app: FastifyInstance): void => {
       app.deps.hub.publish(auth.user_id, {
         type: "entry",
         id: row.id,
-        ciphertext: buf.toString("base64"),
+        ciphertext: row.ciphertext_b64,
         created_at: row.created_at,
         device_id: auth.device_id,
       });
@@ -53,7 +63,7 @@ export const registerEntryRoutes = (app: FastifyInstance): void => {
       return reply.send(
         rows.map((r) => ({
           id: r.id,
-          ciphertext: r.ciphertext.toString("base64"),
+          ciphertext: r.ciphertext_b64,
           created_at: r.created_at,
           device_id: r.device_id,
         }))

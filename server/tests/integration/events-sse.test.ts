@@ -1,10 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { buildTestApp, provisionDevice } from "../helpers.js";
+import { provisionDevice, withApp } from "../helpers.js";
 
 describe("GET /events (SSE)", () => {
-  it("streams entry events for the caller's user only", async () => {
-    const { app, repo, baseUrl, close } = await buildTestApp({}, { listen: true });
-    try {
+  it("streams entry events for the caller's user only", () =>
+    withApp(async ({ app, repo, baseUrl }) => {
       const a = await provisionDevice(repo);
       const b = await provisionDevice(repo, "bob");
 
@@ -55,8 +54,5 @@ describe("GET /events (SSE)", () => {
       expect(buf).not.toMatch(/nope/);
 
       ctrl.abort();
-    } finally {
-      await close();
-    }
-  });
+    }, {}, { listen: true }));
 });
