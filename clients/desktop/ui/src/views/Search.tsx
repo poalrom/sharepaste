@@ -6,6 +6,31 @@ export default function Search() {
   const setSearch = useUiStore((s) => s.setSearch);
   const ref = useRef<HTMLInputElement>(null);
 
+  // The popover window is shown and hidden, never unmounted (popover.rs uses
+  // show()/hide()), so `autoFocus` fires exactly once in the window's lifetime.
+  // Without this, focus stays wherever the last interaction left it - typically
+  // the footer button that opened the main window and hid the popover - and
+  // since HistoryList ignores keydown while a button holds focus, the reopened
+  // popover is keyboard-dead until the user clicks something.
+  //
+  // Keying off the window's focus event is safe precisely because the popover
+  // hides on Focused(false): it can never be visible-but-unfocused, so "window
+  // gained focus" always means "just shown". Focus moving *within* the popover
+  // does not fire this, so it never fights the user's own focus choices.
+  useEffect(() => {
+    const focusSearch = () => {
+      const input = ref.current;
+      if (!input) return;
+      input.focus();
+      // Select rather than clear: the list is still filtered by the old query,
+      // so leaving it visible is honest, and typing replaces it.
+      input.select();
+    };
+    focusSearch();
+    window.addEventListener("focus", focusSearch);
+    return () => window.removeEventListener("focus", focusSearch);
+  }, []);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const input = ref.current;
@@ -22,7 +47,6 @@ export default function Search() {
     <div className="border-b border-zinc-700 p-2">
       <input
         ref={ref}
-        autoFocus
         className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none focus:ring-1 focus:ring-blue-500"
         placeholder="Search history…"
         value={search}
