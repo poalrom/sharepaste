@@ -1,14 +1,14 @@
-pub mod accounts;
-pub mod entries_cache;
-pub mod migrations;
-pub mod pending;
-pub mod settings;
+pub(crate) mod accounts;
+pub(crate) mod entries_cache;
+pub(crate) mod migrations;
+pub(crate) mod pending;
+pub(crate) mod settings;
 
 use crate::errors::AppError;
 use rusqlite::Connection;
 use std::path::Path;
 
-pub fn open(path: &Path) -> Result<Connection, AppError> {
+pub(crate) fn open(path: &Path) -> Result<Connection, AppError> {
     let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -17,7 +17,9 @@ pub fn open(path: &Path) -> Result<Connection, AppError> {
     Ok(conn)
 }
 
-pub fn open_in_memory() -> Result<Connection, AppError> {
+/// Test-only: every production path opens the on-disk database via [`open`].
+#[cfg(test)]
+pub(crate) fn open_in_memory() -> Result<Connection, AppError> {
     let conn = Connection::open_in_memory()?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     migrations::run(&conn)?;

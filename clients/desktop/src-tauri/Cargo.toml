@@ -16,7 +16,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [ "tray-icon"] }
+tauri = { version = "2", features = [ "tray-icon", "macos-private-api"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
@@ -43,7 +43,6 @@ async-trait = "0.1"
 sha2 = "0.10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-tauri = { version = "2", features = ["macos-private-api"] }
 keyring = { version = "3", default-features = false, features = ["apple-native"] }
 clipboard-master = "4"
 objc2 = "0.5"

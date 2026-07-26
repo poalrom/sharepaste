@@ -1,37 +1,40 @@
 use std::time::{Duration, Instant};
 
-pub const MAX_BYTES: usize = 64 * 1024;
-pub const SELF_WRITE_WINDOW: Duration = Duration::from_secs(1);
+pub(crate) const MAX_BYTES: usize = 64 * 1024;
+pub(crate) const SELF_WRITE_WINDOW: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SkipReason {
+pub(crate) enum SkipReason {
     Disabled,
     Transient,
     NonText,
     TooLarge,
     DenyList,
     SelfWrite,
+    Duplicate,
 }
 
-pub struct CaptureContext<'a> {
-    pub capture_enabled: bool,
-    pub deny_list: &'a [String],
-    pub frontmost_bundle_id: Option<&'a str>,
-    pub last_self_write: Option<(Instant, &'a str)>,
+pub(crate) struct CaptureContext<'a> {
+    pub(crate) capture_enabled: bool,
+    pub(crate) deny_list: &'a [String],
+    pub(crate) frontmost_bundle_id: Option<&'a str>,
+    pub(crate) last_self_write: Option<(Instant, &'a str)>,
+    /// Plaintext of the most recent capture that made it past this filter.
+    pub(crate) last_capture: Option<&'a str>,
 }
 
-pub trait PasteboardSniff {
+pub(crate) trait PasteboardSniff {
     fn types(&self) -> Vec<String>;
     fn read_text(&self) -> Option<String>;
 }
 
-#[derive(Debug)]
-pub enum FilterDecision {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FilterDecision {
     Capture(String),
     Skip(SkipReason),
 }
 
-pub fn evaluate(ctx: &CaptureContext<'_>, sniff: &dyn PasteboardSniff, now: Instant) -> FilterDecision {
+pub(crate) fn evaluate(ctx: &CaptureContext<'_>, sniff: &dyn PasteboardSniff, now: Instant) -> FilterDecision {
     if !ctx.capture_enabled {
         return FilterDecision::Skip(SkipReason::Disabled);
     }
@@ -58,6 +61,13 @@ pub fn evaluate(ctx: &CaptureContext<'_>, sniff: &dyn PasteboardSniff, now: Inst
             return FilterDecision::Skip(SkipReason::SelfWrite);
         }
     }
+    // Dedupe rule: a repeat of the immediately preceding capture is dropped
+    // outright. The alternative — bumping the existing entry back to the top —
+    // is deliberately not implemented: dropping keeps a repeat at zero cost
+    // (no encrypt, no upload, no server row, no cache slot).
+    if ctx.last_capture == Some(text.as_str()) {
+        return FilterDecision::Skip(SkipReason::Duplicate);
+    }
     FilterDecision::Capture(text)
 }
 
@@ -74,6 +84,7 @@ fn is_transient_type(t: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use SkipReason::*;
 
     struct Fake { types: Vec<String>, text: Option<String> }
     impl PasteboardSniff for Fake {
@@ -81,74 +92,55 @@ mod tests {
         fn read_text(&self) -> Option<String> { self.text.clone() }
     }
 
-    fn ctx_default<'a>() -> CaptureContext<'a> {
-        CaptureContext { capture_enabled: true, deny_list: &[], frontmost_bundle_id: None, last_self_write: None }
+    fn sniff(types: &[&str], text: Option<&str>) -> Fake {
+        Fake { types: types.iter().map(|t| (*t).to_string()).collect(), text: text.map(String::from) }
     }
 
+    fn ctx<'a>() -> CaptureContext<'a> {
+        CaptureContext { capture_enabled: true, deny_list: &[], frontmost_bundle_id: None, last_self_write: None, last_capture: None }
+    }
+
+    fn kept(text: &str) -> FilterDecision { FilterDecision::Capture(text.to_string()) }
+    fn dropped(reason: SkipReason) -> FilterDecision { FilterDecision::Skip(reason) }
+
     #[test]
-    fn captures_plain_text() {
-        let s = Fake { types: vec!["public.utf8-plain-text".into()], text: Some("hi".into()) };
-        match evaluate(&ctx_default(), &s, Instant::now()) {
-            FilterDecision::Capture(t) => assert_eq!(t, "hi"),
-            other => panic!("unexpected {other:?}"),
+    fn evaluate_decision_table() {
+        let deny = ["com.1Password.1Password".to_string()];
+        let oversized = "a".repeat(MAX_BYTES + 1);
+
+        // (label, context, what the pasteboard holds, expected decision)
+        let cases: &[(&str, CaptureContext<'_>, Fake, FilterDecision)] = &[
+            ("plain text is captured", ctx(), sniff(&["public.utf8-plain-text"], Some("hi")), kept("hi")),
+            ("capture disabled in settings", CaptureContext { capture_enabled: false, ..ctx() }, sniff(&[], Some("hi")), dropped(Disabled)),
+            ("transient type org.nspasteboard.ConcealedType", ctx(), sniff(&["org.nspasteboard.ConcealedType"], Some("hi")), dropped(Transient)),
+            ("transient type org.nspasteboard.TransientType", ctx(), sniff(&["org.nspasteboard.TransientType"], Some("hi")), dropped(Transient)),
+            ("transient type Concealed", ctx(), sniff(&["Concealed"], Some("hi")), dropped(Transient)),
+            ("transient type transient", ctx(), sniff(&["transient"], Some("hi")), dropped(Transient)),
+            ("pasteboard holds no text at all", ctx(), sniff(&[], None), dropped(NonText)),
+            ("pasteboard holds an empty string", ctx(), sniff(&[], Some("")), dropped(NonText)),
+            ("text one byte over the size cap", ctx(), sniff(&[], Some(&oversized)), dropped(TooLarge)),
+            ("frontmost app deny-listed, matched case-insensitively", CaptureContext { deny_list: &deny, frontmost_bundle_id: Some("com.1password.1password"), ..ctx() }, sniff(&[], Some("hi")), dropped(DenyList)),
+            ("first copy of a string, nothing captured before it", ctx(), sniff(&[], Some("hi")), kept("hi")),
+            ("same string copied again immediately is dropped", CaptureContext { last_capture: Some("hi"), ..ctx() }, sniff(&[], Some("hi")), dropped(Duplicate)),
+            ("same string copied again after a different capture is kept", CaptureContext { last_capture: Some("something else"), ..ctx() }, sniff(&[], Some("hi")), kept("hi")),
+            ("a different string after a capture is kept", CaptureContext { last_capture: Some("hi"), ..ctx() }, sniff(&[], Some("bye")), kept("bye")),
+        ];
+
+        for (label, ctx, sniff, expected) in cases {
+            let got = evaluate(ctx, sniff as &dyn PasteboardSniff, Instant::now());
+            assert_eq!(&got, expected, "case: {label}");
         }
     }
 
     #[test]
-    fn skips_when_disabled() {
-        let s = Fake { types: vec![], text: Some("hi".into()) };
-        let ctx = CaptureContext { capture_enabled: false, ..ctx_default() };
-        assert!(matches!(evaluate(&ctx, &s, Instant::now()), FilterDecision::Skip(SkipReason::Disabled)));
-    }
-
-    #[test]
-    fn skips_each_transient_type() {
-        for t in ["org.nspasteboard.ConcealedType", "org.nspasteboard.TransientType", "Concealed", "transient"] {
-            let s = Fake { types: vec![t.into()], text: Some("hi".into()) };
-            assert!(matches!(evaluate(&ctx_default(), &s, Instant::now()), FilterDecision::Skip(SkipReason::Transient)));
-        }
-    }
-
-    #[test]
-    fn skips_non_text() {
-        let s = Fake { types: vec![], text: None };
-        assert!(matches!(evaluate(&ctx_default(), &s, Instant::now()), FilterDecision::Skip(SkipReason::NonText)));
-    }
-
-    #[test]
-    fn skips_empty_text() {
-        let s = Fake { types: vec![], text: Some(String::new()) };
-        assert!(matches!(evaluate(&ctx_default(), &s, Instant::now()), FilterDecision::Skip(SkipReason::NonText)));
-    }
-
-    #[test]
-    fn skips_too_large() {
-        let big = "a".repeat(MAX_BYTES + 1);
-        let s = Fake { types: vec![], text: Some(big) };
-        assert!(matches!(evaluate(&ctx_default(), &s, Instant::now()), FilterDecision::Skip(SkipReason::TooLarge)));
-    }
-
-    #[test]
-    fn skips_deny_listed_app_case_insensitive() {
-        let s = Fake { types: vec![], text: Some("hi".into()) };
-        let deny = vec!["com.1Password.1Password".to_string()];
-        let ctx = CaptureContext { capture_enabled: true, deny_list: &deny, frontmost_bundle_id: Some("com.1password.1password"), last_self_write: None };
-        assert!(matches!(evaluate(&ctx, &s, Instant::now()), FilterDecision::Skip(SkipReason::DenyList)));
-    }
-
-    #[test]
-    fn skips_self_write_within_window() {
-        let s = Fake { types: vec![], text: Some("hi".into()) };
+    fn self_write_is_skipped_only_inside_the_window() {
+        let s = sniff(&[], Some("hi"));
         let now = Instant::now();
-        let ctx = CaptureContext { capture_enabled: true, deny_list: &[], frontmost_bundle_id: None, last_self_write: Some((now, "hi")) };
-        assert!(matches!(evaluate(&ctx, &s, now), FilterDecision::Skip(SkipReason::SelfWrite)));
-    }
 
-    #[test]
-    fn does_not_skip_self_write_after_window() {
-        let s = Fake { types: vec![], text: Some("hi".into()) };
-        let earlier = Instant::now() - SELF_WRITE_WINDOW * 2;
-        let ctx = CaptureContext { capture_enabled: true, deny_list: &[], frontmost_bundle_id: None, last_self_write: Some((earlier, "hi")) };
-        assert!(matches!(evaluate(&ctx, &s, Instant::now()), FilterDecision::Capture(_)));
+        let fresh = CaptureContext { last_self_write: Some((now, "hi")), ..ctx() };
+        assert_eq!(evaluate(&fresh, &s, now), dropped(SelfWrite));
+
+        let stale = CaptureContext { last_self_write: Some((now - SELF_WRITE_WINDOW * 2, "hi")), ..ctx() };
+        assert_eq!(evaluate(&stale, &s, now), kept("hi"));
     }
 }

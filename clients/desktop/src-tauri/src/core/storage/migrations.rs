@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 "#;
 
-pub fn run(conn: &Connection) -> Result<(), AppError> {
+pub(crate) fn run(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch(SCHEMA)?;
     Ok(())
 }

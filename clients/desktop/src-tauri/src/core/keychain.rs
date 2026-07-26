@@ -1,21 +1,24 @@
 use crate::errors::AppError;
+#[cfg(test)]
 use parking_lot::Mutex;
+#[cfg(test)]
 use std::collections::HashMap;
+#[cfg(test)]
 use std::sync::Arc;
 
 const SERVICE: &str = "sharepaste";
 
-pub trait Keychain: Send + Sync {
+pub(crate) trait Keychain: Send + Sync {
     fn put(&self, account: &str, secret: &str) -> Result<(), AppError>;
     fn get(&self, account: &str) -> Result<Option<String>, AppError>;
     fn delete(&self, account: &str) -> Result<(), AppError>;
 }
 
-pub fn user_key_account(user_id: &str) -> String { format!("{user_id}:key") }
-pub fn token_account(user_id: &str)    -> String { format!("{user_id}:token") }
+pub(crate) fn user_key_account(user_id: &str) -> String { format!("{user_id}:key") }
+pub(crate) fn token_account(user_id: &str)    -> String { format!("{user_id}:token") }
 
 #[derive(Default)]
-pub struct SystemKeychain;
+pub(crate) struct SystemKeychain;
 
 impl Keychain for SystemKeychain {
     fn put(&self, account: &str, secret: &str) -> Result<(), AppError> {
@@ -42,11 +45,13 @@ impl Keychain for SystemKeychain {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Default)]
-pub struct InMemoryKeychain {
+pub(crate) struct InMemoryKeychain {
     inner: Arc<Mutex<HashMap<String, String>>>,
 }
 
+#[cfg(test)]
 impl Keychain for InMemoryKeychain {
     fn put(&self, account: &str, secret: &str) -> Result<(), AppError> {
         self.inner.lock().insert(account.into(), secret.into());

@@ -1,3 +1,7 @@
+# Sharepaste desktop build — macOS only.
+# All targets below require macOS. Windows and Linux contributors should use:
+#   npm --prefix clients/desktop run build
+#
 # Sharepaste — top-level convenience targets.
 # macOS desktop app: build via Tauri, install to /Applications.
 

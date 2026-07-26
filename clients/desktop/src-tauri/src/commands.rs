@@ -1,7 +1,7 @@
 use crate::core::http::ServerClient;
 use crate::core::keychain::{token_account, user_key_account};
 use crate::core::pairing::invite::{claim_invite, persist_claimed_account};
-use crate::core::pairing::qr::{
+use crate::core::pairing::payload::{
     fetch_and_decrypt_pair_payload, secret_proof_hex, start_pair, upload_pair_payload,
 };
 use crate::core::pairing::shortcode::{decode as decode_shortcode, group_for_display};
@@ -9,8 +9,9 @@ use crate::core::storage::{accounts as accounts_repo, entries_cache, pending, se
 use crate::core::sync::ConnectionState;
 use crate::errors::AppError;
 use crate::events::{
-    AccountAdded, PairShortcode, ACCOUNT_ADDED, ACTIVE_CHANGED, HISTORY_CHANGED, PAIR_SHORTCODE,
+    AccountAdded, EntryView, PairShortcode, ACCOUNT_ADDED, ACTIVE_CHANGED, HISTORY_CHANGED, PAIR_SHORTCODE,
 };
+use crate::now_ms;
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -19,24 +20,14 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use zeroize::Zeroizing;
 
 #[derive(Serialize)]
-pub struct AccountSummary {
-    pub user_id: String,
-    pub device_id: String,
-    pub label: String,
-    pub server_url: String,
-    pub status: ConnectionState,
-    pub pending: i64,
-    pub is_active: bool,
-}
-
-#[derive(Serialize)]
-pub struct EntryViewDto {
-    pub id: i64,
-    pub user_id: String,
-    pub preview: String,
-    pub created_at: i64,
-    pub device_id: String,
-    pub device_label: Option<String>,
+pub(crate) struct AccountSummary {
+    pub(crate) user_id: String,
+    pub(crate) device_id: String,
+    pub(crate) label: String,
+    pub(crate) server_url: String,
+    pub(crate) status: ConnectionState,
+    pub(crate) pending: i64,
+    pub(crate) is_active: bool,
 }
 
 #[tauri::command]
@@ -69,16 +60,16 @@ pub async fn list_accounts(
 }
 
 #[derive(Deserialize)]
-pub struct PairWithInviteArgs {
-    pub server_url: String,
-    pub token: String,
-    pub device_label: String,
+pub(crate) struct PairWithInviteArgs {
+    pub(crate) server_url: String,
+    pub(crate) token: String,
+    pub(crate) device_label: String,
 }
 
 #[derive(Serialize)]
-pub struct PairWithInviteResp {
-    pub user_id: String,
-    pub device_id: String,
+pub(crate) struct PairWithInviteResp {
+    pub(crate) user_id: String,
+    pub(crate) device_id: String,
 }
 
 #[tauri::command]
@@ -117,14 +108,14 @@ pub async fn pair_with_invite(
 }
 
 #[derive(Deserialize)]
-pub struct PairStartArgs {
-    pub user_id: String,
+pub(crate) struct PairStartArgs {
+    pub(crate) user_id: String,
 }
 
 #[derive(Serialize)]
-pub struct PairStartResp {
-    pub code: String,
-    pub expires_at: i64,
+pub(crate) struct PairStartResp {
+    pub(crate) code: String,
+    pub(crate) expires_at: i64,
 }
 
 #[tauri::command]
@@ -203,15 +194,15 @@ pub async fn pair_start(
 }
 
 #[derive(Deserialize)]
-pub struct PairWithCodeArgs {
-    pub code: String,
-    pub device_label: String,
+pub(crate) struct PairWithCodeArgs {
+    pub(crate) code: String,
+    pub(crate) device_label: String,
 }
 
 #[derive(Serialize)]
-pub struct PairWithCodeResp {
-    pub user_id: String,
-    pub device_id: String,
+pub(crate) struct PairWithCodeResp {
+    pub(crate) user_id: String,
+    pub(crate) device_id: String,
 }
 
 #[tauri::command]
@@ -281,8 +272,8 @@ pub async fn pair_with_code(
 }
 
 #[derive(Deserialize)]
-pub struct UserScopedArgs {
-    pub user_id: String,
+pub(crate) struct UserScopedArgs {
+    pub(crate) user_id: String,
 }
 
 #[tauri::command]
@@ -297,8 +288,8 @@ pub async fn forget_account(
         .as_deref()
         == Some(args.user_id.as_str());
 
-    if let Some(slot) = state.sync_tasks.lock().remove(&args.user_id) {
-        slot.cancel.cancel();
+    if let Some(cancel) = state.sync_tasks.lock().remove(&args.user_id) {
+        cancel.cancel();
     }
     state.conn_states.lock().remove(&args.user_id);
 
@@ -329,25 +320,10 @@ pub async fn forget_account(
     result?;
 
     if let Some(uid) = new_active {
-        crate::spawn_sync(app.clone(), Arc::clone(state.inner()), uid).await;
+        crate::core::sync::session::run_session(app.clone(), Arc::clone(state.inner()), uid).await;
     }
 
     Ok(())
-}
-
-#[derive(Deserialize)]
-pub struct RevokeDeviceArgs {
-    pub user_id: String,
-    pub device_id: String,
-}
-
-#[tauri::command]
-pub async fn revoke_device(
-    args: RevokeDeviceArgs,
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), AppError> {
-    let m = state.registry.load_active_membership(&args.user_id).await?;
-    m.server.revoke_device(&args.device_id).await
 }
 
 #[tauri::command]
@@ -364,27 +340,28 @@ pub async fn set_active_account(
         },
     )
     .ok();
-    crate::spawn_sync(app.clone(), Arc::clone(state.inner()), args.user_id).await;
+    crate::core::sync::session::run_session(app.clone(), Arc::clone(state.inner()), args.user_id)
+        .await;
     Ok(())
 }
 
 #[derive(Deserialize)]
-pub struct ListHistoryArgs {
-    pub user_id: String,
-    pub before_id: Option<i64>,
-    pub limit: i64,
+pub(crate) struct ListHistoryArgs {
+    pub(crate) user_id: String,
+    pub(crate) before_id: Option<i64>,
+    pub(crate) limit: i64,
 }
 
 #[tauri::command]
 pub async fn list_history(
     args: ListHistoryArgs,
     state: State<'_, Arc<AppState>>,
-) -> Result<Vec<EntryViewDto>, AppError> {
+) -> Result<Vec<EntryView>, AppError> {
     let conn = state.conn.lock().await;
     let rows = entries_cache::list_recent(&conn, &args.user_id, args.before_id, args.limit)?;
     Ok(rows
         .into_iter()
-        .map(|r| EntryViewDto {
+        .map(|r| EntryView {
             id: r.id,
             user_id: r.user_id,
             preview: r.plaintext.unwrap_or_default(),
@@ -396,50 +373,9 @@ pub async fn list_history(
 }
 
 #[derive(Deserialize)]
-pub struct SearchHistoryArgs {
-    pub user_id: String,
-    pub query: String,
-    pub limit: i64,
-}
-
-#[tauri::command]
-pub async fn search_history(
-    args: SearchHistoryArgs,
-    state: State<'_, Arc<AppState>>,
-) -> Result<Vec<EntryViewDto>, AppError> {
-    let conn = state.conn.lock().await;
-    let rows = entries_cache::search(&conn, &args.user_id, &args.query, args.limit)?;
-    Ok(rows
-        .into_iter()
-        .map(|r| EntryViewDto {
-            id: r.id,
-            user_id: r.user_id,
-            preview: r
-                .plaintext
-                .as_deref()
-                .map(crate::core::sync::decryptor::build_preview)
-                .unwrap_or_default(),
-            created_at: r.created_at,
-            device_id: r.device_id,
-            device_label: None,
-        })
-        .collect())
-}
-
-#[derive(Deserialize)]
-pub struct EntryScopedArgs {
-    pub user_id: String,
-    pub entry_id: i64,
-}
-
-#[tauri::command]
-pub async fn get_entry_full(
-    args: EntryScopedArgs,
-    state: State<'_, Arc<AppState>>,
-) -> Result<String, AppError> {
-    let conn = state.conn.lock().await;
-    entries_cache::get_full(&conn, &args.user_id, args.entry_id)?
-        .ok_or_else(|| AppError::NotFound("plaintext unavailable".into()))
+pub(crate) struct EntryScopedArgs {
+    pub(crate) user_id: String,
+    pub(crate) entry_id: i64,
 }
 
 fn set_clipboard_text_with_self_write_guard<F>(
@@ -536,6 +472,7 @@ pub async fn update_settings(
     app: AppHandle,
 ) -> Result<settings::Settings, AppError> {
     let mut hotkey_changed: Option<Option<String>> = None;
+    let mut autostart_changed: Option<bool> = None;
     let s = {
         let conn = state.conn.lock().await;
         let mut s = settings::load(&conn)?;
@@ -549,6 +486,9 @@ pub async fn update_settings(
                 .collect();
         }
         if let Some(v) = patch.get("autostart").and_then(|v| v.as_bool()) {
+            if v != s.autostart {
+                autostart_changed = Some(v);
+            }
             s.autostart = v;
         }
         if let Some(v) = patch.get("hotkey") {
@@ -570,40 +510,19 @@ pub async fn update_settings(
             tracing::warn!(err = %e, "re-register hotkey failed");
         }
     }
+    // The choice is already persisted above; a failed login-item write is logged
+    // and swallowed so the user does not silently lose the setting.
+    if let Some(enabled) = autostart_changed {
+        if let Err(e) = crate::set_autostart(&app, enabled) {
+            tracing::warn!(err = %e, enabled, "update autostart registration failed");
+        }
+    }
     Ok(s)
 }
 
-#[derive(Serialize)]
-pub struct StatusResp {
-    pub state: ConnectionState,
-    pub pending_count: i64,
-    pub last_error: Option<String>,
-}
-
-#[tauri::command]
-pub async fn get_status(
-    args: UserScopedArgs,
-    state: State<'_, Arc<AppState>>,
-) -> Result<StatusResp, AppError> {
-    let conn = state.conn.lock().await;
-    let count = pending::count(&conn, &args.user_id)?;
-    drop(conn);
-    let st = state
-        .conn_states
-        .lock()
-        .get(&args.user_id)
-        .copied()
-        .unwrap_or(ConnectionState::Disconnected);
-    Ok(StatusResp {
-        state: st,
-        pending_count: count,
-        last_error: None,
-    })
-}
-
 #[derive(Deserialize)]
-pub struct OpenMainWindowArgs {
-    pub section: String,
+pub(crate) struct OpenMainWindowArgs {
+    pub(crate) section: String,
 }
 
 #[tauri::command]
@@ -636,15 +555,8 @@ async fn activate_and_sync(app: &AppHandle, state: &Arc<AppState>, user_id: &str
             user_id: Some(user_id.to_string()),
         },
     );
-    crate::spawn_sync(app.clone(), Arc::clone(state), user_id.to_string()).await;
-}
-
-fn now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    crate::core::sync::session::run_session(app.clone(), Arc::clone(state), user_id.to_string())
+        .await;
 }
 
 #[cfg(test)]
@@ -685,17 +597,5 @@ mod tests {
 
         assert!(matches!(err, AppError::Storage(_)));
         assert!(last_self_write.lock().is_none());
-    }
-
-    #[test]
-    fn open_main_window_args_rejects_unknown_section() {
-        let valid_sections = ["accounts", "settings", "pairing"];
-        let test_cases = ["", "  ", "history", "Accounts", "ACCOUNTS"];
-        for s in test_cases {
-            assert!(
-                !valid_sections.contains(&s),
-                "test fixture must not collide with valid sections: {s}",
-            );
-        }
     }
 }

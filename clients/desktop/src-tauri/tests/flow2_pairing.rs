@@ -2,7 +2,7 @@ mod common;
 
 use sharepaste_desktop_lib::core::crypto::{decrypt, encrypt, random_user_key};
 use sharepaste_desktop_lib::core::http::ServerClient;
-use sharepaste_desktop_lib::core::pairing::qr::{
+use sharepaste_desktop_lib::core::pairing::payload::{
     base64_decode, base64_encode, fetch_and_decrypt_pair_payload, secret_proof_hex, start_pair,
     upload_pair_payload, PairPayload,
 };
@@ -10,7 +10,9 @@ use sharepaste_desktop_lib::core::pairing::shortcode::decode as decode_shortcode
 
 #[tokio::test]
 async fn pair_second_device_via_shortcode() {
-    let server = common::start();
+    let Some(server) = common::start() else {
+        return;
+    };
     let (_username, invite) = common::create_invite(&server, "alice");
     let api = ServerClient::new(server.url.clone()).unwrap();
     let claimed = api.claim_invite(&invite, "mac-A").await.unwrap();

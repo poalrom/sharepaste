@@ -1,4 +1,4 @@
-import { useMemo, useEffect } from "react";
+import { useMemo, useEffect, useRef } from "react";
 import { useHistoryStore, useUiStore, useAccountsStore } from "../store";
 import { cmd } from "../ipc/commands";
 import EntryRow from "./EntryRow";
@@ -16,9 +16,18 @@ export default function HistoryList() {
     return entries.filter((e) => e.preview.toLowerCase().includes(needle));
   }, [entries, search]);
 
+  const selectedRef = useRef<HTMLLIElement | null>(null);
+
+  useEffect(() => {
+    selectedRef.current?.scrollIntoView({ block: "nearest" });
+  }, [selectedIndex, filtered.length]);
+
   useEffect(() => {
     const handler = async (e: KeyboardEvent) => {
       if (!active) return;
+      // Focus can legitimately sit on the footer Accounts/Settings buttons or a
+      // row's delete control; let those own their own Enter/space handling.
+      if (e.target instanceof HTMLElement && e.target.closest("button")) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setSelectedIndex(Math.min(filtered.length - 1, selectedIndex + 1));
@@ -47,7 +56,7 @@ export default function HistoryList() {
   return (
     <ul className="flex-1 overflow-auto">
       {filtered.map((e, i) => (
-        <EntryRow key={e.id} entry={e} selected={i === selectedIndex} />
+        <EntryRow key={e.id} entry={e} selected={i === selectedIndex} ref={i === selectedIndex ? selectedRef : undefined} />
       ))}
     </ul>
   );

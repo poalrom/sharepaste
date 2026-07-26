@@ -44,8 +44,26 @@ npm.cmd --prefix ui install
 npm.cmd run dev
 ```
 
-`SHAREPASTE_DATA_DIR=/tmp/sp1 npm run dev` runs an isolated profile so you can
-launch a second instance and test multi-account / pairing on one machine.
+`SHAREPASTE_DATA_DIR=/tmp/sp-a npm run dev` runs an isolated profile.
+
+To run **two** instances at once (multi-account, pairing), do not run `npm run dev`
+twice: Vite is pinned to port 1420 with `strictPort`, so the second aborts with
+`Port 1420 is already in use`. Start one dev server, then launch the other
+instances straight from the binary it built — they reuse that dev server, because
+`devUrl` is baked into the config at compile time.
+
+```sh
+# terminal 1 - instance A, and the only dev server
+SHAREPASTE_DATA_DIR=/tmp/sp-a npm run dev
+
+# terminal 2 - instance B, reusing A's dev server (add .exe on Windows)
+SHAREPASTE_DATA_DIR=/tmp/sp-b src-tauri/target/debug/sharepaste-desktop
+```
+
+Only the first instance wins the global hotkey; the rest log
+`register global shortcut failed: HotKey already registered` and carry on. Each
+instance gets its own tray icon, appended in launch order, so the last icon is the
+instance you started most recently.
 
 ## Build
 
@@ -56,9 +74,8 @@ npm run build
 macOS output: `src-tauri/target/release/bundle/macos/sharepaste.app`
 and a `.dmg` alongside.
 
-Windows output depends on the selected Tauri bundle target. For the first
-Windows pass, `cargo check` and `npm.cmd run tauri dev` are the supported
-compile/launch checks.
+Windows output: a standalone NSIS installer `.exe`.
+For local development, `npm.cmd run tauri dev` and `cargo check --manifest-path src-tauri/Cargo.toml` suffice for iteration.
 
 ## Install (unsigned)
 
@@ -82,17 +99,26 @@ open /Applications/sharepaste.app
 ## macOS manual smoke checklist
 
 1. `npm run dev` — tray icon appears, no Dock icon, no menu bar.
-2. Open the popover, click **Pair a device**, claim an invite against a local
-   server, copy text in any app, see entry appear in the popover.
+2. Right-click the tray icon (left-click toggles the popover) → **Pair device…**
+   → **I have an invite token**, claim it against a local server, copy text in
+   any app, see the entry appear in the popover.
 3. Pair a second instance via the short code path:
-   - Run a second instance with `SHAREPASTE_DATA_DIR=/tmp/sp-b npm run dev`.
-   - From instance A, choose **Pair a device → I want to pair another device**.
-   - Paste the displayed code into instance B.
+   - Launch instance B from the built binary, not a second `npm run dev` — see
+     the two-instance recipe under Dev workflow.
+   - Instance A: tray → **Pair device…** → **I want to pair another device**.
+   - Enter the displayed code in instance B → **Pair**.
+   - Both must advance to the paired state. Instance A only does so if it
+     receives the `pair-claimed` event, which is the ACL regression guarded by
+     `acl-tests` and `capability_guard`.
    - Confirm both popovers see entries from each other.
 4. Revoke instance A from the server CLI; instance A's tray flips red and the
    popover shows the **Re-pair this device** banner.
 5. Toggle **Capture clipboard changes** off; copying does nothing. Toggle on,
-   copy a 1Password password (concealed flag), confirm a `capture-skipped`
-   toast and that nothing reaches the server.
+   copy a 1Password password (concealed flag), and verify that nothing reaches the server.
 6. Force-quit during an offline-pending burst, restart; verify the pending
    queue flushes once connectivity returns.
+
+## Build tools
+
+The root `Makefile` provides macOS-only convenience targets. On Windows or Linux, use npm directly:
+`npm --prefix clients/desktop run build` or other scripts from `clients/desktop/package.json`.

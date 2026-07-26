@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum ServerEvent {
+pub(crate) enum ServerEvent {
     Entry {
         id: i64,
         ciphertext: String,
@@ -19,7 +19,7 @@ pub enum ServerEvent {
     Delete { id: i64 },
 }
 
-pub async fn run(
+pub(crate) async fn run(
     server: ServerClient,
     sink: Sender<ServerEvent>,
     cancel: CancellationToken,

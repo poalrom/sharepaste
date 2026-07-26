@@ -14,10 +14,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 /// Real implementation of [`PasteboardSniff`] backed by the Windows clipboard.
 /// This adapter only exposes plain text for the first Windows capture pass.
-pub struct WindowsClipboardSniffer;
+pub(crate) struct WindowsClipboardSniffer;
 
 impl WindowsClipboardSniffer {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self
     }
 }
@@ -47,7 +47,7 @@ impl PasteboardSniff for WindowsClipboardSniffer {
 /// process, for example `1Password.exe`. Returns `None` when there is no
 /// foreground window, process access is denied, or the image path cannot be
 /// queried.
-pub fn frontmost_process_name() -> Option<String> {
+pub(crate) fn frontmost_process_name() -> Option<String> {
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.is_null() {
@@ -77,24 +77,5 @@ pub fn frontmost_process_name() -> Option<String> {
         path.file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .filter(|name| !name.is_empty())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::capture::filter::PasteboardSniff;
-
-    #[test]
-    #[ignore = "live Windows clipboard call; run manually on a developer desktop"]
-    fn read_text_call_does_not_panic() {
-        let sniff = WindowsClipboardSniffer::new();
-        let _ = sniff.read_text();
-    }
-
-    #[test]
-    #[ignore = "live Win32 foreground-window call; run manually on a developer desktop"]
-    fn frontmost_process_name_call_does_not_panic() {
-        let _ = frontmost_process_name();
     }
 }

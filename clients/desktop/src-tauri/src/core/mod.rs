@@ -1,10 +1,10 @@
 //! Pure-Rust core for sharepaste-desktop.
 
-pub mod account;
-pub mod capture;
+pub(crate) mod account;
+pub(crate) mod capture;
 pub mod crypto;
 pub mod http;
-pub mod keychain;
+pub(crate) mod keychain;
 pub mod pairing;
-pub mod storage;
-pub mod sync;
+pub(crate) mod storage;
+pub(crate) mod sync;

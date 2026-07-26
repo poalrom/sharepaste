@@ -1,4 +1,4 @@
-use crate::core::pairing::qr::base64_encode;
+use crate::core::pairing::payload::base64_encode;
 use crate::core::storage::pending;
 use crate::errors::AppError;
 use async_trait::async_trait;
@@ -8,25 +8,25 @@ use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
 
 #[async_trait]
-pub trait UploadTransport: Send + Sync {
+pub(crate) trait UploadTransport: Send + Sync {
     async fn upload(&self, ciphertext_b64: &str) -> Result<i64, AppError>;
 }
 
-pub struct UploaderEvents {
-    pub on_pending_count: Box<dyn Fn(i64) + Send + Sync>,
-    pub on_auth_failed: Box<dyn Fn() + Send + Sync>,
+pub(crate) struct UploaderEvents {
+    pub(crate) on_pending_count: Box<dyn Fn(i64) + Send + Sync>,
+    pub(crate) on_auth_failed: Box<dyn Fn() + Send + Sync>,
 }
 
-pub struct Uploader {
-    pub user_id: String,
-    pub conn: Arc<Mutex<Connection>>,
-    pub transport: Arc<dyn UploadTransport>,
-    pub trigger: Arc<Notify>,
-    pub events: UploaderEvents,
+pub(crate) struct Uploader {
+    pub(crate) user_id: String,
+    pub(crate) conn: Arc<Mutex<Connection>>,
+    pub(crate) transport: Arc<dyn UploadTransport>,
+    pub(crate) trigger: Arc<Notify>,
+    pub(crate) events: UploaderEvents,
 }
 
 impl Uploader {
-    pub async fn run(self, cancel: CancellationToken) {
+    pub(crate) async fn run(self, cancel: CancellationToken) {
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => return,

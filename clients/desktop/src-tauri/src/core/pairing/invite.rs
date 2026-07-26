@@ -5,15 +5,15 @@ use crate::core::storage::accounts::{upsert as upsert_account, Account};
 use crate::errors::AppError;
 use rusqlite::Connection;
 
-pub struct ClaimedAccount {
-    pub user_id: String,
-    pub device_id: String,
-    pub device_token: String,
-    pub server_url: String,
-    pub user_key: UserKey,
+pub(crate) struct ClaimedAccount {
+    pub(crate) user_id: String,
+    pub(crate) device_id: String,
+    pub(crate) device_token: String,
+    pub(crate) server_url: String,
+    pub(crate) user_key: UserKey,
 }
 
-pub async fn claim_invite(
+pub(crate) async fn claim_invite(
     server: &ServerClient,
     token: &str,
     device_label: &str,
@@ -28,7 +28,7 @@ pub async fn claim_invite(
     })
 }
 
-pub fn persist_claimed_account(
+pub(crate) fn persist_claimed_account(
     conn: &Connection,
     keychain: &dyn Keychain,
     claimed: &ClaimedAccount,
@@ -52,7 +52,7 @@ pub mod hex {
     use crate::core::crypto::UserKey;
     use zeroize::Zeroizing;
 
-    pub fn encode_user_key(k: &UserKey) -> Zeroizing<String> {
+    pub(crate) fn encode_user_key(k: &UserKey) -> Zeroizing<String> {
         let mut s = String::with_capacity(k.len() * 2);
         for b in k.iter() {
             use std::fmt::Write;

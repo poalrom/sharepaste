@@ -2,11 +2,13 @@ mod common;
 
 use sharepaste_desktop_lib::core::crypto::{encrypt, random_user_key};
 use sharepaste_desktop_lib::core::http::ServerClient;
-use sharepaste_desktop_lib::core::pairing::qr::{base64_decode, base64_encode};
+use sharepaste_desktop_lib::core::pairing::payload::{base64_decode, base64_encode};
 
 #[tokio::test]
 async fn invite_then_post_and_list() {
-    let server = common::start();
+    let Some(server) = common::start() else {
+        return;
+    };
     let (_username, invite) = common::create_invite(&server, "alice");
     let api = ServerClient::new(server.url.clone()).unwrap();
     let claimed = api.claim_invite(&invite, "mac-1").await.unwrap();

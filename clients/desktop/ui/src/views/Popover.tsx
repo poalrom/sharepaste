@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useAccountsStore, useHistoryStore, useStatusStore, useUiStore } from "../store";
 import { cmd } from "../ipc/commands";
 import { events } from "../ipc/events";
@@ -14,6 +14,7 @@ export default function Popover() {
   const addEntry = useHistoryStore((s) => s.add);
   const removeEntry = useHistoryStore((s) => s.remove);
   const setStatus = useStatusStore((s) => s.set);
+  const [decryptionError, setDecryptionError] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -73,6 +74,13 @@ export default function Popover() {
           hydrateHistory([]);
         }
       }));
+      unsub.push(await events.onHistoryChanged(({ user_id }) => {
+        if (user_id !== useAccountsStore.getState().active) return;
+        cmd.listHistory({ user_id, limit: 100 }).then(hydrateHistory).catch(() => {});
+      }));
+      unsub.push(await events.onDecryptionError(({ entry_id }) => {
+        setDecryptionError(`Could not decrypt entry #${entry_id}.`);
+      }));
     })();
     return () => {
       cancelled = true;
@@ -112,6 +120,21 @@ export default function Popover() {
   return (
     <div className="flex h-full flex-col">
       <Search />
+      {decryptionError && (
+        <div
+          data-testid="decryption-error"
+          className="flex items-center justify-between gap-2 border-b border-zinc-700 px-3 py-1 text-xs text-red-400"
+        >
+          <span className="truncate">{decryptionError}</span>
+          <button
+            aria-label="Dismiss decryption error"
+            className="shrink-0 rounded px-1 text-zinc-400 hover:text-zinc-200"
+            onClick={() => setDecryptionError(undefined)}
+          >
+            ×
+          </button>
+        </div>
+      )}
       <HistoryList />
       <Footer activeUserId={active!} />
     </div>

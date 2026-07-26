@@ -1,4 +1,3 @@
-use crate::config::Paths;
 use crate::core::account::AccountRegistry;
 use crate::core::keychain::Keychain;
 use crate::core::sync::ConnectionState;
@@ -9,32 +8,27 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-pub struct SyncSlot {
-    pub user_id: String,
-    pub cancel: CancellationToken,
-}
-
-pub struct AppState {
-    pub paths: Paths,
-    pub conn: Arc<tokio::sync::Mutex<Connection>>,
-    pub keychain: Arc<dyn Keychain>,
-    pub registry: Arc<AccountRegistry>,
-    pub sync_tasks: Mutex<HashMap<String, SyncSlot>>,
-    pub upload_triggers: Mutex<HashMap<String, Arc<Notify>>>,
-    pub conn_states: Mutex<HashMap<String, ConnectionState>>,
-    pub last_self_write: Mutex<Option<(std::time::Instant, String)>>,
-    pub last_tray_rect: Mutex<Option<tauri::Rect>>,
+pub(crate) struct AppState {
+    pub(crate) conn: Arc<tokio::sync::Mutex<Connection>>,
+    pub(crate) keychain: Arc<dyn Keychain>,
+    pub(crate) registry: Arc<AccountRegistry>,
+    pub(crate) sync_tasks: Mutex<HashMap<String, CancellationToken>>,
+    pub(crate) upload_triggers: Mutex<HashMap<String, Arc<Notify>>>,
+    pub(crate) conn_states: Mutex<HashMap<String, ConnectionState>>,
+    pub(crate) last_self_write: Mutex<Option<(std::time::Instant, String)>>,
+    /// Plaintext of the last clipboard capture that was enqueued, used to drop
+    /// consecutive duplicates before they cost an encrypt, upload or server row.
+    pub(crate) last_capture: Mutex<Option<String>>,
+    pub(crate) last_tray_rect: Mutex<Option<tauri::Rect>>,
 }
 
 impl AppState {
-    pub fn new(
-        paths: Paths,
+    pub(crate) fn new(
         conn: Arc<tokio::sync::Mutex<Connection>>,
         keychain: Arc<dyn Keychain>,
         registry: Arc<AccountRegistry>,
     ) -> Self {
         Self {
-            paths,
             conn,
             keychain,
             registry,
@@ -42,6 +36,7 @@ impl AppState {
             upload_triggers: Mutex::new(HashMap::new()),
             conn_states: Mutex::new(HashMap::new()),
             last_self_write: Mutex::new(None),
+            last_capture: Mutex::new(None),
             last_tray_rect: Mutex::new(None),
         }
     }

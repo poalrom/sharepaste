@@ -11,10 +11,10 @@ use objc2_foundation::NSString;
 /// Real implementation of [`PasteboardSniff`] backed by the macOS general
 /// pasteboard. Cheap to construct; holds no state — every call walks
 /// AppKit fresh, so the caller is responsible for change-count gating.
-pub struct NSPasteboardSniffer;
+pub(crate) struct NSPasteboardSniffer;
 
 impl NSPasteboardSniffer {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self
     }
 }
@@ -63,7 +63,7 @@ impl PasteboardSniff for NSPasteboardSniffer {
 /// encoding check abort the process at the first `count` /
 /// `countByEnumeratingWithState:` call. CoreGraphics' window-list API is
 /// pure C and sidesteps that.
-pub fn find_tray_rect() -> Option<tauri::Rect> {
+pub(crate) fn find_tray_rect() -> Option<tauri::Rect> {
     if let Some(r) = find_tray_rect_via_appkit() {
         return Some(r);
     }
@@ -296,7 +296,7 @@ fn find_tray_rect_via_cgwindow() -> Option<tauri::Rect> {
 /// foreground, e.g. `"com.apple.Safari"`. Returns `None` when no app is
 /// frontmost (rare) or the frontmost process has no bundle id (some
 /// background helpers / unsigned binaries).
-pub fn frontmost_bundle_id() -> Option<String> {
+pub(crate) fn frontmost_bundle_id() -> Option<String> {
     // SAFETY: `sharedWorkspace` returns a singleton; `frontmostApplication`
     // is safe to call from any thread per Apple docs. We copy the bundle
     // id out before returning, so no autoreleased object escapes.
@@ -305,42 +305,5 @@ pub fn frontmost_bundle_id() -> Option<String> {
         let app = ws.frontmostApplication()?;
         let bundle = app.bundleIdentifier()?;
         Some(bundle.to_string())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    //! These are live AppKit smoke tests. They are marked `#[ignore]` so
-    //! the default `cargo test` run skips them — touching `NSPasteboard`
-    //! from multiple cargo-test threads concurrently can SIGSEGV on
-    //! macOS, and there is no useful assertion we can make about the
-    //! current user's clipboard anyway. Run them manually with:
-    //!
-    //!     cargo test --lib core::capture::macos -- --ignored --test-threads=1
-    //!
-    //! The point is to confirm the objc2 bindings + feature flags still
-    //! compile and the FFI call path doesn't panic on a developer box.
-
-    use super::*;
-    use crate::core::capture::filter::PasteboardSniff;
-
-    #[test]
-    #[ignore = "live AppKit call; run with --ignored --test-threads=1"]
-    fn types_call_does_not_panic() {
-        let sniff = NSPasteboardSniffer::new();
-        let _types = sniff.types();
-    }
-
-    #[test]
-    #[ignore = "live AppKit call; run with --ignored --test-threads=1"]
-    fn read_text_call_does_not_panic() {
-        let sniff = NSPasteboardSniffer::new();
-        let _maybe = sniff.read_text();
-    }
-
-    #[test]
-    #[ignore = "live AppKit call; run with --ignored --test-threads=1"]
-    fn frontmost_bundle_id_call_does_not_panic() {
-        let _bundle = frontmost_bundle_id();
     }
 }

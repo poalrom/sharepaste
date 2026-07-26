@@ -2,16 +2,16 @@ use crate::errors::AppError;
 use rusqlite::{params, Connection, OptionalExtension};
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Account {
-    pub user_id: String,
-    pub device_id: String,
-    pub device_label: String,
-    pub server_url: String,
-    pub last_seen_id: i64,
-    pub created_at: i64,
+pub(crate) struct Account {
+    pub(crate) user_id: String,
+    pub(crate) device_id: String,
+    pub(crate) device_label: String,
+    pub(crate) server_url: String,
+    pub(crate) last_seen_id: i64,
+    pub(crate) created_at: i64,
 }
 
-pub fn upsert(conn: &Connection, a: &Account) -> Result<(), AppError> {
+pub(crate) fn upsert(conn: &Connection, a: &Account) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO accounts (user_id, device_id, device_label, server_url, last_seen_id, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -24,7 +24,7 @@ pub fn upsert(conn: &Connection, a: &Account) -> Result<(), AppError> {
     Ok(())
 }
 
-pub fn list(conn: &Connection) -> Result<Vec<Account>, AppError> {
+pub(crate) fn list(conn: &Connection) -> Result<Vec<Account>, AppError> {
     let mut stmt = conn.prepare(
         "SELECT user_id, device_id, device_label, server_url, last_seen_id, created_at
          FROM accounts ORDER BY created_at ASC"
@@ -38,7 +38,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Account>, AppError> {
     Ok(rows)
 }
 
-pub fn find(conn: &Connection, user_id: &str) -> Result<Option<Account>, AppError> {
+pub(crate) fn find(conn: &Connection, user_id: &str) -> Result<Option<Account>, AppError> {
     let row = conn
         .query_row(
             "SELECT user_id, device_id, device_label, server_url, last_seen_id, created_at
@@ -53,7 +53,7 @@ pub fn find(conn: &Connection, user_id: &str) -> Result<Option<Account>, AppErro
     Ok(row)
 }
 
-pub fn set_last_seen(conn: &Connection, user_id: &str, last_seen_id: i64) -> Result<(), AppError> {
+pub(crate) fn set_last_seen(conn: &Connection, user_id: &str, last_seen_id: i64) -> Result<(), AppError> {
     let n = conn.execute(
         "UPDATE accounts SET last_seen_id = ?2 WHERE user_id = ?1",
         params![user_id, last_seen_id],
@@ -64,7 +64,7 @@ pub fn set_last_seen(conn: &Connection, user_id: &str, last_seen_id: i64) -> Res
     Ok(())
 }
 
-pub fn delete(conn: &Connection, user_id: &str) -> Result<usize, AppError> {
+pub(crate) fn delete(conn: &Connection, user_id: &str) -> Result<usize, AppError> {
     let n = conn.execute("DELETE FROM accounts WHERE user_id = ?1", params![user_id])?;
     Ok(n)
 }

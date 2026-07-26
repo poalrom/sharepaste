@@ -3,7 +3,7 @@ use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-pub fn init(log_dir: &Path) -> WorkerGuard {
+pub(crate) fn init(log_dir: &Path) -> WorkerGuard {
     let _ = std::fs::create_dir_all(log_dir);
     let appender = tracing_appender::rolling::daily(log_dir, "desktop.log");
     let (writer, guard) = tracing_appender::non_blocking(appender);

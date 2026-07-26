@@ -1,10 +1,10 @@
-pub mod filter;
+pub(crate) mod filter;
 
 #[cfg(target_os = "macos")]
-pub mod macos;
+pub(crate) mod macos;
 
 #[cfg(target_os = "windows")]
-pub mod windows;
+pub(crate) mod windows;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-pub mod watcher;
+pub(crate) mod watcher;

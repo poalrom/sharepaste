@@ -13,3 +13,11 @@ clients/desktop/src-tauri/gen/
 clients/desktop/ui/dist/
 clients/desktop/ui/node_modules/
 clients/desktop/node_modules/
+
+# Stray cargo target dirs (agents may set CARGO_TARGET_DIR from the repo root)
+/target/
+clients/desktop/acl-tests/target/
+
+# Manual-test profiles (see clients/desktop/README.md two-instance recipe)
+tmp-*/
+tmp-*.sqlite*

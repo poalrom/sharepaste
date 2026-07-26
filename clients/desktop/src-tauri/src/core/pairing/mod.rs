@@ -1,3 +1,3 @@
 pub mod invite;
-pub mod qr;
+pub mod payload;
 pub mod shortcode;
