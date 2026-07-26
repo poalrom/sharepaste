@@ -5,6 +5,7 @@ coverage/
 .env
 .env.*
 .superpowers/
+.scratch/
 db/
 server/node_modules/
 server/dist/
