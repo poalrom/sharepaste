@@ -73,6 +73,7 @@ export default function HistoryList() {
           selected={i === selectedIndex}
           ownDeviceId={ownDeviceId}
           now={now}
+          onPoint={() => setSelectedIndex(i)}
           ref={i === selectedIndex ? selectedRef : undefined}
         />
       ))}

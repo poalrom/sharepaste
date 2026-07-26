@@ -62,9 +62,16 @@ describe("HistoryList", () => {
     });
   });
 
+  // Controls live only on the addressed row, so a mouse delete is always two
+  // motions: point at the row, then hit its ✕. Pointing is what addresses it.
+  const pointAtDeleteFor = (rowIndex: number, entryId: number) => {
+    fireEvent.mouseMove(screen.getAllByTestId("entry-row")[rowIndex]!);
+    fireEvent.click(screen.getByTestId(`delete-entry-${entryId}`));
+  };
+
   it("deletes an entry without copying it and drops it from the store", async () => {
     render(<HistoryList />);
-    fireEvent.click(screen.getByTestId("delete-entry-2"));
+    pointAtDeleteFor(1, 2);
     await waitFor(() => {
       expect(ipc.invoke).toHaveBeenCalledWith("delete_entry", { args: { user_id: "u", entry_id: 2 } });
     });
@@ -75,6 +82,16 @@ describe("HistoryList", () => {
     expect(screen.getAllByTestId("entry-row")).toHaveLength(1);
   });
 
+  it("addresses the row the pointer moves over", () => {
+    render(<HistoryList />);
+    const rows = screen.getAllByTestId("entry-row");
+    expect(rows[0]).toHaveAttribute("data-selected", "true");
+
+    fireEvent.mouseMove(rows[1]!);
+    expect(screen.getAllByTestId("entry-row")[1]).toHaveAttribute("data-selected", "true");
+    expect(screen.getAllByTestId("entry-row")[0]).toHaveAttribute("data-selected", "false");
+  });
+
   it("keeps the row in the list when delete fails", async () => {
     ipc.invoke.mockImplementation(async (command) => {
       if (command === "delete_entry") throw new Error("nope");
@@ -82,7 +99,7 @@ describe("HistoryList", () => {
     });
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     render(<HistoryList />);
-    fireEvent.click(screen.getByTestId("delete-entry-2"));
+    pointAtDeleteFor(1, 2);
     await waitFor(() => expect(err).toHaveBeenCalled());
     expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([1, 2]);
     err.mockRestore();

@@ -14,6 +14,8 @@ export type EntryRowProps = {
   ownDeviceId: string | undefined;
   /** The list's single clock, so a full page of rows does not run a timer each. */
   now: number;
+  /** Pointing at a row addresses it, so the controls are always one motion away. */
+  onPoint: () => void;
 };
 
 /**
@@ -65,7 +67,7 @@ export async function deleteEntry(entry: EntryView): Promise<void> {
 }
 
 const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
-  { entry, index, selected, ownDeviceId, now },
+  { entry, index, selected, ownDeviceId, now, onPoint },
   ref,
 ) {
   // Nothing on the wire flags it: a NULL plaintext arrives as an empty preview.
@@ -77,7 +79,10 @@ const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
       ref={ref}
       data-testid="entry-row"
       data-selected={selected}
-      className="fui-row group flex cursor-default items-center gap-2 px-3"
+      className="fui-row flex cursor-default items-center gap-2 px-3"
+      // Movement, not enter: keyboard nav scrolls rows under a resting pointer,
+      // and mouseenter would fire on that and snatch the selection back.
+      onMouseMove={onPoint}
       onClick={() => void copyEntry(entry, { keepOpen: false })}
     >
       {/* Dim measures 4.35:1 on the selected background, just under (plan §1). */}
@@ -122,36 +127,41 @@ const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
         </span>
       )}
 
-      {/* Reserved rather than swapped in on hover, so the meta never reflows (plan §1.5). */}
-      <span
-        className={`flex w-11 shrink-0 items-center justify-end gap-1 transition-opacity duration-fast group-focus-within:opacity-100 group-hover:opacity-100 ${selected ? "opacity-100" : "opacity-0"}`}
-      >
-        {!undecryptable && (
+      {/*
+        Only the addressed row carries controls. Reserving the column on every
+        row would leave a 44px hole to the right of every timestamp, and paying
+        for it in opacity left two invisible-but-clickable buttons on each
+        unaddressed row.
+      */}
+      {selected && (
+        <span className="flex shrink-0 items-center gap-1">
+          {!undecryptable && (
+            <IconButton
+              label="Copy and keep open"
+              title="Copy and keep open"
+              className="text-data"
+              onClick={(e) => {
+                e.stopPropagation();
+                void copyEntry(entry, { keepOpen: true });
+              }}
+            >
+              ⧉
+            </IconButton>
+          )}
           <IconButton
-            label="Copy and keep open"
-            title="Copy and keep open"
+            label="Delete entry"
+            tone="alert"
+            testId={`delete-entry-${entry.id}`}
             className="text-data"
             onClick={(e) => {
               e.stopPropagation();
-              void copyEntry(entry, { keepOpen: true });
+              void deleteEntry(entry);
             }}
           >
-            ⧉
+            ✕
           </IconButton>
-        )}
-        <IconButton
-          label="Delete entry"
-          tone="alert"
-          testId={`delete-entry-${entry.id}`}
-          className="text-data"
-          onClick={(e) => {
-            e.stopPropagation();
-            void deleteEntry(entry);
-          }}
-        >
-          ✕
-        </IconButton>
-      </span>
+        </span>
+      )}
     </li>
   );
 });

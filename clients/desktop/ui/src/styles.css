@@ -193,7 +193,8 @@ body[data-route="popover"] {
     box-shadow: inset 2px 0 0 0 var(--cyan-500);
   }
 
-  .fui-row[data-selected="false"]:hover { background: var(--surface-hover); }
+  /* No hover tint: pointing at a row selects it, so a hovered-but-unselected
+     row is not a state the list can be in. */
 
   .fui-strip {
     display: flex;

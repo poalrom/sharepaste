@@ -16,16 +16,22 @@ const base: EntryView = {
 
 let ipc: MockIpc;
 
-/** Rows are `<li>`; the list around them is the only thing HistoryList adds. */
-function renderRow(entry: Partial<EntryView> = {}, ownDeviceId = "own") {
+/**
+ * Rows are `<li>`; the list around them is the only thing HistoryList adds.
+ * Selected by default: the controls exist only on the addressed row, so an
+ * unselected fixture would pass the "no copy button" assertions for the wrong
+ * reason.
+ */
+function renderRow(entry: Partial<EntryView> = {}, ownDeviceId = "own", selected = true) {
   return render(
     <ul>
       <EntryRow
         entry={{ ...base, ...entry }}
         index={1}
-        selected={false}
+        selected={selected}
         ownDeviceId={ownDeviceId}
         now={NOW}
+        onPoint={() => {}}
       />
     </ul>,
   );
@@ -84,5 +90,13 @@ describe("EntryRow", () => {
     const row = screen.getByTestId("entry-row");
     expect(row).not.toHaveTextContent("this-mac");
     expect(row).toHaveTextContent("2m");
+  });
+
+  // The meta has to reach the row's edge, so the control column cannot be
+  // reserved on rows that are not being addressed - and a reserved-but-
+  // transparent column left two clickable buttons over every timestamp.
+  it("gives an unaddressed row no controls at all", () => {
+    renderRow({}, "own", false);
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });
