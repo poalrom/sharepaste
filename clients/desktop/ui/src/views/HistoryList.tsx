@@ -33,12 +33,16 @@ export default function HistoryList() {
       // row's delete control; let those own their own Enter/space handling.
       if (e.target instanceof HTMLElement && e.target.closest("button")) return;
       const target = filtered[selectedIndex];
-      if (e.key === "ArrowDown") {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
-        setSelectedIndex(Math.min(filtered.length - 1, selectedIndex + 1));
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setSelectedIndex(Math.max(0, selectedIndex - 1));
+        // Guarded because this listener is on the window and outlives the
+        // rendered list: with no rows, the modulo below would be NaN and
+        // selectedIndex would never recover.
+        if (filtered.length === 0) return;
+        const step = e.key === "ArrowDown" ? 1 : -1;
+        // Wraps, so the oldest entry is one key from the newest. `+ length`
+        // keeps the operand positive, since JS `%` returns the sign of it.
+        setSelectedIndex((selectedIndex + step + filtered.length) % filtered.length);
       } else if (e.key === "Enter" && target) {
         await copyEntry(target, { keepOpen: e.metaKey || e.ctrlKey });
       } else if (e.key === "Backspace" && (e.metaKey || e.ctrlKey)) {

@@ -45,6 +45,30 @@ describe("HistoryList", () => {
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
   });
 
+  // The list is short and the window is a picker: the oldest entry should be
+  // one key away from the newest, not ten.
+  it("wraps to the last row when Up is pressed on the first", () => {
+    render(<HistoryList />);
+    fireEvent.keyDown(window, { key: "ArrowUp" });
+    expect(useUiStore.getState().selectedIndex).toBe(1);
+  });
+
+  it("wraps to the first row when Down is pressed on the last", () => {
+    useUiStore.setState({ selectedIndex: 1 });
+    render(<HistoryList />);
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+    expect(useUiStore.getState().selectedIndex).toBe(0);
+  });
+
+  // The window listener outlives the rendered rows, so arrowing on an empty
+  // list must not leave selectedIndex as NaN.
+  it("survives arrow keys with no rows to select", () => {
+    useUiStore.setState({ search: "matches nothing" });
+    render(<HistoryList />);
+    fireEvent.keyDown(window, { key: "ArrowUp" });
+    expect(useUiStore.getState().selectedIndex).toBe(0);
+  });
+
   it("ignores Enter when a button has focus so the button's own handler wins", async () => {
     render(<HistoryList />);
     const button = screen.getByTestId("delete-entry-1");
