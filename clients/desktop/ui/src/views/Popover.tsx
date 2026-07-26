@@ -11,6 +11,7 @@ import {
   useUiStore,
 } from "../store";
 import Footer from "./Footer";
+import HintStrip from "./HintStrip";
 import HistoryList from "./HistoryList";
 import Search from "./Search";
 import { CONNECTION } from "./connection";
@@ -19,13 +20,6 @@ import { PanelMessage, Strip } from "./fui";
 /** Mirrors --dur-sweep / --dur-toast: the CSS owns the animation, this owns the state. */
 const SWEEP_MS = 900;
 const TOAST_MS = 2200;
-
-/**
- * The modifier the hint strip names. `navigator.platform` is deprecated but is
- * still what a webview answers synchronously, and the userAgent covers the
- * engines that have dropped it.
- */
-const MOD = /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent) ? "⌘" : "CTRL";
 
 export default function Popover() {
   const accounts = useAccountsStore((s) => s.accounts);
@@ -232,11 +226,7 @@ export default function Popover() {
         </Strip>
       )}
 
-      {active && (
-        <div className="fui-band flex h-5 shrink-0 items-center justify-center border-t border-hairline text-chrome tracking-phrase text-text-muted">
-          {`↑↓ NAV · ⏎ COPY · ${MOD}⏎ KEEP · ${MOD}⌫ DEL`}
-        </div>
-      )}
+      {active && <HintStrip />}
 
       <Footer activeUserId={active} />
     </div>

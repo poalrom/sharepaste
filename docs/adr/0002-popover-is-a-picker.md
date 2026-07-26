@@ -20,6 +20,16 @@ is ever disclosed it belongs beside pairing in the Main Window. The per-row
 `CACHED` marker was cut because it repeats a window-level fact on every row while
 destroying the origin and age the row is there to show.
 
+The same reasoning later emptied the hint strip of its `↑↓ NAV` entry. The plan
+drew four hints (`§3`: `↑↓ NAV · ⏎ COPY · ⌘⏎ KEEP · ⌘⌫ DEL`), which at 360px
+left no slack: `KEEP OPEN` wrapped and clipped, and the line was a run of
+glyphs with no boundary between the key and what it does. Arrow keys are the
+one binding a list with a highlighted row does not have to teach, so the strip
+now spends its width on the three that do — each a keycap paired with a whole
+verb, named the way the reader's own keyboard is labelled (`CTRL+BKSP` on
+Windows, `⌘⌫` on a mac). `DEL` is gone in particular because it reads as the
+Delete key, which is not the binding.
+
 The rejections are the point of this record. The mock itself is not in the
 repository — it was reviewed from a local artifact — so nothing here can be
 recovered by looking at it later. Anyone who sees that mock, or its
