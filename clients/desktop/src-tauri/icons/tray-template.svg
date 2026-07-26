@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <title>sharepaste</title>
+  <!--
+    macOS template image: only the alpha channel survives (AppKit recolors the
+    glyph for light/dark menu bars and for the selected state), so the ribbon
+    stack's depth is carried by opacity instead of hue. Same 16-unit pixel-snapped
+    geometry as icon-small.svg.
+  -->
+  <g fill="#000000">
+    <polygon points="7,1 14,1 14,3 12,5 5,5 5,3"/>
+    <polygon points="6,6 13,6 13,8 11,10 4,10 4,8" opacity="0.72"/>
+    <polygon points="5,11 12,11 12,13 10,15 3,15 3,13" opacity="0.45"/>
+  </g>
+</svg>
