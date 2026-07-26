@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react";
-import { useUiStore } from "../store";
+import { useFilteredEntries, useHistoryStore, useUiStore } from "../store";
 
 export default function Search() {
   const search = useUiStore((s) => s.search);
   const setSearch = useUiStore((s) => s.setSearch);
+  const filtered = useFilteredEntries();
+  const total = useHistoryStore((s) => s.entries).length;
   const ref = useRef<HTMLInputElement>(null);
 
   // The popover window is shown and hidden, never unmounted (popover.rs uses
@@ -44,14 +46,22 @@ export default function Search() {
   }, []);
 
   return (
-    <div className="border-b border-zinc-700 p-2">
+    <div className="fui-band flex h-10 items-center gap-2 border-b border-hairline px-3 focus-within:border-emitter">
+      <span aria-hidden="true" className="text-text-dim">
+        ⌕
+      </span>
       <input
         ref={ref}
-        className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none focus:ring-1 focus:ring-blue-500"
+        className="min-w-0 flex-1 bg-transparent font-mono text-data text-text-body outline-none placeholder:text-text-dim"
         placeholder="Search history…"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
       />
+      {total > 0 && (
+        <span className="shrink-0 text-chrome tabular-nums text-text-dim">
+          {filtered.length}/{total}
+        </span>
+      )}
     </div>
   );
 }

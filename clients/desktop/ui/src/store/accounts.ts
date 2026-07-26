@@ -41,3 +41,13 @@ export const useAccountsStore = create<AccountsState>((set) => ({
       ),
     })),
 }));
+
+/**
+ * The Pairing this window is showing, or undefined when none is active.
+ *
+ * The store owns both `active` and `accounts`; rebuilding the join in each view
+ * is how two views come to disagree about which Pairing they are describing.
+ */
+export function useActiveAccount(): Account | undefined {
+  return useAccountsStore((s) => s.accounts.find((a) => a.user_id === s.active));
+}

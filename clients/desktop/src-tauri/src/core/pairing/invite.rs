@@ -44,6 +44,8 @@ pub(crate) fn persist_claimed_account(
         server_url: claimed.server_url.clone(),
         last_seen_id: 0,
         created_at: now_ms,
+        username: None,
+        last_contact_at: None,
     })?;
     Ok(())
 }

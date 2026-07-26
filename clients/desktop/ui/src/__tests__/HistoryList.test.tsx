@@ -87,4 +87,24 @@ describe("HistoryList", () => {
     expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([1, 2]);
     err.mockRestore();
   });
+
+  it("deletes the selected entry on ⌘⌫", async () => {
+    render(<HistoryList />);
+    fireEvent.keyDown(window, { key: "Backspace", metaKey: true });
+    await waitFor(() => {
+      expect(ipc.invoke).toHaveBeenCalledWith("delete_entry", { args: { user_id: "u", entry_id: 1 } });
+    });
+    await waitFor(() => {
+      expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([2]);
+    });
+  });
+
+  // Search holds the input focused essentially always, so an unmodified key
+  // would delete the entry the user was only trying to edit the query for.
+  it("does not delete on a bare Backspace", async () => {
+    render(<HistoryList />);
+    fireEvent.keyDown(window, { key: "Backspace" });
+    await waitFor(() => expect(ipc.invoke).not.toHaveBeenCalled());
+    expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([1, 2]);
+  });
 });

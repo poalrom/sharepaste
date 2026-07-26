@@ -1,6 +1,10 @@
 use crate::errors::AppError;
 use rusqlite::{params, Connection, OptionalExtension};
 
+/// A Pairing as stored locally.
+///
+/// `username` and `last_contact_at` are mirrored and derived respectively —
+/// neither is supplied by the pairing path, so [`upsert`] leaves both alone.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Account {
     pub(crate) user_id: String,
@@ -9,45 +13,47 @@ pub(crate) struct Account {
     pub(crate) server_url: String,
     pub(crate) last_seen_id: i64,
     pub(crate) created_at: i64,
+    pub(crate) username: Option<String>,
+    pub(crate) last_contact_at: Option<i64>,
+}
+
+const COLUMNS: &str =
+    "user_id, device_id, device_label, server_url, last_seen_id, created_at, username, last_contact_at";
+
+fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
+    Ok(Account {
+        user_id: r.get(0)?, device_id: r.get(1)?, device_label: r.get(2)?,
+        server_url: r.get(3)?, last_seen_id: r.get(4)?, created_at: r.get(5)?,
+        username: r.get(6)?, last_contact_at: r.get(7)?,
+    })
 }
 
 pub(crate) fn upsert(conn: &Connection, a: &Account) -> Result<(), AppError> {
     conn.execute(
-        "INSERT INTO accounts (user_id, device_id, device_label, server_url, last_seen_id, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO accounts (user_id, device_id, device_label, server_url, last_seen_id, created_at, username, last_contact_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT (user_id) DO UPDATE SET
             device_id    = excluded.device_id,
             device_label = excluded.device_label,
             server_url   = excluded.server_url",
-        params![a.user_id, a.device_id, a.device_label, a.server_url, a.last_seen_id, a.created_at],
+        params![a.user_id, a.device_id, a.device_label, a.server_url, a.last_seen_id, a.created_at,
+                a.username, a.last_contact_at],
     )?;
     Ok(())
 }
 
 pub(crate) fn list(conn: &Connection) -> Result<Vec<Account>, AppError> {
-    let mut stmt = conn.prepare(
-        "SELECT user_id, device_id, device_label, server_url, last_seen_id, created_at
-         FROM accounts ORDER BY created_at ASC"
-    )?;
-    let rows = stmt
-        .query_map([], |r| Ok(Account {
-            user_id: r.get(0)?, device_id: r.get(1)?, device_label: r.get(2)?,
-            server_url: r.get(3)?, last_seen_id: r.get(4)?, created_at: r.get(5)?,
-        }))?
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM accounts ORDER BY created_at ASC"))?;
+    let rows = stmt.query_map([], map_row)?.collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
 pub(crate) fn find(conn: &Connection, user_id: &str) -> Result<Option<Account>, AppError> {
     let row = conn
         .query_row(
-            "SELECT user_id, device_id, device_label, server_url, last_seen_id, created_at
-             FROM accounts WHERE user_id = ?1",
+            &format!("SELECT {COLUMNS} FROM accounts WHERE user_id = ?1"),
             params![user_id],
-            |r| Ok(Account {
-                user_id: r.get(0)?, device_id: r.get(1)?, device_label: r.get(2)?,
-                server_url: r.get(3)?, last_seen_id: r.get(4)?, created_at: r.get(5)?,
-            }),
+            map_row,
         )
         .optional()?;
     Ok(row)
@@ -57,6 +63,30 @@ pub(crate) fn set_last_seen(conn: &Connection, user_id: &str, last_seen_id: i64)
     let n = conn.execute(
         "UPDATE accounts SET last_seen_id = ?2 WHERE user_id = ?1",
         params![user_id, last_seen_id],
+    )?;
+    if n == 0 {
+        return Err(AppError::NotFound(format!("account {user_id}")));
+    }
+    Ok(())
+}
+
+/// Mirror the username the relay reports for this user.
+pub(crate) fn set_username(conn: &Connection, user_id: &str, username: &str) -> Result<(), AppError> {
+    let n = conn.execute(
+        "UPDATE accounts SET username = ?2 WHERE user_id = ?1",
+        params![user_id, username],
+    )?;
+    if n == 0 {
+        return Err(AppError::NotFound(format!("account {user_id}")));
+    }
+    Ok(())
+}
+
+/// Persist Contact — the last moment the relay was heard from.
+pub(crate) fn set_last_contact(conn: &Connection, user_id: &str, at: i64) -> Result<(), AppError> {
+    let n = conn.execute(
+        "UPDATE accounts SET last_contact_at = ?2 WHERE user_id = ?1",
+        params![user_id, at],
     )?;
     if n == 0 {
         return Err(AppError::NotFound(format!("account {user_id}")));
@@ -78,6 +108,7 @@ mod tests {
         Account {
             user_id: uid.into(), device_id: "d1".into(), device_label: "mac".into(),
             server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+            username: None, last_contact_at: None,
         }
     }
 
@@ -103,6 +134,43 @@ mod tests {
         assert_eq!(got.device_label, "renamed");
         assert_eq!(got.server_url, "https://other");
         assert_eq!(got.last_seen_id, 42);
+    }
+
+    #[test]
+    fn mirrored_username_and_contact_round_trip() {
+        let c = open_in_memory().unwrap();
+        upsert(&c, &acct("u")).unwrap();
+        assert_eq!(find(&c, "u").unwrap().unwrap().username, None);
+
+        set_username(&c, "u", "alice").unwrap();
+        set_last_contact(&c, "u", 1_700_000_000_000).unwrap();
+
+        let got = find(&c, "u").unwrap().unwrap();
+        assert_eq!(got.username.as_deref(), Some("alice"));
+        assert_eq!(got.last_contact_at, Some(1_700_000_000_000));
+        assert_eq!(list(&c).unwrap()[0], got);
+    }
+
+    #[test]
+    fn upsert_does_not_clobber_mirrored_username_or_contact() {
+        let c = open_in_memory().unwrap();
+        upsert(&c, &acct("u")).unwrap();
+        set_username(&c, "u", "alice").unwrap();
+        set_last_contact(&c, "u", 99).unwrap();
+
+        // The pairing path re-upserts with neither field populated.
+        upsert(&c, &acct("u")).unwrap();
+
+        let got = find(&c, "u").unwrap().unwrap();
+        assert_eq!(got.username.as_deref(), Some("alice"));
+        assert_eq!(got.last_contact_at, Some(99));
+    }
+
+    #[test]
+    fn mirror_setters_return_not_found_when_missing() {
+        let c = open_in_memory().unwrap();
+        assert!(matches!(set_username(&c, "ghost", "x").unwrap_err(), AppError::NotFound(_)));
+        assert!(matches!(set_last_contact(&c, "ghost", 1).unwrap_err(), AppError::NotFound(_)));
     }
 
     #[test]

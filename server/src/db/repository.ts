@@ -63,6 +63,8 @@ export class Repository {
         .run(id, username, created_at);
       return { id, username, created_at };
     },
+    find: (id: string): UserRow | undefined =>
+      this.db.prepare("SELECT * FROM users WHERE id = ?").get(id) as UserRow | undefined,
     list: (): UserRow[] =>
       this.db.prepare("SELECT * FROM users ORDER BY created_at").all() as UserRow[],
     delete: (id: string): void => {
@@ -128,6 +130,11 @@ export class Repository {
       this.db
         .prepare("SELECT * FROM memberships WHERE revoked_at IS NULL AND token_sha256 IS NULL")
         .all() as MembershipRow[],
+    /** Every membership of a user, revoked included: old entries still need their Origin resolved. */
+    listByUser: (user_id: string): MembershipRow[] =>
+      this.db
+        .prepare("SELECT * FROM memberships WHERE user_id = ? ORDER BY created_at ASC")
+        .all(user_id) as MembershipRow[],
     listAll: (): MembershipRow[] =>
       this.db.prepare("SELECT * FROM memberships").all() as MembershipRow[],
     revoke: (user_id: string, device_id: string, at: number): number =>

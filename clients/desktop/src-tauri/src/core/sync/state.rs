@@ -9,6 +9,16 @@ pub(crate) enum ConnectionState {
     AuthFailed,
 }
 
+/// Whether a connection-state transition should flush Contact to the database.
+///
+/// True on the `Online` -> not-`Online` edge and nowhere else. While the
+/// session is up the live cell absorbs one atomic store per relay heartbeat and
+/// never touches SQLite; leaving the edge is the only moment the reading stops
+/// moving and becomes worth keeping, so an outage costs exactly one write.
+pub(crate) fn should_persist_contact(prev: Option<ConnectionState>, next: ConnectionState) -> bool {
+    prev == Some(ConnectionState::Online) && next != ConnectionState::Online
+}
+
 pub(crate) struct BackoffPlan {
     schedule: &'static [u64],
     cap_secs: u64,
@@ -61,5 +71,18 @@ mod tests {
         assert_eq!(b.next_delay_secs(), 30);
         b.reset();
         assert_eq!(b.next_delay_secs(), 1);
+    }
+
+    #[test]
+    fn contact_persists_only_when_leaving_online() {
+        use ConnectionState::*;
+        for next in [Connecting, Disconnected, AuthFailed] {
+            assert!(should_persist_contact(Some(Online), next), "Online -> {next:?}");
+        }
+        // A heartbeat re-asserts Online; it must not reach the database.
+        assert!(!should_persist_contact(Some(Online), Online));
+        for prev in [None, Some(Connecting), Some(Disconnected), Some(AuthFailed)] {
+            assert!(!should_persist_contact(prev, Disconnected), "{prev:?} -> Disconnected");
+        }
     }
 }

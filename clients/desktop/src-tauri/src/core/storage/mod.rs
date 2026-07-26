@@ -1,4 +1,5 @@
 pub(crate) mod accounts;
+pub(crate) mod devices;
 pub(crate) mod entries_cache;
 pub(crate) mod migrations;
 pub(crate) mod pending;

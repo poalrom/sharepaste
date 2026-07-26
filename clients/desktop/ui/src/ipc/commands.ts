@@ -1,4 +1,4 @@
-import type { Account, EntryView, Settings } from "../types";
+import type { Account, EntryView, Settings, Contact } from "../types";
 import { tauri } from "./tauri";
 
 export const cmd = {
@@ -16,6 +16,7 @@ export const cmd = {
   copyToClipboard:     (args: { user_id: string; entry_id: number }) => tauri.invoke<void>("copy_to_clipboard", { args }),
   deleteEntry:         (args: { user_id: string; entry_id: number }) => tauri.invoke<void>("delete_entry", { args }),
   clearHistory:        (args: { user_id: string }) => tauri.invoke<void>("clear_history", { args }),
+  getContact:        (args: { user_id: string }) => tauri.invoke<Contact>("get_contact", { args }),
   getSettings:         (): Promise<Settings> => tauri.invoke("get_settings"),
   updateSettings:      (patch: Partial<Settings>): Promise<Settings> => tauri.invoke("update_settings", { patch }),
   hidePopover:         () => tauri.invoke<void>("hide_popover"),

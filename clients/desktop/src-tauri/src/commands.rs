@@ -5,15 +5,18 @@ use crate::core::pairing::payload::{
     fetch_and_decrypt_pair_payload, secret_proof_hex, start_pair, upload_pair_payload,
 };
 use crate::core::pairing::shortcode::{decode as decode_shortcode, group_for_display};
-use crate::core::storage::{accounts as accounts_repo, entries_cache, pending, settings};
+use crate::core::storage::{accounts as accounts_repo, devices, entries_cache, pending, settings};
 use crate::core::sync::ConnectionState;
 use crate::errors::AppError;
 use crate::events::{
-    AccountAdded, EntryView, PairShortcode, ACCOUNT_ADDED, ACTIVE_CHANGED, HISTORY_CHANGED, PAIR_SHORTCODE,
+    AccountAdded, EntryView, PairShortcode, ContactEvent, ACCOUNT_ADDED, ACTIVE_CHANGED,
+    HISTORY_CHANGED, PAIR_SHORTCODE,
 };
 use crate::now_ms;
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -24,6 +27,9 @@ pub(crate) struct AccountSummary {
     pub(crate) user_id: String,
     pub(crate) device_id: String,
     pub(crate) label: String,
+    /// The User's name on the relay, mirrored by `GET /me`. `None` until this
+    /// device has reached a relay that serves it.
+    pub(crate) username: Option<String>,
     pub(crate) server_url: String,
     pub(crate) status: ConnectionState,
     pub(crate) pending: i64,
@@ -50,6 +56,7 @@ pub async fn list_accounts(
             user_id: a.user_id,
             device_id: a.device_id,
             label: a.device_label,
+            username: a.username,
             server_url: a.server_url,
             status,
             pending,
@@ -251,6 +258,8 @@ pub async fn pair_with_code(
                 server_url: pair_payload.server_url.clone(),
                 last_seen_id: 0,
                 created_at: now_ms(),
+                username: None,
+                last_contact_at: None,
             },
         )?;
     }
@@ -292,6 +301,7 @@ pub async fn forget_account(
         cancel.cancel();
     }
     state.conn_states.lock().remove(&args.user_id);
+    state.last_contact.lock().remove(&args.user_id);
 
     let result = state.registry.forget(&args.user_id).await;
 
@@ -359,17 +369,59 @@ pub async fn list_history(
 ) -> Result<Vec<EntryView>, AppError> {
     let conn = state.conn.lock().await;
     let rows = entries_cache::list_recent(&conn, &args.user_id, args.before_id, args.limit)?;
-    Ok(rows
-        .into_iter()
-        .map(|r| EntryView {
-            id: r.id,
-            user_id: r.user_id,
-            preview: r.plaintext.unwrap_or_default(),
-            created_at: r.created_at,
-            device_id: r.device_id,
-            device_label: None,
+    let labels = devices::map_for(&conn, &args.user_id)?;
+    Ok(to_entry_views(rows, &labels))
+}
+
+/// Cached rows in wire shape, with each Origin resolved against the Device
+/// mirror.
+///
+/// A `device_id` the mirror has never heard of keeps a `None` label rather
+/// than failing: a device paired since the last `GET /me`, or a relay too old
+/// to serve one, is expected — the UI falls back to a slice of the id.
+fn to_entry_views(
+    rows: Vec<entries_cache::CachedEntry>,
+    labels: &HashMap<String, String>,
+) -> Vec<EntryView> {
+    rows.into_iter()
+        .map(|r| {
+            let device_label = labels.get(&r.device_id).cloned();
+            EntryView {
+                id: r.id,
+                user_id: r.user_id,
+                preview: r.plaintext.unwrap_or_default(),
+                created_at: r.created_at,
+                device_id: r.device_id,
+                device_label,
+            }
         })
-        .collect())
+        .collect()
+}
+
+/// Contact for one user.
+///
+/// Reads the live cell while a session holds one and falls back to the
+/// persisted value otherwise: the popover opens long after the last
+/// `contact` event fired and has to hydrate from somewhere.
+#[tauri::command]
+pub async fn get_contact(
+    args: UserScopedArgs,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ContactEvent, AppError> {
+    let live = state
+        .last_contact
+        .lock()
+        .get(&args.user_id)
+        .map(|c| c.load(Ordering::Relaxed))
+        .filter(|at| *at != 0);
+    let last_contact_at = match live {
+        Some(at) => Some(at),
+        None => {
+            let conn = state.conn.lock().await;
+            accounts_repo::find(&conn, &args.user_id)?.and_then(|a| a.last_contact_at)
+        }
+    };
+    Ok(ContactEvent { user_id: args.user_id, last_contact_at })
 }
 
 #[derive(Deserialize)]
@@ -563,6 +615,43 @@ async fn activate_and_sync(app: &AppHandle, state: &Arc<AppState>, user_id: &str
 mod tests {
     use super::*;
     use parking_lot::Mutex;
+
+    fn cached(id: i64, device_id: &str) -> entries_cache::CachedEntry {
+        entries_cache::CachedEntry {
+            user_id: "u".into(),
+            id,
+            ciphertext: vec![1],
+            plaintext: Some(format!("entry {id}")),
+            created_at: 1_000 + id,
+            device_id: device_id.into(),
+        }
+    }
+
+    #[test]
+    fn list_history_labels_origins_from_the_device_mirror() {
+        let labels = HashMap::from([("d1".to_string(), "IPHONE-15".to_string())]);
+        let views = to_entry_views(vec![cached(1, "d1")], &labels);
+        assert_eq!(views[0].device_label.as_deref(), Some("IPHONE-15"));
+        assert_eq!(views[0].device_id, "d1");
+        assert_eq!(views[0].preview, "entry 1");
+    }
+
+    #[test]
+    fn list_history_tolerates_a_device_id_the_mirror_has_never_seen() {
+        let labels = HashMap::from([("d1".to_string(), "IPHONE-15".to_string())]);
+        let views = to_entry_views(vec![cached(1, "d1"), cached(2, "unpaired-yesterday")], &labels);
+        assert_eq!(views[0].device_label.as_deref(), Some("IPHONE-15"));
+        assert_eq!(views[1].device_label, None, "unmirrored origin must not fail the row");
+        assert_eq!(views[1].device_id, "unpaired-yesterday");
+    }
+
+    #[test]
+    fn list_history_maps_an_undecryptable_entry_to_an_empty_preview() {
+        let mut row = cached(1, "d1");
+        row.plaintext = None;
+        let views = to_entry_views(vec![row], &HashMap::new());
+        assert_eq!(views[0].preview, "");
+    }
 
     #[test]
     fn self_write_guard_sets_marker_before_clipboard_write() {

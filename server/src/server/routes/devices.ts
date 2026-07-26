@@ -53,6 +53,25 @@ export const registerDeviceRoutes = (app: FastifyInstance): void => {
     }
   );
 
+  app.get("/me", async (req, reply) => {
+    const auth = await verifyBearer(app, req);
+    const user = app.deps.repo.users.find(auth.user_id);
+    if (!user) throw app.httpErrors.notFound("user not found");
+
+    // Field-by-field, never a spread: MembershipRow carries `device_token_hash`
+    // and `token_sha256`, and neither may ever reach a response body.
+    // Revoked devices stay in the list so clients can still resolve the Origin
+    // of entries captured on a device that has since been revoked.
+    const devices = app.deps.repo.memberships.listByUser(auth.user_id).map((m) => ({
+      device_id: m.device_id,
+      label: m.device_label ?? null,
+      created_at: m.created_at,
+      revoked_at: m.revoked_at,
+    }));
+
+    return reply.send({ user: { id: user.id, username: user.username }, devices });
+  });
+
   app.delete<{ Params: { id: string } }>(
     "/devices/:id",
     async (req, reply) => {

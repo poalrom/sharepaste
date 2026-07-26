@@ -119,6 +119,22 @@ impl ServerClient {
         self.json_post("/devices", &DevicesReq { pair_id, secret_proof, label }, false).await
     }
 
+    /// The caller's user and every device paired to it, including revoked ones.
+    ///
+    /// The only route carrying Device Labels and the username; both are
+    /// mirrored locally rather than travelling on each entry.
+    pub async fn me(&self) -> Result<MeResp, AppError> {
+        let resp = self.http.get(self.url("/me"))
+            .headers(self.auth_headers()?)
+            .send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(Self::map_status(status, body));
+        }
+        resp.json().await.map_err(|e| AppError::Network(e.to_string()))
+    }
+
     pub async fn post_entry(&self, ciphertext_b64: &str) -> Result<PostEntryResp, AppError> {
         self.json_post("/entries", &PostEntryReq { ciphertext: ciphertext_b64 }, true).await
     }

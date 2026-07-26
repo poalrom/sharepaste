@@ -9,6 +9,7 @@ pub(crate) const ENTRY_DELETED: &str   = "entry-deleted";
 pub(crate) const HISTORY_CHANGED: &str = "history-changed";
 pub(crate) const PENDING_COUNT: &str   = "pending-count";
 pub(crate) const DECRYPTION_ERROR: &str = "decryption-error";
+pub(crate) const CONTACT_EVENT: &str      = "contact";
 pub(crate) const PAIR_SHORTCODE: &str  = "pair-shortcode";
 pub(crate) const PAIR_CLAIMED: &str    = "pair-claimed";
 pub(crate) const PAIR_EXPIRED: &str    = "pair-expired";
@@ -51,6 +52,12 @@ pub(crate) struct PendingCount { pub user_id: String, pub count: i64 }
 
 #[derive(Serialize, Clone)]
 pub(crate) struct DecryptionError { pub user_id: String, pub entry_id: i64 }
+
+/// Contact for one user, as the popover renders it: `LAST CONTACT 3m AGO`.
+///
+/// `None` means this device has never heard from the relay for this user.
+#[derive(Serialize, Clone)]
+pub(crate) struct ContactEvent { pub user_id: String, pub last_contact_at: Option<i64> }
 
 #[derive(Serialize, Clone)]
 pub(crate) struct PairShortcode { pub code: String, pub expires_at: i64 }

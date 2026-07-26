@@ -81,10 +81,16 @@ export default function AccountsSection() {
           <li key={a.user_id} className="rounded border border-zinc-700">
             <div className="flex items-center justify-between p-3">
               <div>
-                <div className="font-semibold">{a.label}</div>
+                {/*
+                  The heading names the *User*, not this machine. `label` is the
+                  Device Label chosen when this machine paired, so heading it
+                  made every Pairing appear to be an account called "Laptop".
+                */}
+                <div className="font-semibold">{a.username ?? a.user_id}</div>
                 <div className="text-xs text-zinc-400">
                   {a.user_id} @ {a.server_url}
                 </div>
+                <div className="text-xs text-zinc-400">this device: {a.label}</div>
                 <div className="text-xs text-zinc-400">
                   status: {a.status} · pending: {a.pending}
                 </div>

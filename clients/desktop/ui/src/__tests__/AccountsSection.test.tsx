@@ -6,8 +6,8 @@ import type { Account } from "../types";
 import AccountsSection from "../views/sections/AccountsSection";
 
 const accounts: Account[] = [
-  { user_id: "u-active", device_id: "d1", label: "Laptop", server_url: "https://srv", status: "Connecting", pending: 0, is_active: true },
-  { user_id: "u-other", device_id: "d2", label: "Desktop", server_url: "https://srv", status: "Disconnected", pending: 0, is_active: false },
+  { user_id: "u-active", device_id: "d1", label: "Laptop", username: "alice", server_url: "https://srv", status: "Connecting", pending: 0, is_active: true },
+  { user_id: "u-other", device_id: "d2", label: "Desktop", username: "bob", server_url: "https://srv", status: "Disconnected", pending: 0, is_active: false },
 ];
 
 /** Reads the `user_id` the component sent, failing loudly if the shape drifts. */
@@ -47,15 +47,31 @@ beforeEach(() => {
 describe("AccountsSection", () => {
   it("renders Active badge for the active account and Use button for others", async () => {
     render(<AccountsSection />);
-    await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("alice")).toBeInTheDocument());
     expect(screen.getByTestId("active-badge-u-active")).toBeInTheDocument();
     expect(screen.getByTestId("use-u-other")).toBeInTheDocument();
     expect(screen.queryByTestId("active-badge-u-other")).toBeNull();
   });
 
+  // A Pairing's `label` is the Device Label this machine chose when it paired,
+  // so heading the row with it made every Pairing look like an account named
+  // after the local machine. The row is about a User; it says so.
+  it("heads each row with the User, not this machine's Device Label", async () => {
+    render(<AccountsSection />);
+    const heading = await screen.findByText("alice");
+    expect(heading).toBeInTheDocument();
+    expect(screen.getByText(/this device: Laptop/)).toBeInTheDocument();
+  });
+
+  it("falls back to the opaque user id when no username has been mirrored yet", async () => {
+    currentAccounts = [{ ...accounts[0]!, username: null }];
+    render(<AccountsSection />);
+    expect(await screen.findByText("u-active")).toBeInTheDocument();
+  });
+
   it("clicking trash opens an inline confirmation strip below the row", async () => {
     render(<AccountsSection />);
-    await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("alice")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("trash-u-other"));
     expect(screen.getByTestId("confirm-strip-u-other")).toBeInTheDocument();
     expect(screen.queryByTestId("confirm-strip-u-active")).toBeNull();
@@ -63,7 +79,7 @@ describe("AccountsSection", () => {
 
   it("Cancel collapses the confirmation strip without invoking forget", async () => {
     render(<AccountsSection />);
-    await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("alice")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("trash-u-other"));
     fireEvent.click(screen.getByTestId("cancel-u-other"));
     expect(screen.queryByTestId("confirm-strip-u-other")).toBeNull();
@@ -72,7 +88,7 @@ describe("AccountsSection", () => {
 
   it("Forget invokes forget_account, clears the strip, and removes the account row", async () => {
     render(<AccountsSection />);
-    await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("alice")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("trash-u-other"));
     fireEvent.click(screen.getByTestId("confirm-forget-u-other"));
     await waitFor(() =>
@@ -83,7 +99,7 @@ describe("AccountsSection", () => {
 
   it("Use invokes set_active_account", async () => {
     render(<AccountsSection />);
-    await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("alice")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("use-u-other"));
     await waitFor(() =>
       expect(ipc.invoke).toHaveBeenCalledWith("set_active_account", { args: { user_id: "u-other" } }),

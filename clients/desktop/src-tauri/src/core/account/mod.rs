@@ -92,6 +92,7 @@ impl AccountRegistry {
         self.keychain.delete(&token_account(user_id))?;
         let conn = self.conn.lock().await;
         crate::core::storage::entries_cache::delete_all(&conn, user_id)?;
+        crate::core::storage::devices::delete_all(&conn, user_id)?;
         accounts::delete(&conn, user_id)?;
         let was_active = self.active.read().as_deref() == Some(user_id);
         if !was_active {
@@ -129,6 +130,7 @@ mod tests {
             accounts::upsert(&c, &Account {
                 user_id: "u".into(), device_id: "d".into(), device_label: "mac".into(),
                 server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                username: None, last_contact_at: None,
             }).unwrap();
         }
         r.set_active(Some("u".into()));
@@ -146,6 +148,7 @@ mod tests {
             accounts::upsert(&c, &Account {
                 user_id: "u".into(), device_id: "d".into(), device_label: "mac".into(),
                 server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                username: None, last_contact_at: None,
             }).unwrap();
         }
         let err = r.load_active_membership("u").await.unwrap_err();
@@ -160,6 +163,7 @@ mod tests {
             accounts::upsert(&c, &Account {
                 user_id: "u".into(), device_id: "d".into(), device_label: "mac".into(),
                 server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                username: None, last_contact_at: None,
             }).unwrap();
         }
         r.set_active_persisted(Some("u".into())).await.unwrap();
@@ -177,6 +181,7 @@ mod tests {
             accounts::upsert(&c, &Account {
                 user_id: "u".into(), device_id: "d".into(), device_label: "mac".into(),
                 server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                username: None, last_contact_at: None,
             }).unwrap();
         }
         r.set_active_persisted(Some("u".into())).await.unwrap();
@@ -195,6 +200,7 @@ mod tests {
             accounts::upsert(&c, &Account {
                 user_id: "u".into(), device_id: "d".into(), device_label: "mac".into(),
                 server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                username: None, last_contact_at: None,
             }).unwrap();
         }
         r.set_active_persisted(Some("u".into())).await.unwrap();
@@ -224,6 +230,7 @@ mod tests {
             accounts::upsert(&c, &Account {
                 user_id: uid.into(), device_id: "d".into(), device_label: uid.into(),
                 server_url: "https://srv".into(), last_seen_id: 0, created_at,
+                username: None, last_contact_at: None,
             }).unwrap();
         }
         r.set_active_persisted(Some("middle".into())).await.unwrap();
@@ -246,6 +253,7 @@ mod tests {
             accounts::upsert(&c, &Account {
                 user_id: uid.into(), device_id: "d".into(), device_label: uid.into(),
                 server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                username: None, last_contact_at: None,
             }).unwrap();
         }
         r.set_active_persisted(Some("a".into())).await.unwrap();
@@ -268,6 +276,7 @@ mod tests {
             accounts::upsert(&c, &Account {
                 user_id: "u".into(), device_id: "d".into(), device_label: "u".into(),
                 server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                username: None, last_contact_at: None,
             }).unwrap();
         }
         r.set_active_persisted(Some("u".into())).await.unwrap();

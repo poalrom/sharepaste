@@ -43,3 +43,36 @@ pub struct EntryRow {
     pub created_at: i64,
     pub device_id: String,
 }
+
+#[derive(Deserialize)]
+pub struct MeResp { pub user: UserDto, pub devices: Vec<DeviceDto> }
+
+#[derive(Deserialize)]
+pub struct UserDto { pub id: String, pub username: String }
+
+#[derive(Deserialize)]
+pub struct DeviceDto { pub device_id: String, pub label: Option<String>, pub created_at: i64, pub revoked_at: Option<i64> }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the `GET /me` shape. The relay is the other half of this contract
+    /// and compiles separately, so nothing but a test catches a drift here.
+    #[test]
+    fn me_response_parses_the_relay_shape_including_revoked_and_unlabelled() {
+        let body = r#"{
+            "user": { "id": "u1", "username": "alice" },
+            "devices": [
+              { "device_id": "d1", "label": "IPHONE-15", "created_at": 100, "revoked_at": null },
+              { "device_id": "d2", "label": null, "created_at": 200, "revoked_at": 300 }
+            ]
+        }"#;
+        let me: MeResp = serde_json::from_str(body).unwrap();
+        assert_eq!(me.user.username, "alice");
+        assert_eq!(me.devices[0].label.as_deref(), Some("IPHONE-15"));
+        assert_eq!(me.devices[0].revoked_at, None);
+        assert_eq!(me.devices[1].label, None);
+        assert_eq!(me.devices[1].revoked_at, Some(300));
+    }
+}

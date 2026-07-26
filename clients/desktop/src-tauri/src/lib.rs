@@ -53,6 +53,7 @@ pub fn launch() {
             commands::pair_with_code,
             commands::forget_account,
             commands::set_active_account,
+            commands::get_contact,
             commands::list_history,
             commands::copy_to_clipboard,
             commands::delete_entry,
