@@ -77,12 +77,26 @@ and a `.dmg` alongside.
 Windows output: a standalone NSIS installer `.exe`.
 For local development, `npm.cmd run tauri dev` and `cargo check --manifest-path src-tauri/Cargo.toml` suffice for iteration.
 
-## Install (unsigned)
+## Install
+
+Releases live at <https://github.com/poalrom/sharepaste/releases/latest>: a
+`.dmg` for macOS and an NSIS `.exe` for Windows x64. The macOS build is Apple
+Silicon only — there is no Intel bundle.
+
+Bundles are neither signed nor notarized, so macOS quarantines whatever the
+browser fetched. Clear it once, after dragging the app into `/Applications`:
 
 ```sh
-xattr -d com.apple.quarantine /Applications/sharepaste.app
+xattr -dr com.apple.quarantine /Applications/sharepaste.app
 open /Applications/sharepaste.app
 ```
+
+That is a first-install tax only — from then on the app updates itself, and an
+update it fetches never carries the quarantine attribute.
+`.github/release-body-header.md` is the canonical wording of all of the above:
+it is what every release page shows, so change it there and mirror it here, not
+the other way round. The reasoning is in
+[ADR 0005](../../docs/adr/0005-unsigned-downloads-signed-updates.md).
 
 ## Windows smoke checklist
 

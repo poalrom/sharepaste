@@ -38,6 +38,25 @@ export type Settings = {
   deny_list: string[];
   autostart: boolean;
   hotkey?: string | null;
+  update_check_enabled: boolean;
+};
+
+/** A Release the Update Source is offering and this device does not have. */
+export type UpdateAvailable = {
+  version: string;
+  /** The changelog section the pipeline put in `latest.json`. */
+  notes?: string | null;
+};
+
+/**
+ * What this device knows about releases right now.
+ *
+ * `available` reflects the last check only; reading it costs no request, which
+ * is what lets the Settings pane render while the automatic check is off.
+ */
+export type UpdateStatus = {
+  current_version: string;
+  available?: UpdateAvailable | null;
 };
 
 export type AppErrorPayload = { kind: string; message: string };

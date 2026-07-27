@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { Settings } from "../../types";
+import type { Settings, UpdateAvailable } from "../../types";
 import { cmd } from "../../ipc/commands";
+import { events } from "../../ipc/events";
 import { relayHost } from "../../lib/format";
 import { usePairingsStore } from "../../store";
 import { useActivePairing } from "../../store/pairings";
@@ -14,6 +15,9 @@ export default function SettingsSection() {
   const [error, setError] = useState<string>();
   const [hotkeyDraft, setHotkeyDraft] = useState("");
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [version, setVersion] = useState<string>();
+  const [available, setAvailable] = useState<UpdateAvailable | null>(null);
+  const [checkState, setCheckState] = useState<"idle" | "asking" | "upToDate">("idle");
   const committedHotkey = useRef<string | null>(null);
 
   useEffect(() => {
@@ -41,6 +45,28 @@ export default function SettingsSection() {
       });
     return () => { cancelled = true; };
   }, [activeUserId, hydratePairings]);
+
+  // Last of the mount effects on purpose: the status read costs no request, so
+  // it can sit behind the two that actually populate the pane.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    cmd.getUpdateStatus()
+      .then((s) => {
+        if (cancelled) return;
+        setVersion(s.current_version);
+        setAvailable(s.available ?? null);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    // The launch check runs before this pane exists, so its find arrives as an
+    // event rather than in the status read above.
+    events.onUpdateAvailable((found) => setAvailable(found)).then((off) => {
+      if (cancelled) off(); else unlisten = off;
+    });
+    return () => { cancelled = true; unlisten?.(); };
+  }, []);
 
   if (!settings) return <PanelMessage title="LOADING" />;
 
@@ -72,6 +98,27 @@ export default function SettingsSection() {
     }
   };
 
+  const checkForUpdate = async () => {
+    setCheckState("asking");
+    try {
+      const status = await cmd.checkForUpdate();
+      setVersion(status.current_version);
+      setAvailable(status.available ?? null);
+      setCheckState(status.available ? "idle" : "upToDate");
+    } catch (e) {
+      setCheckState("idle");
+      setError(String(e));
+    }
+  };
+
+  const installUpdate = async () => {
+    try {
+      await cmd.installUpdate();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   // Nothing else on screen states the blur/Enter rule, so the hint has to carry it —
   // and a hint that read the same while the draft was dirty would be naming a binding
   // that is not in force. Hence three readings, one per state the field can be in.
@@ -84,6 +131,15 @@ export default function SettingsSection() {
       : "Unbound. Bind a shortcut to summon the popover from anywhere.";
 
   const denyCount = settings.deny_list.length;
+
+  const updateHint =
+    checkState === "asking"
+      ? "Asking the Update Source…"
+      : available
+        ? `Version ${available.version} is waiting.`
+        : checkState === "upToDate"
+          ? "Up to date."
+          : "Ask now instead of waiting for the next launch.";
 
   return (
     <div className="fui-scroll flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto p-3.5">
@@ -131,6 +187,71 @@ export default function SettingsSection() {
             }}
           />
           <p className="m-0 text-data text-text-dim">{hotkeyHint}</p>
+        </div>
+      </section>
+
+      {/* The only place an update is offered on this device besides the tray:
+          ADR 0002 keeps it out of the popover, which is a picker. */}
+      <section className="fui-group">
+        <div className="fui-group-head">
+          <span>UPDATES</span>
+          <span className="font-mono text-chrome text-text-dim" data-testid="current-version">
+            {version ? `V${version}` : "—"}
+          </span>
+        </div>
+        <div className="[&>*+*]:border-t [&>*+*]:border-hairline">
+          <ToggleRow
+            title="Check at launch"
+            detail="Asks github.com for the newest release when the app starts, revealing this machine's address, OS and version. Nothing about an entry, a key or a relay is sent."
+            onLabel="ON"
+            offLabel="OFF"
+            offClass="text-text-dim"
+            checked={settings.update_check_enabled}
+            onChange={(update_check_enabled) => update({ update_check_enabled })}
+            testId="update-check-enabled"
+          />
+          <div className="flex items-center justify-between gap-5 px-3 py-2.5">
+            <div className="min-w-0">
+              <div className="font-display text-sm font-medium tracking-phrase text-text-body">Check now</div>
+              <div className="text-data text-text-muted">{updateHint}</div>
+            </div>
+            <button
+              type="button"
+              data-testid="check-for-update"
+              disabled={checkState === "asking"}
+              className="fui-action shrink-0 disabled:cursor-not-allowed disabled:text-text-dim"
+              data-variant="outline"
+              onClick={checkForUpdate}
+            >
+              Check
+            </button>
+          </div>
+          {available && (
+            <div className="flex flex-col gap-2 p-3">
+              <div
+                data-testid="update-offer"
+                className="font-display text-sm font-medium tracking-phrase text-text-body"
+              >
+                Version {available.version} is ready to install
+              </div>
+              {/* Verbatim, wrapped: this is the changelog section the release
+                  carries, written for a reader rather than lifted from commits. */}
+              <pre
+                data-testid="update-notes"
+                className="fui-scroll m-0 max-h-40 overflow-y-auto whitespace-pre-wrap font-sans text-data text-text-muted"
+              >
+                {available.notes ?? "This release published no notes."}
+              </pre>
+              <button
+                type="button"
+                data-testid="install-update"
+                className="fui-action self-start shrink-0"
+                onClick={installUpdate}
+              >
+                Install and restart
+              </button>
+            </div>
+          )}
         </div>
       </section>
 

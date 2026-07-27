@@ -20,6 +20,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["app", "dmg"],
     "icon": [
       "icons/icon.png",
@@ -38,5 +39,12 @@
     "shortDescription": "End-to-end-encrypted clipboard sync",
     "longDescription": "Self-hosted clipboard sync with per-user encryption."
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/poalrom/sharepaste/releases/latest/download/latest.json"
+      ],
+      "pubkey": ""
+    }
+  }
 }

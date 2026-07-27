@@ -543,6 +543,9 @@ pub async fn update_settings(
             }
             s.autostart = v;
         }
+        if let Some(v) = patch.get("update_check_enabled").and_then(|v| v.as_bool()) {
+            s.update_check_enabled = v;
+        }
         if let Some(v) = patch.get("hotkey") {
             let new_hotkey = if v.is_null() {
                 None
@@ -594,6 +597,50 @@ pub async fn hide_popover(app: AppHandle) -> Result<(), AppError> {
         win.hide().map_err(|e| AppError::BadInput(e.to_string()))?;
     }
     Ok(())
+}
+
+/// What the Settings pane needs to render the update row without asking the
+/// Update Source anything.
+///
+/// Reported separately from the check so opening Settings never emits a packet:
+/// "automatic check off" has to hold for every surface, not just launch.
+#[derive(Serialize)]
+pub(crate) struct UpdateStatus {
+    pub(crate) current_version: String,
+    /// The Release on offer as of the last check, or `None` if none was found.
+    pub(crate) available: Option<crate::events::UpdateAvailable>,
+}
+
+#[tauri::command]
+pub async fn get_update_status(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<UpdateStatus, AppError> {
+    let available = state
+        .pending_update
+        .lock()
+        .as_ref()
+        .map(crate::events::UpdateAvailable::from);
+    Ok(UpdateStatus { current_version: crate::update::current_version(&app), available })
+}
+
+#[tauri::command]
+pub async fn check_for_update(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<UpdateStatus, AppError> {
+    let available = crate::update::check(&app, state.inner()).await?;
+    Ok(UpdateStatus { current_version: crate::update::current_version(&app), available })
+}
+
+/// Download the pending Release, install it and relaunch. Never reached
+/// without a click — see ADR 0005.
+#[tauri::command]
+pub async fn install_update(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), AppError> {
+    crate::update::install(&app, state.inner()).await
 }
 
 async fn activate_and_sync(app: &AppHandle, state: &Arc<AppState>, user_id: &str) {

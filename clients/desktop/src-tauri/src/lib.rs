@@ -6,6 +6,7 @@ pub(crate) mod events;
 pub(crate) mod commands;
 pub mod core;
 mod popover;
+pub(crate) mod update;
 
 use crate::config::Paths;
 use crate::core::pairing::registry::PairingRegistry;
@@ -35,6 +36,7 @@ pub fn launch() {
             None,
         ))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state.clone())
         .setup(move |app| {
             build_tray(app, app_state.clone())?;
@@ -44,6 +46,7 @@ pub fn launch() {
             spawn_clipboard_capture(app.handle().clone(), app_state.clone());
             register_initial_hotkey(app.handle().clone(), app_state.clone());
             reconcile_autostart(app.handle().clone(), app_state.clone());
+            update::spawn_launch_check(app.handle().clone(), app_state.clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -62,12 +65,15 @@ pub fn launch() {
             commands::update_settings,
             commands::open_main_window,
             commands::hide_popover,
+            commands::get_update_status,
+            commands::check_for_update,
+            commands::install_update,
         ])
         .run(tauri::generate_context!())
         .expect("run tauri");
 }
 
-fn build_tray(app: &mut tauri::App, _state: Arc<AppState>) -> tauri::Result<()> {
+fn build_tray(app: &mut tauri::App, state: Arc<AppState>) -> tauri::Result<()> {
     // The tray icon itself is created from tauri.conf.json (`app.trayIcon`).
     // Building another one here would render a second, icon-less status item.
     // Look up the existing one and attach our menu + handlers to it.
@@ -83,6 +89,11 @@ fn build_tray(app: &mut tauri::App, _state: Arc<AppState>) -> tauri::Result<()> 
         .separator()
         .item(&MenuItemBuilder::with_id("quit", "Quit").build(app)?)
         .build()?;
+
+    // `Install update…` is deliberately not here: it is inserted by
+    // `update::check` only while a Release is pending, and removed again
+    // otherwise. Hence the menu has to outlive this function.
+    *state.tray_menu.lock() = Some(menu.clone());
 
     // tray-icon-0.23.1's TrayTarget intercepts mouseDown before NSStatusItem's
     // setMenu can fire, and the performClick(None) fallback doesn't actually
@@ -104,6 +115,16 @@ fn build_tray(app: &mut tauri::App, _state: Arc<AppState>) -> tauri::Result<()> 
         }
         "open_settings" => {
             let _ = open_main_window_impl(app, "settings", None);
+        }
+        id if id == update::TRAY_ITEM_ID => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let Some(state) = app.try_state::<Arc<AppState>>() else { return };
+                let state = state.inner().clone();
+                if let Err(e) = update::install(&app, &state).await {
+                    tracing::warn!(err = %e, "install update from tray failed");
+                }
+            });
         }
         "quit" => {
             app.exit(0);

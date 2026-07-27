@@ -79,7 +79,8 @@ _Avoid_: outbox, backlog, unsent
 **Contact**:
 The most recent moment a device had a live connection to the relay, evidenced
 by any traffic from it. Frozen when the connection drops; asserts nothing about
-pending uploads.
+pending uploads, and nothing a device sends to the update source counts toward
+it.
 _Avoid_: sync, last seen, heartbeat, online since
 
 ### Surfaces
@@ -92,3 +93,21 @@ _Avoid_: tray menu, panel, quick view
 The full surface: history, pairings, devices, capture rules. The only place an
 entry can be read in full rather than merely picked.
 _Avoid_: preferences, dashboard, console
+
+### Distribution
+
+**Release**:
+One published version of the desktop app: a version number, notes, and one
+installable bundle per platform.
+_Avoid_: build, drop, version bump
+
+**Update**:
+A device replacing its installed app with a newer release. Distinct from sync,
+which moves entries, never code.
+_Avoid_: upgrade, patch, sync
+
+**Update Source**:
+The public location a device asks for the newest release. The only counterparty
+besides the relay that a device ever contacts, and unlike the relay it is not
+self-hosted: it sees a device's address, though never an entry.
+_Avoid_: update server, endpoint, CDN, release feed

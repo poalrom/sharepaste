@@ -29,6 +29,17 @@ pub(crate) struct AppState {
     /// consecutive duplicates before they cost an encrypt, upload or server row.
     pub(crate) last_capture: Mutex<Option<String>>,
     pub(crate) last_tray_rect: Mutex<Option<tauri::Rect>>,
+    /// The Release the last check found, held because three callers need the
+    /// same answer: the tray item's presence, the Settings pane, and the
+    /// install path — which needs the very `Update` whose signature verified.
+    pub(crate) pending_update: Mutex<Option<tauri_plugin_updater::Update>>,
+    /// The tray menu, so the install item can be added and removed after
+    /// `build_tray` has finished.
+    ///
+    /// Every other tray item is built once and never touched; this one is the
+    /// exception, and reaching it from a check that runs on the async runtime
+    /// means the menu has to outlive the setup hook.
+    pub(crate) tray_menu: Mutex<Option<tauri::menu::Menu<tauri::Wry>>>,
 }
 
 impl AppState {
@@ -48,6 +59,8 @@ impl AppState {
             last_self_write: Mutex::new(None),
             last_capture: Mutex::new(None),
             last_tray_rect: Mutex::new(None),
+            pending_update: Mutex::new(None),
+            tray_menu: Mutex::new(None),
         }
     }
 }

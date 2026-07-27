@@ -74,3 +74,7 @@ Real Fastify + real SQLite tempfiles. No HTTP mocks.
 - Operator runs HTTPS in front of the container (no in-process TLS in this build).
 - Devices use OS disk encryption (FileVault, BitLocker, etc).
 - Device-token revocation 401s further requests but does not retroactively un-encrypt entries on a stolen device. Key rotation is out of scope.
+- The relay is not the only service the desktop app talks to. At launch it asks the **Update Source** (github.com) for the newest release, revealing the machine's address, OS and app version. Nothing about an entry, a key or a relay is transmitted, and the check can be switched off in the app's Settings.
+- Downloaded bundles are unsigned and un-notarized. Updates the app fetches for itself are minisign-verified against a public key compiled into the binary; a bundle downloaded from a browser is not verified by anything but Gatekeeper.
+
+See [ADR 0005](docs/adr/0005-unsigned-downloads-signed-updates.md) for why the app contacts a third party at all.

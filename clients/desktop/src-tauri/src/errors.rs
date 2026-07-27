@@ -19,6 +19,8 @@ pub enum AppError {
     PairExpired(String),
     #[error("keychain error: {0}")]
     Keychain(String),
+    #[error("update error: {0}")]
+    Update(String),
 }
 
 impl AppError {
@@ -32,6 +34,7 @@ impl AppError {
             AppError::Crypto(_) => "Crypto",
             AppError::PairExpired(_) => "PairExpired",
             AppError::Keychain(_) => "Keychain",
+            AppError::Update(_) => "Update",
         }
     }
 }

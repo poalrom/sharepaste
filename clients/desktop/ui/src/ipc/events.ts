@@ -1,4 +1,4 @@
-import type { ConnectionState, EntryView, Contact } from "../types";
+import type { ConnectionState, EntryView, Contact, UpdateAvailable } from "../types";
 import { tauri } from "./tauri";
 
 export const events = {
@@ -16,4 +16,5 @@ export const events = {
   onPairClaimed:     (cb: (p: { user_id: string; device_label?: string | null }) => void) => tauri.listen("pair-claimed", cb),
   onPairExpired:     (cb: () => void) => tauri.listen("pair-expired", () => cb()),
   onMainNavigate:    (cb: (p: { section: string; entry_id: number | null }) => void) => tauri.listen("main://navigate", cb),
+  onUpdateAvailable: (cb: (p: UpdateAvailable) => void) => tauri.listen("update-available", cb),
 };

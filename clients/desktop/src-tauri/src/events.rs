@@ -14,6 +14,7 @@ pub(crate) const PAIR_SHORTCODE: &str  = "pair-shortcode";
 pub(crate) const PAIR_CLAIMED: &str    = "pair-claimed";
 pub(crate) const PAIR_EXPIRED: &str    = "pair-expired";
 pub(crate) const MAIN_NAVIGATE: &str   = "main://navigate";
+pub(crate) const UPDATE_AVAILABLE: &str = "update-available";
 
 #[derive(Serialize, Clone)]
 pub(crate) struct PairingAdded { pub user_id: String, pub device_id: String, pub label: String }
@@ -71,3 +72,11 @@ pub(crate) struct PairClaimed { pub user_id: String, pub device_label: Option<St
 /// row it had selected; `None` leaves the pane on its own selection.
 #[derive(Serialize, Clone)]
 pub(crate) struct MainNavigate { pub section: String, pub entry_id: Option<i64> }
+
+/// A Release the Update Source is offering and this device does not have.
+///
+/// `notes` is the changelog section the pipeline put in `latest.json`; the
+/// prompt shows it verbatim, so it is written for a user rather than lifted
+/// from the commit log.
+#[derive(Serialize, Clone)]
+pub(crate) struct UpdateAvailable { pub version: String, pub notes: Option<String> }

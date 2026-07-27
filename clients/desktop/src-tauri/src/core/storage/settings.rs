@@ -10,6 +10,17 @@ pub(crate) struct Settings {
     pub(crate) hotkey: Option<String>,
     #[serde(default)]
     pub(crate) last_active_user_id: Option<String>,
+    /// Whether the app asks the Update Source for a newer release at launch.
+    ///
+    /// Explicitly defaulted rather than left to `#[serde(default)]`: a bool's
+    /// serde default is `false`, which would read every settings row written
+    /// before the updater shipped as an opt-out the user never made.
+    #[serde(default = "update_check_default")]
+    pub(crate) update_check_enabled: bool,
+}
+
+fn update_check_default() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -20,6 +31,7 @@ impl Default for Settings {
             autostart: false,
             hotkey: Some(DEFAULT_HOTKEY.to_string()),
             last_active_user_id: None,
+            update_check_enabled: update_check_default(),
         };
         append_builtin_deny_list_entries(&mut settings);
         settings
@@ -218,5 +230,30 @@ mod tests {
         // A persisted null hotkey means the user cleared it; the default must not
         // silently rebind it.
         assert!(s.hotkey.is_none());
+    }
+
+    #[test]
+    fn the_automatic_update_check_defaults_on_for_fresh_and_pre_existing_profiles() {
+        let fresh = open_in_memory().unwrap();
+        assert!(load(&fresh).unwrap().update_check_enabled);
+
+        // Rows written before the updater existed carry no such field. Plain
+        // `#[serde(default)]` reads a missing bool as `false`, which would opt
+        // every install that predates this release out of ever hearing about
+        // the next one — silently, and with the toggle claiming otherwise.
+        let legacy = open_in_memory().unwrap();
+        store(
+            &legacy,
+            r#"{"capture_enabled":true,"deny_list":[],"autostart":false,"hotkey":null}"#,
+        );
+        assert!(load(&legacy).unwrap().update_check_enabled);
+
+        let opted_out = open_in_memory().unwrap();
+        save(
+            &opted_out,
+            &Settings { update_check_enabled: false, ..Settings::default() },
+        )
+        .unwrap();
+        assert!(!load(&opted_out).unwrap().update_check_enabled);
     }
 }

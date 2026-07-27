@@ -1,4 +1,4 @@
-import type { Pairing, EntryView, Settings, Contact } from "../types";
+import type { Pairing, EntryView, Settings, Contact, UpdateStatus } from "../types";
 import { tauri } from "./tauri";
 
 export const cmd = {
@@ -20,6 +20,10 @@ export const cmd = {
   getSettings:         (): Promise<Settings> => tauri.invoke("get_settings"),
   updateSettings:      (patch: Partial<Settings>): Promise<Settings> => tauri.invoke("update_settings", { patch }),
   hidePopover:         () => tauri.invoke<void>("hide_popover"),
+  getUpdateStatus:     (): Promise<UpdateStatus> => tauri.invoke("get_update_status"),
+  checkForUpdate:      (): Promise<UpdateStatus> => tauri.invoke("check_for_update"),
+  /** Downloads, installs and relaunches. Never call this without a click. */
+  installUpdate:       () => tauri.invoke<void>("install_update"),
   /**
    * Open the main window. `section` takes the rail's pane names plus `pairing`,
    * which means "the Pairings pane with the add-flow open"; `entry_id` is the

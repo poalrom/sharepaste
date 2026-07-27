@@ -10,16 +10,88 @@ on:
     paths:
       - clients/desktop/**
       - .github/workflows/desktop-build.yml
+      - .github/scripts/**
+      - .github/release-body-header.md
   pull_request:
     paths:
       - clients/desktop/**
       - .github/workflows/desktop-build.yml
+      - .github/scripts/**
+      - .github/release-body-header.md
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Two version changes landing seconds apart must queue rather than race: both
+# would otherwise read "no tag yet" and try to create the same release.
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  # Whether this commit is a release, and — if it is — whether the tree is fit
+  # to be one.
+  #
+  # The job runs on every event because `integration-filter` needs it, and a
+  # skipped dependency skips its dependents: gating the job itself on `push`
+  # would have taken the pull_request and workflow_dispatch arms of that filter
+  # with it. Only a push reaches the guard or can set `publish`, which is what
+  # keeps this workflow safe to exercise by hand.
+  release-gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+      version: ${{ steps.versions.outputs.version }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          # Tags are what "already released" means below, and a shallow clone
+          # brings none.
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 25
+
+      # Only on a push, because only a push can publish. A pull request that
+      # has not yet bumped the changelog is not a broken release, it is not a
+      # release at all.
+      #
+      # Fails on drift between tauri.conf.json, package.json and Cargo.toml, or
+      # on a version with no changelog section. Not cosmetic: core/http/client.rs
+      # builds the Relay User-Agent from CARGO_PKG_VERSION.
+      - name: Check the version numbers agree
+        id: versions
+        if: github.event_name == 'push'
+        run: node .github/scripts/check-versions.mjs .
+
+      - name: Decide
+        id: decide
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ steps.versions.outputs.version }}'
+
+          if [ '${{ github.event_name }}' != 'push' ]; then
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+            echo "::notice::A ${{ github.event_name }} run never publishes."
+            exit 0
+          fi
+
+          # A version change publishes; every other green main build does not.
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+            echo "::notice::v$version is already tagged; this commit is not a release."
+          else
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+            echo "::notice::v$version has no tag; this commit publishes it."
+          fi
+
   test:
     name: Test desktop app (${{ matrix.platform }})
     runs-on: ${{ matrix.platform }}
@@ -97,15 +169,26 @@ jobs:
       - name: Install desktop UI dependencies
         run: npm --prefix clients/desktop/ui ci
 
+      # No `tagName` or `releaseId`: without them tauri-action builds and
+      # uploads nothing to a release, which is what we want. `publish` owns the
+      # release, and `latest.json` with it — see the note in that job.
       - name: Build desktop app
         uses: tauri-apps/tauri-action@action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater archives. Without these the archives build but
+          # carry no `.sig`, and the upload below fails on the missing pattern.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: clients/desktop
           tauriScript: npm run tauri
           args: ${{ matrix.args }}
 
+      # Six patterns, three per platform: the installer a human downloads, the
+      # archive the updater fetches, and its signature. `if-no-files-found: error`
+      # only fires when *none* of them match, so it is the `publish` job's asset
+      # count that actually catches a half-built release.
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -113,15 +196,20 @@ jobs:
           path: |
             clients/desktop/src-tauri/target/release/bundle/**/*.dmg
             clients/desktop/src-tauri/target/release/bundle/**/*.app.tar.gz
+            clients/desktop/src-tauri/target/release/bundle/**/*.app.tar.gz.sig
             clients/desktop/src-tauri/target/release/bundle/**/*.exe
+            clients/desktop/src-tauri/target/release/bundle/**/*.nsis.zip
+            clients/desktop/src-tauri/target/release/bundle/**/*.nsis.zip.sig
           if-no-files-found: error
 
-  # Opt-in: the live-server tests need the compose stack, so they run on
+  # Opt-in: the live-server tests need a relay to talk to, so they run on
   # workflow_dispatch and on pushes that touch the client's HTTP or pairing
-  # code. They deliberately do not gate `build`.
+  # code. A release commit runs them whatever it touched, because `publish`
+  # needs this job and "the tests did not apply" is not evidence.
   integration-filter:
     name: Decide whether to run integration tests
     runs-on: ubuntu-latest
+    needs: release-gate
     outputs:
       run: ${{ steps.decide.outputs.run }}
 
@@ -139,9 +227,15 @@ jobs:
           # match must not be misread as a failed pipeline.
           set -eu
 
+          if [ '${{ needs.release-gate.outputs.publish }}' = 'true' ]; then
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+            echo 'Release commit; integration tests run regardless of paths.'
+            exit 0
+          fi
+
           # Pick the commit to diff against: the pushed-from SHA, or the PR base.
           # Without the pull_request arm every PR would fall through to the
-          # always-run branch below and spin up a compose stack it does not need.
+          # always-run branch below and spin up a relay it does not need.
           case '${{ github.event_name }}' in
             push)         base='${{ github.event.before }}' ;;
             pull_request) base='${{ github.event.pull_request.base.sha }}' ;;
@@ -228,3 +322,93 @@ jobs:
       - name: Dump server log on failure
         if: failure()
         run: cat "$RUNNER_TEMP/server.log" || true
+
+  # One job, both platforms, one release. A Windows failure means no release at
+  # all rather than a published mac-only one that looks complete.
+  #
+  # `needs` carries the whole gate: on a non-release commit `integration` is
+  # skipped, which skips this job, which is the wanted outcome — so no
+  # `always()` or `!cancelled()` is needed anywhere.
+  publish:
+    name: Publish v${{ needs.release-gate.outputs.version }}
+    runs-on: ubuntu-latest
+    needs: [release-gate, build, integration]
+    if: needs.release-gate.outputs.publish == 'true'
+
+    # Scoped to this job alone; the workflow default stays `contents: read`.
+    permissions:
+      contents: write
+
+    env:
+      VERSION: ${{ needs.release-gate.outputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 25
+
+      - name: Download both platforms' bundles
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          pattern: sharepaste-desktop-*
+
+      - name: Extract the release notes
+        run: node .github/scripts/changelog.mjs clients/desktop/CHANGELOG.md "$VERSION" > notes.md
+
+      # Hand-rolled rather than tauri-action's `includeUpdaterJson`; the script
+      # explains why at its head. One job writes the manifest once, with both
+      # platforms already on disk.
+      - name: Assemble latest.json
+        run: |
+          node .github/scripts/build-latest-json.mjs \
+            --version "$VERSION" \
+            --repo '${{ github.repository }}' \
+            --notes-file notes.md \
+            --artifacts artifacts \
+            --out latest.json
+
+      # Draft first. `releases/latest/download/latest.json` is polled
+      # continuously by every device, so a manifest that becomes reachable
+      # before the bundles it names is a manifest pointing at 404s.
+      - name: Create the draft release
+        run: |
+          set -euo pipefail
+          cat .github/release-body-header.md notes.md > body.md
+          gh release create "v$VERSION" \
+            --draft \
+            --title "v$VERSION" \
+            --notes-file body.md \
+            --target '${{ github.sha }}'
+
+      - name: Upload every asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          # One match per pattern, or no release. A half-built release —
+          # published, plausible, and missing a platform — is worse than none,
+          # and this is the only step that would notice.
+          assets=()
+          for pattern in '*.dmg' '*.app.tar.gz' '*.app.tar.gz.sig' \
+                         '*.exe' '*.nsis.zip' '*.nsis.zip.sig'; do
+            # shellcheck disable=SC2206 # $pattern is a glob; expanding it is the point.
+            matches=(artifacts/**/$pattern)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              printf 'expected exactly one %s, found %d\n' "$pattern" "${#matches[@]}" >&2
+              exit 1
+            fi
+            assets+=("${matches[0]}")
+          done
+          gh release upload "v$VERSION" latest.json "${assets[@]}"
+
+      # Not a prerelease, even at 0.x: the `releases/latest/download` redirect
+      # resolves only to non-draft, non-prerelease releases, so flagging 0.x
+      # honestly would 404 the updater permanently.
+      - name: Publish the release
+        run: gh release edit "v$VERSION" --draft=false --latest
