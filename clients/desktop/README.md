@@ -1,13 +1,11 @@
 # sharepaste - desktop client
 
-Tauri 2 client for the sharepaste self-hosted clipboard sync server. macOS and
-Windows support text clipboard auto-capture, encrypted sync, searchable history,
-and manual history copy.
+Tauri 2 client for the sharepaste self-hosted relay. macOS and Windows, with
+text clipboard auto-capture, encrypted sync, searchable history, and manual
+history copy.
 
-Specs:
-
-- `docs/superpowers/specs/2026-05-01-sharepaste-macos-design.md`
-- `docs/superpowers/specs/2026-05-03-sharepaste-windows-compile-launch-design.md`
+`CONTEXT.md` at the repo root holds the domain glossary; `docs/adr/` holds the
+decisions behind the surfaces this client presents.
 
 ## Prerequisites
 

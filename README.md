@@ -51,7 +51,7 @@ The `--db` flag overrides the DB path; in the compose container it defaults to `
 
 ## Wire protocol
 
-See `docs/superpowers/specs/2026-05-01-sharepaste-design.md`. Endpoints:
+Endpoints:
 
 - `POST /claim-invite`
 - `POST /pair/start`, `POST /pair/claim`, `POST /pair/payload`, `GET /pair/payload`, `GET /pair/poll`
