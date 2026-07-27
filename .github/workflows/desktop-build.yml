@@ -185,10 +185,15 @@ jobs:
           tauriScript: npm run tauri
           args: ${{ matrix.args }}
 
-      # Six patterns, three per platform: the installer a human downloads, the
-      # archive the updater fetches, and its signature. `if-no-files-found: error`
-      # only fires when *none* of them match, so it is the `publish` job's asset
-      # count that actually catches a half-built release.
+      # Five files across the two platforms. macOS separates the two downloads —
+      # `.dmg` for a human, `.app.tar.gz` for the updater — while on Windows the
+      # NSIS `-setup.exe` is both, and the bundler signs it directly rather than
+      # emitting the `.nsis.zip` that Tauri 1 used.
+      #
+      # `if-no-files-found: error` only fires when *none* of these match, and the
+      # installer always does, so it is the `publish` job's per-pattern check
+      # that actually catches a half-built release. It has already earned its
+      # keep once, on exactly this mistake.
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -198,8 +203,7 @@ jobs:
             clients/desktop/src-tauri/target/release/bundle/**/*.app.tar.gz
             clients/desktop/src-tauri/target/release/bundle/**/*.app.tar.gz.sig
             clients/desktop/src-tauri/target/release/bundle/**/*.exe
-            clients/desktop/src-tauri/target/release/bundle/**/*.nsis.zip
-            clients/desktop/src-tauri/target/release/bundle/**/*.nsis.zip.sig
+            clients/desktop/src-tauri/target/release/bundle/**/*.exe.sig
           if-no-files-found: error
 
   # Opt-in: the live-server tests need a relay to talk to, so they run on
@@ -396,7 +400,7 @@ jobs:
           # and this is the only step that would notice.
           assets=()
           for pattern in '*.dmg' '*.app.tar.gz' '*.app.tar.gz.sig' \
-                         '*.exe' '*.nsis.zip' '*.nsis.zip.sig'; do
+                         '*.exe' '*.exe.sig'; do
             # shellcheck disable=SC2206 # $pattern is a glob; expanding it is the point.
             matches=(artifacts/**/$pattern)
             if [ "${#matches[@]}" -ne 1 ]; then

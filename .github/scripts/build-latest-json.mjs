@@ -21,12 +21,18 @@ import { join } from "node:path";
  * The updater's own target keys — `{os}-{arch}` as `tauri_plugin_updater::target()`
  * builds them — mapped to the bundle each one installs from.
  *
- * Only these two: macOS is Apple Silicon only and Windows is x64 NSIS. A third
- * key here without a matching build would 404 for whoever matched it.
+ * Windows is the NSIS `-setup.exe` itself, not a `.nsis.zip`: Tauri 2's bundler
+ * signs the installer directly, and the plugin's `extract_exe` feeds a bare PE
+ * straight to the NSIS install path. `.nsis.zip` is the v1 shape and is never
+ * produced. So the `.exe` is both the download a human takes and the one the
+ * updater takes; macOS keeps them separate, `.dmg` and `.app.tar.gz`.
+ *
+ * Only these two: macOS is Apple Silicon only and Windows is x64. A third key
+ * here without a matching build would 404 for whoever matched it.
  */
 const PLATFORMS = {
   "darwin-aarch64": ".app.tar.gz",
-  "windows-x86_64": ".nsis.zip",
+  "windows-x86_64": ".exe",
 };
 
 function parseArgs(argv) {
