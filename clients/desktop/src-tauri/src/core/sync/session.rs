@@ -1,4 +1,4 @@
-//! One sync session per active account.
+//! One sync session per Active Pairing.
 //!
 //! A session owns two long-lived tasks that share a cancellation token: the SSE
 //! loop, which backfills missed entries and then streams live ones, and the
@@ -21,7 +21,7 @@ use crate::events::{
 };
 use crate::state::AppState;
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::Emitter;
@@ -35,7 +35,7 @@ use zeroize::Zeroizing;
 /// prompt enough to pick up a device paired mid-session.
 const MIRROR_REFRESH_DEBOUNCE: Duration = Duration::from_secs(60);
 
-/// Uploads a queued entry over the account's authenticated connection.
+/// Uploads a queued entry over the pairing's authenticated connection.
 ///
 /// `uploader.rs` only knows the `UploadTransport` shape, which keeps the HTTP
 /// client out of its tests; this is the one production implementation.
@@ -48,15 +48,53 @@ impl UploadTransport for ServerUpload {
     }
 }
 
+/// Whether this session's relay serves `GET /me` at all.
+///
+/// [ADR 0001](../../../../../docs/adr/0001-device-metadata-out-of-band.md) put
+/// the device mirror on its own route, which means a client can be newer than
+/// the relay it is paired to — self-hosted deployments skew by definition, and
+/// the desktop app updates on its own schedule.
+///
+/// A 404 there is **permanent**, unlike a network blip: the route will not
+/// appear until someone redeploys. Without this latch every entry from an
+/// unmirrored device re-probes it (debounced to a minute) and every reconnect
+/// probes it again, so a relay one version behind buries real failures under a
+/// warning a minute, forever.
+#[derive(Default)]
+struct MirrorRoute {
+    absent: AtomicBool,
+}
+
+impl MirrorRoute {
+    fn present(&self) -> bool {
+        !self.absent.load(Ordering::Relaxed)
+    }
+
+    /// Latch the route off. True the first time, so the reason is stated once.
+    fn mark_absent(&self) -> bool {
+        !self.absent.swap(true, Ordering::Relaxed)
+    }
+
+    /// Re-probe on the next attempt.
+    ///
+    /// Called when the relay is reached again, because redeploying it is what
+    /// drops the stream in the first place: an operator who upgrades in place
+    /// is picked up on the next reconnect rather than on the next app restart.
+    fn rearm(&self) {
+        self.absent.store(false, Ordering::Relaxed);
+    }
+}
+
 /// The handles both session tasks share: the Tauri app to emit through, the
-/// global state, the account the session belongs to, and the Device mirror's
-/// refresh clock.
+/// global state, the pairing the session belongs to, the Device mirror's
+/// refresh clock, and whether that mirror's route exists at all.
 #[derive(Clone)]
 struct SessionCtx {
     app: tauri::AppHandle,
     state: Arc<AppState>,
     user_id: String,
     mirror_refreshed_at: Arc<Mutex<Option<Instant>>>,
+    mirror_route: Arc<MirrorRoute>,
 }
 
 impl SessionCtx {
@@ -143,10 +181,26 @@ fn flush_contact(
 /// Refresh the local mirror of the relay's user and device list.
 ///
 /// Best-effort by design: a relay older than this client has no `/me`, and a
-/// session that cannot label its Origins is still a working session.
+/// session that cannot label its Origins is still a working session — rows
+/// fall back to a device-id slice and the footer to the opaque user id.
 async fn mirror_me(ctx: &SessionCtx, server: &ServerClient) {
+    if !ctx.mirror_route.present() {
+        return;
+    }
     let me = match server.me().await {
         Ok(me) => me,
+        // 404 is the relay saying it has no such route, which no amount of
+        // retrying changes. Said once, then latched off for this session.
+        Err(AppError::NotFound(_)) => {
+            if ctx.mirror_route.mark_absent() {
+                tracing::warn!(
+                    user_id = %ctx.user_id,
+                    "relay has no GET /me: Device Labels and the username are unavailable \
+                     until it is upgraded. Entries still sync; Origins read as short device ids."
+                );
+            }
+            return;
+        }
         Err(e) => {
             tracing::warn!(err = %e, "device mirror refresh failed");
             return;
@@ -196,6 +250,7 @@ pub(crate) async fn run_session(app: tauri::AppHandle, state: Arc<AppState>, use
         state,
         user_id,
         mirror_refreshed_at: Arc::new(Mutex::new(None)),
+        mirror_route: Arc::new(MirrorRoute::default()),
     };
     let m = match ctx
         .state
@@ -237,7 +292,7 @@ pub(crate) async fn run_session(app: tauri::AppHandle, state: Arc<AppState>, use
 /// Every iteration re-reads `last_seen_id` from the database, so a stream that
 /// drops resumes from the last entry actually ingested rather than replaying or
 /// skipping. A failed backfill retries on the shared backoff; a successful one
-/// resets it and marks the account online.
+/// resets it and marks the pairing online.
 async fn run_sse_loop(
     ctx: SessionCtx,
     server: ServerClient,
@@ -268,6 +323,9 @@ async fn run_sse_loop(
         };
         match server.list_entries(last_seen, 500).await {
             Ok(rows) => {
+                // A backfill that answers is a relay that just came up — quite
+                // possibly the redeploy that added the route we gave up on.
+                ctx.mirror_route.rearm();
                 // The backfill window: bytes arrived here too, and the SSE tap
                 // has not opened yet.
                 contact.store(crate::now_ms(), Ordering::Relaxed);
@@ -438,6 +496,39 @@ mod tests {
 
     fn stored(conn: &Connection) -> Option<i64> {
         accounts::find(conn, "u").unwrap().unwrap().last_contact_at
+    }
+
+    /*
+     * The bug this defends: a relay one version behind 404s `/me` forever, and
+     * every entry from an unmirrored device re-probed it a minute apart. The
+     * reason is worth stating once, not once a minute.
+     */
+    #[test]
+    fn an_absent_me_route_is_reported_once_and_then_stops_being_probed() {
+        let route = MirrorRoute::default();
+        assert!(route.present(), "a fresh session must try the route");
+
+        assert!(route.mark_absent(), "the first 404 is the one worth logging");
+        assert!(!route.present(), "and no request may follow it");
+        assert!(!route.mark_absent(), "a second 404 says nothing new");
+        assert!(!route.mark_absent());
+    }
+
+    /*
+     * Redeploying the relay is what drops the stream, so the reconnect that
+     * follows is exactly when a route that was missing may have appeared.
+     * Without the re-arm, an upgraded relay stays unmirrored until the app is
+     * restarted.
+     */
+    #[test]
+    fn reaching_the_relay_again_re_probes_a_route_that_was_missing() {
+        let route = MirrorRoute::default();
+        route.mark_absent();
+        assert!(!route.present());
+
+        route.rearm();
+        assert!(route.present());
+        assert!(route.mark_absent(), "and the reason is stated again for the new deployment");
     }
 
     #[test]
