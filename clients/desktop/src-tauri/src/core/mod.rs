@@ -1,6 +1,5 @@
 //! Pure-Rust core for sharepaste-desktop.
 
-pub(crate) mod account;
 pub(crate) mod capture;
 pub mod crypto;
 pub mod http;

@@ -1,4 +1,4 @@
-use crate::core::account::AccountRegistry;
+use crate::core::pairing::registry::PairingRegistry;
 use crate::core::keychain::Keychain;
 use crate::core::sync::ConnectionState;
 use parking_lot::Mutex;
@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 pub(crate) struct AppState {
     pub(crate) conn: Arc<tokio::sync::Mutex<Connection>>,
     pub(crate) keychain: Arc<dyn Keychain>,
-    pub(crate) registry: Arc<AccountRegistry>,
+    pub(crate) registry: Arc<PairingRegistry>,
     pub(crate) sync_tasks: Mutex<HashMap<String, CancellationToken>>,
     pub(crate) upload_triggers: Mutex<HashMap<String, Arc<Notify>>>,
     pub(crate) conn_states: Mutex<HashMap<String, ConnectionState>>,
@@ -35,7 +35,7 @@ impl AppState {
     pub(crate) fn new(
         conn: Arc<tokio::sync::Mutex<Connection>>,
         keychain: Arc<dyn Keychain>,
-        registry: Arc<AccountRegistry>,
+        registry: Arc<PairingRegistry>,
     ) -> Self {
         Self {
             conn,

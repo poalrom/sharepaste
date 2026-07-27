@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { mockIpc, type MockIpc } from "./helpers";
-import { useAccountsStore, useHistoryStore, useUiStore } from "../store";
+import { usePairingsStore, useHistoryStore, useUiStore } from "../store";
 import HistoryList from "../views/HistoryList";
 
 let ipc: MockIpc;
@@ -12,26 +12,26 @@ describe("HistoryList", () => {
   beforeEach(() => {
     scrollIntoView.mockClear();
     ipc = mockIpc();
-    useUiStore.setState({ search: "", selectedIndex: 0, mainSection: "accounts" });
+    useUiStore.setState({ search: "", selectedIndex: 0, mainSection: "history" });
     useHistoryStore.setState({ entries: [
       { id: 1, user_id: "u", preview: "Hello", created_at: 1, device_id: "d" },
       { id: 2, user_id: "u", preview: "World", created_at: 2, device_id: "d" },
     ]});
-    useAccountsStore.setState({
-      accounts: [{ user_id: "u", device_id: "d", label: "mac", server_url: "https://s", status: "Online", pending: 0, is_active: true }],
+    usePairingsStore.setState({
+      pairings: [{ user_id: "u", device_id: "d", label: "mac", server_url: "https://s", status: "Online", pending: 0, is_active: true }],
       active: "u",
     });
   });
 
   it("filters by search term", () => {
-    useUiStore.setState({ search: "world", selectedIndex: 0, mainSection: "accounts" });
+    useUiStore.setState({ search: "world", selectedIndex: 0, mainSection: "history" });
     render(<HistoryList />);
     const rows = screen.getAllByTestId("entry-row");
     expect(rows).toHaveLength(1);
   });
 
   it("highlights the selected index", () => {
-    useUiStore.setState({ search: "", selectedIndex: 1, mainSection: "accounts" });
+    useUiStore.setState({ search: "", selectedIndex: 1, mainSection: "history" });
     render(<HistoryList />);
     const rows = screen.getAllByTestId("entry-row");
     expect(rows[1]!).toHaveAttribute("data-selected", "true");

@@ -27,6 +27,17 @@ The local record binding this machine to one user on one relay. A machine may
 hold several; exactly one is active at a time.
 _Avoid_: account, profile, connection
 
+**Active Pairing**:
+The one pairing a machine syncs and captures to. The popover mirrors it, and
+entries captured on this machine upload to it. Survives restarts.
+_Avoid_: current account, selected account, default
+
+**Viewed Pairing**:
+The pairing whose history the main window is displaying. Defaults to the active
+pairing and may differ from it. A transient view choice only: it changes nothing
+about syncing or capture, and is forgotten when the window closes.
+_Avoid_: current account, selection, focus
+
 **Relay**:
 The self-hosted service that stores and fans out ciphertext. Holds no key
 material and can never read an entry.
@@ -78,5 +89,6 @@ The tray window: a keyboard-first picker for pasting a recent entry.
 _Avoid_: tray menu, panel, quick view
 
 **Main Window**:
-The settings surface: pairings, devices, capture rules.
+The full surface: history, pairings, devices, capture rules. The only place an
+entry can be read in full rather than merely picked.
 _Avoid_: preferences, dashboard, console

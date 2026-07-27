@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizePreview, originLabel, relativeAge } from "../lib/format";
+import { agePhrase, normalizePreview, originLabel, relativeAge } from "../lib/format";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -31,6 +31,24 @@ describe("relativeAge", () => {
   it("clamps a future timestamp to 'now' rather than emitting a negative age", () => {
     const t = 1_000_000_000;
     expect(relativeAge(t, t - 5 * HOUR)).toBe("now");
+  });
+});
+
+describe("agePhrase", () => {
+  // The bug this exists to prevent: four surfaces each appended "ago" to
+  // relativeAge, and every one of them rendered "now ago" under a minute.
+  it("leaves the sub-minute reading alone rather than saying 'now ago'", () => {
+    const t = 1_000_000_000;
+    expect(agePhrase(t, t)).toBe("now");
+    expect(agePhrase(t, t + 59_999)).toBe("now");
+    expect(agePhrase(t, t - HOUR)).toBe("now");
+  });
+
+  it("suffixes every real age", () => {
+    const t = 1_000_000_000;
+    expect(agePhrase(t, t + MINUTE)).toBe("1m ago");
+    expect(agePhrase(t, t + 4 * HOUR)).toBe("4h ago");
+    expect(agePhrase(t, t + 30 * DAY)).toBe("1mo ago");
   });
 });
 

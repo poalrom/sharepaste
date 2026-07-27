@@ -2,16 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { mockIpc, type MockIpc } from "./helpers";
 import {
-  useAccountsStore,
+  usePairingsStore,
   useHistoryStore,
   useStatusStore,
   useContactStore,
   useUiStore,
 } from "../store";
-import type { Account, EntryView } from "../types";
+import type { Pairing, EntryView } from "../types";
 import Popover from "../views/Popover";
 
-const accounts: Account[] = [
+const accounts: Pairing[] = [
   {
     user_id: "u-oldest",
     device_id: "d-oldest",
@@ -34,7 +34,7 @@ const accounts: Account[] = [
 
 let ipc: MockIpc;
 // Mutable so a test can change what the backend serves without re-injecting.
-let servedAccounts: Account[];
+let servedAccounts: Pairing[];
 let servedHistory: EntryView[];
 let servedLastContact: number | null;
 
@@ -44,7 +44,7 @@ beforeEach(() => {
   servedLastContact = null;
   ipc = mockIpc({
     invoke: (command, args) => {
-      if (command === "list_accounts") return servedAccounts;
+      if (command === "list_pairings") return servedAccounts;
       if (command === "list_history") return servedHistory;
       if (command === "get_contact") {
         const { user_id } = (args?.args ?? {}) as { user_id: string };
@@ -53,16 +53,16 @@ beforeEach(() => {
       return undefined;
     },
   });
-  useAccountsStore.setState({ accounts: [], active: undefined });
+  usePairingsStore.setState({ pairings: [], active: undefined });
   useHistoryStore.setState({ entries: [] });
   useStatusStore.setState({ byUser: {} });
   useContactStore.setState({ lastContactByUser: {} });
-  useUiStore.setState({ search: "", selectedIndex: 0, mainSection: "accounts" });
+  useUiStore.setState({ search: "", selectedIndex: 0, mainSection: "history" });
   useUiStore.getState().dismissToast();
 });
 
 describe("Popover", () => {
-  it("loads initial history for the account selected by hydration", async () => {
+  it("loads initial history for the Pairing selected by hydration", async () => {
     render(<Popover />);
 
     await waitFor(() => {
@@ -76,34 +76,59 @@ describe("Popover", () => {
   });
 
   it("empty-state buttons open the matching main-window section", async () => {
-    const cases: Array<{ served: Account[]; label: string; section: string }> = [
+    const cases: Array<{ served: Pairing[]; label: string; section: string }> = [
       {
         served: accounts.map((a) => ({ ...a, is_active: false, status: "Disconnected" })),
-        label: "CHOOSE ACCOUNT",
-        section: "accounts",
+        label: "CHOOSE PAIRING",
+        section: "pairings",
       },
       { served: [], label: "PAIR A DEVICE", section: "pairing" },
     ];
 
     for (const { served, label, section } of cases) {
       servedAccounts = served;
-      useAccountsStore.setState({ accounts: [], active: undefined });
+      usePairingsStore.setState({ pairings: [], active: undefined });
       ipc.invoke.mockClear();
 
       const view = render(<Popover />);
       fireEvent.click(await view.findByText(label));
       await waitFor(() => {
-        expect(ipc.invoke).toHaveBeenCalledWith("open_main_window", { args: { section } });
+        expect(ipc.invoke).toHaveBeenCalledWith("open_main_window", {
+          args: { section, entry_id: undefined },
+        });
         expect(ipc.invoke).toHaveBeenCalledWith("hide_popover", undefined);
       });
 
       view.unmount();
     }
   });
+
+  /*
+   * The handoff to the reader (ADR 0003). It is an icon, not a binding: ADR
+   * 0002 established the hint strip has no width for a fourth entry, and the
+   * whole point is reachability for the case a collapsed preview cannot serve.
+   */
+  it("the History icon opens the reader on the selected entry", async () => {
+    servedHistory = [
+      { id: 11, user_id: "u-active", preview: "one", created_at: 1, device_id: "d" },
+      { id: 22, user_id: "u-active", preview: "two", created_at: 2, device_id: "d" },
+    ];
+    const view = render(<Popover />);
+    await waitFor(() => expect(view.getAllByTestId("entry-row")).toHaveLength(2));
+
+    await act(async () => useUiStore.setState({ selectedIndex: 1 }));
+    fireEvent.click(view.getByTestId("open-history"));
+
+    await waitFor(() =>
+      expect(ipc.invoke).toHaveBeenCalledWith("open_main_window", {
+        args: { section: "history", entry_id: 22 },
+      }),
+    );
+  });
 });
 
 describe("Popover event subscriptions", () => {
-  it("re-lists history for the active account on history-changed", async () => {
+  it("re-lists history for the Active Pairing on history-changed", async () => {
     render(<Popover />);
     await waitFor(() => expect(ipc.handlers.get("history-changed")).toHaveLength(1));
 
@@ -114,7 +139,7 @@ describe("Popover event subscriptions", () => {
     });
   });
 
-  it("ignores history-changed for a non-active account", async () => {
+  it("ignores history-changed for a non-active Pairing", async () => {
     render(<Popover />);
     await waitFor(() => expect(ipc.handlers.get("history-changed")).toHaveLength(1));
     const before = ipc.invoke.mock.calls.filter((c) => c[0] === "list_history").length;
@@ -213,7 +238,7 @@ describe("Popover degraded strip", () => {
   // State arrives from `list_accounts` at hydration and from `connection-state`
   // thereafter, so the tests drive it the same two ways the app does rather
   // than pre-seeding a store that hydration would immediately overwrite.
-  const serveState = (status: Account["status"]) => {
+  const serveState = (status: Pairing["status"]) => {
     servedAccounts = accounts.map((a) =>
       a.user_id === "u-active" ? { ...a, status } : a,
     );
@@ -235,7 +260,7 @@ describe("Popover degraded strip", () => {
 
     const strip = await render(<Popover />).findByTestId("degraded-strip");
     expect(strip).toHaveTextContent("OFFLINE");
-    await waitFor(() => expect(strip).toHaveTextContent("LAST CONTACT 4m AGO"));
+    await waitFor(() => expect(strip).toHaveTextContent("LAST CONTACT 4m ago"));
   });
 
   // `run_sse_loop` enters Connecting at the top of every iteration, including
@@ -288,7 +313,7 @@ describe("Popover footer", () => {
     expect(await many.findByText("ALICE")).toBeInTheDocument();
     many.unmount();
 
-    useAccountsStore.setState({ accounts: [], active: undefined });
+    usePairingsStore.setState({ pairings: [], active: undefined });
     servedAccounts = [{ ...accounts[1]!, username: "alice" }];
     const one = render(<Popover />);
     await one.findByPlaceholderText("Search history…");

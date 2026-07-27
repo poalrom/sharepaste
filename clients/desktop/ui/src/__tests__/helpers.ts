@@ -1,5 +1,5 @@
 import { afterEach, vi, type Mock } from "vitest";
-import { injectForTests, type Invoker, type Listener } from "../ipc/tauri";
+import { injectForTests, type Invoker, type Listener, type WindowControls } from "../ipc/tauri";
 
 /**
  * Test-side implementation of a Tauri command. The return value is resolved as
@@ -17,10 +17,21 @@ export type MockIpc = {
   handlers: Map<string, Array<(payload: never) => void>>;
   /** Delivers `payload` to every listener registered for `event`. */
   emit: (event: string, payload?: unknown) => void;
+  /**
+   * The main window's own titlebar controls. Spied rather than stubbed away
+   * because with `decorations(false)` these three buttons are the only way to
+   * minimise, maximise or close, so a test has to be able to assert they fire.
+   */
+  window: { [K in keyof WindowControls]: Mock<WindowControls[K]> };
 };
 
 const inertInvoke: Invoker = async () => undefined as never;
 const inertListen: Listener = async () => () => {};
+const inertWindow = (): WindowControls => ({
+  minimize: async () => {},
+  toggleMaximize: async () => {},
+  close: async () => {},
+});
 
 /**
  * Installs mock IPC transports for the duration of one test and returns the
@@ -44,15 +55,21 @@ export function mockIpc(opts: { invoke?: InvokeHandler; listen?: Listener } = {}
     };
   };
   const listen = vi.fn(opts.listen ?? bus) as unknown as MockListen;
+  const win = {
+    minimize: vi.fn(async () => {}),
+    toggleMaximize: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+  };
 
   // vi.fn() erases the callee's type parameter, so the generic Invoker/Listener
   // shapes have to be reasserted at the injection boundary.
-  injectForTests(invoke as unknown as Invoker, listen as unknown as Listener);
+  injectForTests(invoke as unknown as Invoker, listen as unknown as Listener, win);
 
   return {
     invoke,
     listen,
     handlers,
+    window: win,
     emit: (event, payload) => {
       for (const h of [...(handlers.get(event) ?? [])]) (h as (p: unknown) => void)(payload);
     },
@@ -62,5 +79,5 @@ export function mockIpc(opts: { invoke?: InvokeHandler; listen?: Listener } = {}
 // Registered once per test file at import time: no test may leak its mocks into
 // the next one, and a late-unmounting component talks to an inert transport.
 afterEach(() => {
-  injectForTests(inertInvoke, inertListen);
+  injectForTests(inertInvoke, inertListen, inertWindow());
 });

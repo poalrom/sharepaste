@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { cmd } from "../ipc/commands";
 import { events } from "../ipc/events";
-import { relativeAge } from "../lib/format";
+import { agePhrase } from "../lib/format";
 import { useNow } from "../lib/useNow";
 import {
-  useAccountsStore,
+  usePairingsStore,
   useHistoryStore,
   useStatusStore,
   useContactStore,
@@ -22,9 +22,9 @@ const SWEEP_MS = 900;
 const TOAST_MS = 2200;
 
 export default function Popover() {
-  const accounts = useAccountsStore((s) => s.accounts);
-  const active = useAccountsStore((s) => s.active);
-  const hydrateAccounts = useAccountsStore((s) => s.hydrate);
+  const pairings = usePairingsStore((s) => s.pairings);
+  const active = usePairingsStore((s) => s.active);
+  const hydratePairings = usePairingsStore((s) => s.hydrate);
   const hydrateHistory = useHistoryStore((s) => s.hydrate);
   const addEntry = useHistoryStore((s) => s.add);
   const removeEntry = useHistoryStore((s) => s.remove);
@@ -91,15 +91,15 @@ export default function Popover() {
     let unsub: Array<() => void> = [];
     let cancelled = false;
     (async () => {
-      const accs = await cmd.listAccounts();
+      const accs = await cmd.listPairings();
       if (cancelled) return;
-      hydrateAccounts(accs);
+      hydratePairings(accs);
       // `list_accounts` already knows each session's state; without seeding it
       // here the store reads Disconnected until the next transition happens to
       // fire, and a popover opened onto a healthy session shows the degraded
       // strip indefinitely.
       for (const a of accs) setStatus(a.user_id, { state: a.status, pending: a.pending });
-      const activeUserId = useAccountsStore.getState().active;
+      const activeUserId = usePairingsStore.getState().active;
       if (activeUserId) {
         const rows = await cmd.listHistory({ user_id: activeUserId, limit: 100 });
         if (!cancelled) hydrateHistory(rows);
@@ -111,10 +111,10 @@ export default function Popover() {
           .catch(() => {});
       }
       unsub.push(await events.onEntryAdded(({ user_id, entry }) => {
-        if (user_id === useAccountsStore.getState().active) addEntry(entry);
+        if (user_id === usePairingsStore.getState().active) addEntry(entry);
       }));
       unsub.push(await events.onEntryDeleted(({ user_id, entry_id }) => {
-        if (user_id === useAccountsStore.getState().active) removeEntry(entry_id);
+        if (user_id === usePairingsStore.getState().active) removeEntry(entry_id);
       }));
       unsub.push(await events.onConnectionState(({ user_id, state, last_error }) => {
         setStatus(user_id, last_error !== undefined ? { state, last_error } : { state });
@@ -122,15 +122,15 @@ export default function Popover() {
       unsub.push(await events.onPendingCount(({ user_id, count }) => {
         setStatus(user_id, { pending: count });
       }));
-      unsub.push(await events.onAccountAdded(() => {
-        cmd.listAccounts().then(hydrateAccounts);
+      unsub.push(await events.onPairingAdded(() => {
+        cmd.listPairings().then(hydratePairings);
       }));
-      unsub.push(await events.onAccountRemoved(({ user_id }) => {
-        useAccountsStore.getState().remove(user_id);
+      unsub.push(await events.onPairingRemoved(({ user_id }) => {
+        usePairingsStore.getState().remove(user_id);
       }));
-      unsub.push(await events.onActiveChanged(({ user_id }) => {
+      unsub.push(await events.onActivePairingChanged(({ user_id }) => {
         const next = user_id ?? undefined;
-        useAccountsStore.getState().setActive(next);
+        usePairingsStore.getState().setActive(next);
         if (next) {
           cmd.listHistory({ user_id: next, limit: 100 }).then(hydrateHistory).catch(() => {});
           cmd.getContact({ user_id: next })
@@ -141,7 +141,7 @@ export default function Popover() {
         }
       }));
       unsub.push(await events.onHistoryChanged(({ user_id }) => {
-        if (user_id !== useAccountsStore.getState().active) return;
+        if (user_id !== usePairingsStore.getState().active) return;
         cmd.listHistory({ user_id, limit: 100 }).then(hydrateHistory).catch(() => {});
       }));
       unsub.push(await events.onContact(({ user_id, last_contact_at }) => {
@@ -152,7 +152,7 @@ export default function Popover() {
       cancelled = true;
       unsub.forEach((u) => u());
     };
-  }, [addEntry, hydrateAccounts, hydrateHistory, removeEntry, setLastContact, setStatus]);
+  }, [addEntry, hydratePairings, hydrateHistory, removeEntry, setLastContact, setStatus]);
 
   const conn = CONNECTION[status?.state ?? "Disconnected"];
   const degraded = active !== undefined && conn.degraded ? conn : undefined;
@@ -173,9 +173,9 @@ export default function Popover() {
         </span>
       </header>
 
-      {accounts.length === 0 ? (
+      {pairings.length === 0 ? (
         <PanelMessage
-          title="NO ACCOUNTS PAIRED"
+          title="NO PAIRINGS ON THIS DEVICE"
           action={{
             label: "PAIR A DEVICE",
             variant: "solid",
@@ -185,13 +185,13 @@ export default function Popover() {
         />
       ) : !active ? (
         <PanelMessage
-          title="NO ACTIVE ACCOUNT"
+          title="NO ACTIVE PAIRING"
           action={{
-            label: "CHOOSE ACCOUNT",
+            label: "CHOOSE PAIRING",
             variant: "outline",
-            testId: "choose-account",
+            testId: "choose-pairing",
             onClick: () =>
-              cmd.openSection("accounts").catch((err) => console.error("open accounts failed", err)),
+              cmd.openSection("pairings").catch((err) => console.error("open pairings failed", err)),
           }}
         />
       ) : (
@@ -206,9 +206,7 @@ export default function Popover() {
                 {lastContactAt === null ? (
                   "NEVER"
                 ) : (
-                  <>
-                    <span className="normal-case">{relativeAge(lastContactAt, now)}</span> AGO
-                  </>
+                  <span className="normal-case">{agePhrase(lastContactAt, now)}</span>
                 )}
               </span>
             </Strip>

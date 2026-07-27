@@ -1,14 +1,18 @@
 import { cmd } from "../ipc/commands";
-import { useAccountsStore, useActiveAccount, useStatusStore } from "../store";
+import { usePairingsStore, useActivePairing, useStatusStore, useUiStore } from "../store";
+import { useFilteredEntries } from "../store/history";
 import { CONNECTION } from "./connection";
 import { IconButton, StatusLight } from "./fui";
 
 export default function Footer({ activeUserId }: { activeUserId: string | undefined }) {
-  const pairingCount = useAccountsStore((s) => s.accounts.length);
-  const activePairing = useActiveAccount();
+  const pairingCount = usePairingsStore((s) => s.pairings.length);
+  const activePairing = useActivePairing();
   const status = useStatusStore((s) => (activeUserId ? s.byUser[activeUserId] : undefined));
   const light = CONNECTION[status?.state ?? "Disconnected"];
   const pending = status?.pending ?? 0;
+  const filtered = useFilteredEntries();
+  const selectedIndex = useUiStore((s) => s.selectedIndex);
+  const selected = filtered[selectedIndex];
 
   // One Pairing needs no naming - the window is unambiguously its history. The
   // count stands in when nothing is active, because then the light and the list
@@ -29,8 +33,24 @@ export default function Footer({ activeUserId }: { activeUserId: string | undefi
         {readout && <span className="min-w-0 truncate">{readout}</span>}
       </span>
       <span className="flex shrink-0 items-center gap-1">
-        <IconButton label="Accounts" onClick={() => cmd.openSection("accounts").catch(() => {})}>
-          <AccountsIcon />
+        {/*
+          The handoff to the reader. It is an icon rather than a keybinding
+          because ADR 0002 established there is no width here for a fourth hint,
+          and a binding the hint strip cannot teach is a binding nobody finds.
+          It carries the selected entry so the case that justifies the reader —
+          two previews that diverge past the truncation — costs one click, not a
+          manual re-find in a second window.
+        */}
+        <IconButton
+          label="History"
+          title="Open this entry in the main window"
+          testId="open-history"
+          onClick={() => cmd.openSection("history", selected?.id).catch(() => {})}
+        >
+          <HistoryIcon />
+        </IconButton>
+        <IconButton label="Pairings" onClick={() => cmd.openSection("pairings").catch(() => {})}>
+          <PairingsIcon />
         </IconButton>
         <IconButton label="Settings" onClick={() => cmd.openSection("settings").catch(() => {})}>
           <SettingsIcon />
@@ -40,7 +60,7 @@ export default function Footer({ activeUserId }: { activeUserId: string | undefi
   );
 }
 
-function AccountsIcon() {
+function PairingsIcon() {
   return (
     <svg
       width="14"
@@ -55,6 +75,26 @@ function AccountsIcon() {
     >
       <circle cx="12" cy="12" r="9" />
       <circle cx="12" cy="12" r="3.5" />
+    </svg>
+  );
+}
+
+function HistoryIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3.5" y="4.5" width="17" height="15" />
+      <path d="M3.5 9.5h17" />
+      <path d="M8.5 9.5v10" />
     </svg>
   );
 }

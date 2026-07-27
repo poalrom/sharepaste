@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { mockIpc, type MockIpc } from "./helpers";
-import { useAccountsStore } from "../store";
-import type { Account, Settings } from "../types";
+import { usePairingsStore } from "../store";
+import type { Pairing, Settings } from "../types";
 import SettingsSection from "../views/sections/SettingsSection";
 
 let ipc: MockIpc;
 
-const account: Account = {
+const pairing: Pairing = {
   user_id: "u-active", device_id: "d1", label: "Laptop", server_url: "https://srv",
   status: "Online", pending: 0, is_active: true,
 };
@@ -28,11 +28,11 @@ beforeEach(() => {
           hotkey: patch.hotkey ?? null,
         };
       }
-      if (command === "list_accounts") return [account];
+      if (command === "list_pairings") return [pairing];
       return null;
     },
   });
-  useAccountsStore.setState({ accounts: [], active: undefined });
+  usePairingsStore.setState({ pairings: [], active: undefined });
 });
 
 describe("SettingsSection", () => {
@@ -128,7 +128,7 @@ describe("SettingsSection", () => {
   it("surfaces a clear-history failure in the error line", async () => {
     ipc.invoke.mockImplementation(async (command) => {
       if (command === "get_settings") return defaults as never;
-      if (command === "list_accounts") return [account] as never;
+      if (command === "list_pairings") return [pairing] as never;
       if (command === "clear_history") throw new Error("server unreachable");
       return null as never;
     });

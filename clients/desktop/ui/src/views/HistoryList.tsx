@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useActiveAccount, useFilteredEntries, useHistoryStore, useUiStore } from "../store";
+import { useActivePairing, useFilteredEntries, useHistoryStore, useUiStore } from "../store";
 import { useNow } from "../lib/useNow";
 import EntryRow, { copyEntry, deleteEntry } from "./EntryRow";
 import { PanelMessage } from "./fui";
@@ -14,7 +14,7 @@ export default function HistoryList() {
   const setSearch = useUiStore((s) => s.setSearch);
   const selectedIndex = useUiStore((s) => s.selectedIndex);
   const setSelectedIndex = useUiStore((s) => s.setSelectedIndex);
-  const activePairing = useActiveAccount();
+  const activePairing = useActivePairing();
   const active = activePairing?.user_id;
   const ownDeviceId = activePairing?.device_id;
   // One clock for the whole list: every row reads the same tick.

@@ -8,10 +8,10 @@ pub mod core;
 mod popover;
 
 use crate::config::Paths;
-use crate::core::account::AccountRegistry;
+use crate::core::pairing::registry::PairingRegistry;
 use crate::core::keychain::SystemKeychain;
 use crate::core::storage::open as open_storage;
-use crate::events::ACTIVE_CHANGED;
+use crate::events::ACTIVE_PAIRING_CHANGED;
 use crate::popover::{build_popover_window, toggle_popover};
 use crate::state::AppState;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ pub fn launch() {
     let conn = open_storage(&paths.db_path).expect("open sqlite");
     let conn = Arc::new(tokio::sync::Mutex::new(conn));
     let keychain: Arc<dyn core::keychain::Keychain> = Arc::new(SystemKeychain::default());
-    let registry = Arc::new(AccountRegistry::new(conn.clone(), keychain.clone()));
+    let registry = Arc::new(PairingRegistry::new(conn.clone(), keychain.clone()));
     let app_state = Arc::new(AppState::new(conn, keychain, registry));
 
     tauri::Builder::default()
@@ -39,7 +39,7 @@ pub fn launch() {
         .setup(move |app| {
             build_tray(app, app_state.clone())?;
             build_popover_window(app)?;
-            spawn_sync_for_existing_accounts(app.handle().clone(), app_state.clone());
+            spawn_sync_for_existing_pairings(app.handle().clone(), app_state.clone());
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             spawn_clipboard_capture(app.handle().clone(), app_state.clone());
             register_initial_hotkey(app.handle().clone(), app_state.clone());
@@ -47,12 +47,12 @@ pub fn launch() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::list_accounts,
+            commands::list_pairings,
             commands::pair_with_invite,
             commands::pair_start,
             commands::pair_with_code,
-            commands::forget_account,
-            commands::set_active_account,
+            commands::forget_pairing,
+            commands::set_active_pairing,
             commands::get_contact,
             commands::list_history,
             commands::copy_to_clipboard,
@@ -76,7 +76,8 @@ fn build_tray(app: &mut tauri::App, _state: Arc<AppState>) -> tauri::Result<()> 
         .ok_or_else(|| tauri::Error::Io(std::io::Error::other("tray 'main' not found")))?;
 
     let menu = MenuBuilder::new(app)
-        .item(&MenuItemBuilder::with_id("open_accounts", "Accounts…").build(app)?)
+        .item(&MenuItemBuilder::with_id("open_history", "History…").build(app)?)
+        .item(&MenuItemBuilder::with_id("open_pairings", "Pairings…").build(app)?)
         .item(&MenuItemBuilder::with_id("open_pairing", "Pair device…").build(app)?)
         .item(&MenuItemBuilder::with_id("open_settings", "Settings…").build(app)?)
         .separator()
@@ -92,14 +93,17 @@ fn build_tray(app: &mut tauri::App, _state: Arc<AppState>) -> tauri::Result<()> 
 
     let menu_for_event = menu.clone();
     tray.on_menu_event(|app, event| match event.id.as_ref() {
-        "open_accounts" => {
-            let _ = open_main_window_impl(app, "accounts");
+        "open_history" => {
+            let _ = open_main_window_impl(app, "history", None);
+        }
+        "open_pairings" => {
+            let _ = open_main_window_impl(app, "pairings", None);
         }
         "open_pairing" => {
-            let _ = open_main_window_impl(app, "pairing");
+            let _ = open_main_window_impl(app, "pairing", None);
         }
         "open_settings" => {
-            let _ = open_main_window_impl(app, "settings");
+            let _ = open_main_window_impl(app, "settings", None);
         }
         "quit" => {
             app.exit(0);
@@ -148,11 +152,24 @@ const WINDOW_LABEL_POPOVER: &str = WINDOW_LABELS[1];
 
 /// The set of sections `main.html` knows how to render. Kept next to the
 /// window opener so the guard and the router stay in sync.
+///
+/// `pairing` is not a pane of its own: it selects the Pairings pane with the
+/// add-flow already open, which is what the tray's "Pair device…" wants and
+/// what ADR 0004 kept the singular around for.
 fn is_valid_section(section: &str) -> bool {
-    matches!(section, "accounts" | "settings" | "pairing")
+    matches!(section, "history" | "pairings" | "settings" | "pairing")
 }
 
-fn open_main_window_impl(app: &tauri::AppHandle, section: &str) -> tauri::Result<()> {
+/// Open (or focus) the main window on `section`.
+///
+/// `entry_id` is the popover's handoff: the entry it had selected, carried so
+/// the reader opens on the row the user was already squinting at. A stale id
+/// simply selects nothing.
+fn open_main_window_impl(
+    app: &tauri::AppHandle,
+    section: &str,
+    entry_id: Option<i64>,
+) -> tauri::Result<()> {
     if !is_valid_section(section) {
         return Err(tauri::Error::Io(std::io::Error::other(format!(
             "unknown section: {section}"
@@ -160,14 +177,27 @@ fn open_main_window_impl(app: &tauri::AppHandle, section: &str) -> tauri::Result
     }
     if let Some(win) = app.get_webview_window(WINDOW_LABEL_MAIN) {
         win.set_focus()?;
-        let _ = app.emit_to(WINDOW_LABEL_MAIN, crate::events::MAIN_NAVIGATE, section);
+        let _ = app.emit_to(
+            WINDOW_LABEL_MAIN,
+            crate::events::MAIN_NAVIGATE,
+            crate::events::MainNavigate { section: section.to_string(), entry_id },
+        );
         return Ok(());
     }
-    let url = format!("main.html?section={section}");
+    let url = match entry_id {
+        Some(id) => format!("main.html?section={section}&entry={id}"),
+        None => format!("main.html?section={section}"),
+    };
+    // Decorations off: the panel's notch is cut into the window's own corners,
+    // and an OS titlebar sitting above it reads as a rendering fault. Resizable
+    // and generously sized anyway — unlike the popover this window holds a
+    // scrolling list beside a pane for reading arbitrary text.
     let win = WebviewWindowBuilder::new(app, WINDOW_LABEL_MAIN, WebviewUrl::App(url.into()))
         .title("sharepaste")
-        .inner_size(720.0, 560.0)
+        .inner_size(980.0, 680.0)
+        .min_inner_size(860.0, 560.0)
         .resizable(true)
+        .decorations(false)
         .build()?;
 
     #[cfg(target_os = "macos")]
@@ -194,15 +224,15 @@ mod section_tests {
     use super::is_valid_section;
 
     #[test]
-    fn accepts_exactly_the_three_routable_sections() {
-        for section in ["accounts", "settings", "pairing"] {
+    fn accepts_exactly_the_four_routable_sections() {
+        for section in ["history", "pairings", "settings", "pairing"] {
             assert!(is_valid_section(section), "{section} must be routable");
         }
     }
 
     #[test]
     fn rejects_blank_unknown_and_miscased_sections() {
-        for section in ["", "  ", "history", "Accounts", "ACCOUNTS"] {
+        for section in ["", "  ", "accounts", "History", "PAIRINGS"] {
             assert!(
                 !is_valid_section(section),
                 "{section:?} must not open the main window"
@@ -211,7 +241,7 @@ mod section_tests {
     }
 }
 
-fn spawn_sync_for_existing_accounts(app: tauri::AppHandle, state: Arc<AppState>) {
+fn spawn_sync_for_existing_pairings(app: tauri::AppHandle, state: Arc<AppState>) {
     tauri::async_runtime::spawn(async move {
         let persisted = match state.registry.load_persisted_active().await {
             Ok(p) => p,
@@ -241,8 +271,8 @@ fn spawn_sync_for_existing_accounts(app: tauri::AppHandle, state: Arc<AppState>)
             tracing::warn!(err = %e, "persist active on startup failed");
         }
         let _ = app.emit(
-            ACTIVE_CHANGED,
-            crate::events::ActiveChanged {
+            ACTIVE_PAIRING_CHANGED,
+            crate::events::ActivePairingChanged {
                 user_id: Some(user_id.clone()),
             },
         );

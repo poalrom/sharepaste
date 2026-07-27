@@ -9,7 +9,7 @@ export type EntryView = {
   device_label?: string;
 };
 
-export type Account = {
+export type Pairing = {
   user_id: string;
   device_id: string;
   label: string;

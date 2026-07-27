@@ -1,8 +1,8 @@
 use serde::Serialize;
 
-pub(crate) const ACCOUNT_ADDED: &str   = "account-added";
-pub(crate) const ACCOUNT_REMOVED: &str = "account-removed";
-pub(crate) const ACTIVE_CHANGED: &str  = "active-changed";
+pub(crate) const PAIRING_ADDED: &str   = "pairing-added";
+pub(crate) const PAIRING_REMOVED: &str = "pairing-removed";
+pub(crate) const ACTIVE_PAIRING_CHANGED: &str  = "active-pairing-changed";
 pub(crate) const CONNECTION_STATE: &str = "connection-state";
 pub(crate) const ENTRY_ADDED: &str     = "entry-added";
 pub(crate) const ENTRY_DELETED: &str   = "entry-deleted";
@@ -16,13 +16,13 @@ pub(crate) const PAIR_EXPIRED: &str    = "pair-expired";
 pub(crate) const MAIN_NAVIGATE: &str   = "main://navigate";
 
 #[derive(Serialize, Clone)]
-pub(crate) struct AccountAdded { pub user_id: String, pub device_id: String, pub label: String }
+pub(crate) struct PairingAdded { pub user_id: String, pub device_id: String, pub label: String }
 
 #[derive(Serialize, Clone)]
-pub(crate) struct AccountRemoved { pub user_id: String }
+pub(crate) struct PairingRemoved { pub user_id: String }
 
 #[derive(Serialize, Clone)]
-pub(crate) struct ActiveChanged { pub user_id: Option<String> }
+pub(crate) struct ActivePairingChanged { pub user_id: Option<String> }
 
 #[derive(Serialize, Clone)]
 pub(crate) struct ConnectionStateEvent {
@@ -64,3 +64,10 @@ pub(crate) struct PairShortcode { pub code: String, pub expires_at: i64 }
 
 #[derive(Serialize, Clone)]
 pub(crate) struct PairClaimed { pub user_id: String, pub device_label: Option<String> }
+
+/// Where an already-open main window should navigate to.
+///
+/// `entry_id` rides along so the popover's History icon can hand the reader the
+/// row it had selected; `None` leaves the pane on its own selection.
+#[derive(Serialize, Clone)]
+pub(crate) struct MainNavigate { pub section: String, pub entry_id: Option<i64> }

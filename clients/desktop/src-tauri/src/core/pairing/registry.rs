@@ -14,13 +14,13 @@ pub(crate) struct ActiveMembership {
     pub(crate) user_key: UserKey,
 }
 
-pub(crate) struct AccountRegistry {
+pub(crate) struct PairingRegistry {
     pub(crate) conn: Arc<tokio::sync::Mutex<Connection>>,
     pub(crate) keychain: Arc<dyn Keychain>,
     pub(crate) active: RwLock<Option<String>>,
 }
 
-impl AccountRegistry {
+impl PairingRegistry {
     pub(crate) fn new(conn: Arc<tokio::sync::Mutex<Connection>>, keychain: Arc<dyn Keychain>) -> Self {
         Self { conn, keychain, active: RwLock::new(None) }
     }
@@ -72,7 +72,7 @@ impl AccountRegistry {
         let acct = {
             let c = self.conn.lock().await;
             accounts::find(&c, user_id)?
-                .ok_or_else(|| AppError::NotFound(format!("account {user_id}")))?
+                .ok_or_else(|| AppError::NotFound(format!("pairing {user_id}")))?
         };
         let token = self
             .keychain
@@ -114,9 +114,9 @@ mod tests {
     use crate::core::storage::open_in_memory;
     use std::sync::Arc;
 
-    fn registry() -> AccountRegistry {
+    fn registry() -> PairingRegistry {
         let conn = Arc::new(tokio::sync::Mutex::new(open_in_memory().unwrap()));
-        AccountRegistry::new(conn, Arc::new(InMemoryKeychain::default()))
+        PairingRegistry::new(conn, Arc::new(InMemoryKeychain::default()))
     }
 
     #[tokio::test]

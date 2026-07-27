@@ -1,6 +1,6 @@
 use crate::core::http::ServerClient;
 use crate::core::keychain::{token_account, user_key_account};
-use crate::core::pairing::invite::{claim_invite, persist_claimed_account};
+use crate::core::pairing::invite::{claim_invite, persist_claimed_pairing};
 use crate::core::pairing::payload::{
     fetch_and_decrypt_pair_payload, secret_proof_hex, start_pair, upload_pair_payload,
 };
@@ -9,7 +9,7 @@ use crate::core::storage::{accounts as accounts_repo, devices, entries_cache, pe
 use crate::core::sync::ConnectionState;
 use crate::errors::AppError;
 use crate::events::{
-    AccountAdded, EntryView, PairShortcode, ContactEvent, ACCOUNT_ADDED, ACTIVE_CHANGED,
+    PairingAdded, EntryView, PairShortcode, ContactEvent, PAIRING_ADDED, ACTIVE_PAIRING_CHANGED,
     HISTORY_CHANGED, PAIR_SHORTCODE,
 };
 use crate::now_ms;
@@ -23,7 +23,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use zeroize::Zeroizing;
 
 #[derive(Serialize)]
-pub(crate) struct AccountSummary {
+pub(crate) struct PairingSummary {
     pub(crate) user_id: String,
     pub(crate) device_id: String,
     pub(crate) label: String,
@@ -37,9 +37,9 @@ pub(crate) struct AccountSummary {
 }
 
 #[tauri::command]
-pub async fn list_accounts(
+pub async fn list_pairings(
     state: State<'_, Arc<AppState>>,
-) -> Result<Vec<AccountSummary>, AppError> {
+) -> Result<Vec<PairingSummary>, AppError> {
     let accts = state.registry.list().await?;
     let active = state.registry.active_user_id();
     let mut out = Vec::with_capacity(accts.len());
@@ -52,7 +52,7 @@ pub async fn list_accounts(
             .get(&a.user_id)
             .copied()
             .unwrap_or(ConnectionState::Disconnected);
-        out.push(AccountSummary {
+        out.push(PairingSummary {
             user_id: a.user_id,
             device_id: a.device_id,
             label: a.device_label,
@@ -90,7 +90,7 @@ pub async fn pair_with_invite(
     claimed.server_url = args.server_url.clone();
     {
         let conn = state.conn.lock().await;
-        persist_claimed_account(
+        persist_claimed_pairing(
             &conn,
             state.keychain.as_ref(),
             &claimed,
@@ -99,8 +99,8 @@ pub async fn pair_with_invite(
         )?;
     }
     app.emit(
-        ACCOUNT_ADDED,
-        AccountAdded {
+        PAIRING_ADDED,
+        PairingAdded {
             user_id: claimed.user_id.clone(),
             device_id: claimed.device_id.clone(),
             label: args.device_label.clone(),
@@ -264,8 +264,8 @@ pub async fn pair_with_code(
         )?;
     }
     app.emit(
-        ACCOUNT_ADDED,
-        AccountAdded {
+        PAIRING_ADDED,
+        PairingAdded {
             user_id: pair_payload.user_id.clone(),
             device_id: resp.device_id.clone(),
             label: args.device_label.clone(),
@@ -286,7 +286,7 @@ pub(crate) struct UserScopedArgs {
 }
 
 #[tauri::command]
-pub async fn forget_account(
+pub async fn forget_pairing(
     args: UserScopedArgs,
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
@@ -312,16 +312,16 @@ pub async fn forget_account(
 
     if was_active {
         app.emit(
-            ACTIVE_CHANGED,
-            crate::events::ActiveChanged {
+            ACTIVE_PAIRING_CHANGED,
+            crate::events::ActivePairingChanged {
                 user_id: new_active.clone(),
             },
         )
         .ok();
     }
     app.emit(
-        crate::events::ACCOUNT_REMOVED,
-        crate::events::AccountRemoved {
+        crate::events::PAIRING_REMOVED,
+        crate::events::PairingRemoved {
             user_id: args.user_id.clone(),
         },
     )
@@ -337,15 +337,15 @@ pub async fn forget_account(
 }
 
 #[tauri::command]
-pub async fn set_active_account(
+pub async fn set_active_pairing(
     args: UserScopedArgs,
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
 ) -> Result<(), AppError> {
     state.registry.set_active_persisted(Some(args.user_id.clone())).await?;
     app.emit(
-        ACTIVE_CHANGED,
-        crate::events::ActiveChanged {
+        ACTIVE_PAIRING_CHANGED,
+        crate::events::ActivePairingChanged {
             user_id: Some(args.user_id.clone()),
         },
     )
@@ -575,6 +575,8 @@ pub async fn update_settings(
 #[derive(Deserialize)]
 pub(crate) struct OpenMainWindowArgs {
     pub(crate) section: String,
+    #[serde(default)]
+    pub(crate) entry_id: Option<i64>,
 }
 
 #[tauri::command]
@@ -582,7 +584,8 @@ pub async fn open_main_window(
     app: AppHandle,
     args: OpenMainWindowArgs,
 ) -> Result<(), AppError> {
-    crate::open_main_window_impl(&app, &args.section).map_err(|e| AppError::BadInput(e.to_string()))
+    crate::open_main_window_impl(&app, &args.section, args.entry_id)
+        .map_err(|e| AppError::BadInput(e.to_string()))
 }
 
 #[tauri::command]
@@ -599,11 +602,11 @@ async fn activate_and_sync(app: &AppHandle, state: &Arc<AppState>, user_id: &str
         .set_active_persisted(Some(user_id.to_string()))
         .await
     {
-        tracing::warn!(err = %e, "persisting active account failed");
+        tracing::warn!(err = %e, "persisting the Active Pairing failed");
     }
     let _ = app.emit(
-        ACTIVE_CHANGED,
-        crate::events::ActiveChanged {
+        ACTIVE_PAIRING_CHANGED,
+        crate::events::ActivePairingChanged {
             user_id: Some(user_id.to_string()),
         },
     );

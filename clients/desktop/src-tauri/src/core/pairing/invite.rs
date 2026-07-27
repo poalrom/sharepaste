@@ -5,7 +5,7 @@ use crate::core::storage::accounts::{upsert as upsert_account, Account};
 use crate::errors::AppError;
 use rusqlite::Connection;
 
-pub(crate) struct ClaimedAccount {
+pub(crate) struct ClaimedPairing {
     pub(crate) user_id: String,
     pub(crate) device_id: String,
     pub(crate) device_token: String,
@@ -17,9 +17,9 @@ pub(crate) async fn claim_invite(
     server: &ServerClient,
     token: &str,
     device_label: &str,
-) -> Result<ClaimedAccount, AppError> {
+) -> Result<ClaimedPairing, AppError> {
     let resp = server.claim_invite(token, device_label).await?;
-    Ok(ClaimedAccount {
+    Ok(ClaimedPairing {
         user_id: resp.user_id,
         device_id: resp.device_id,
         device_token: resp.device_token,
@@ -28,10 +28,10 @@ pub(crate) async fn claim_invite(
     })
 }
 
-pub(crate) fn persist_claimed_account(
+pub(crate) fn persist_claimed_pairing(
     conn: &Connection,
     keychain: &dyn Keychain,
-    claimed: &ClaimedAccount,
+    claimed: &ClaimedPairing,
     device_label: &str,
     now_ms: i64,
 ) -> Result<(), AppError> {
@@ -86,14 +86,14 @@ mod tests {
     fn persist_writes_keychain_and_db() {
         let conn = open_in_memory().unwrap();
         let kc = InMemoryKeychain::default();
-        let claimed = ClaimedAccount {
+        let claimed = ClaimedPairing {
             user_id: "u".into(),
             device_id: "d".into(),
             device_token: "tok".into(),
             server_url: "https://srv".into(),
             user_key: crate::core::crypto::random_user_key(),
         };
-        persist_claimed_account(&conn, &kc, &claimed, "mac", 12345).unwrap();
+        persist_claimed_pairing(&conn, &kc, &claimed, "mac", 12345).unwrap();
         assert_eq!(kc.get("u:token").unwrap().as_deref(), Some("tok"));
         assert!(kc.get("u:key").unwrap().is_some());
         let row = crate::core::storage::accounts::find(&conn, "u").unwrap().unwrap();

@@ -49,7 +49,7 @@
    */
   --text-emitter: var(--cyan-300);  /* selected index, focus       15.1:1 */
   --text-body:    #b3d0d9;          /* row previews                12.1:1 */
-  --text-muted:   #8fb0bb;          /* meta, account, hints         8.5:1 */
+  --text-muted:   #8fb0bb;          /* meta, identity, hints       8.5:1 */
   --text-dim:     #6d8b98;          /* index, separators            5.4:1 */
 
   /* No vendored face: Share Tech Mono's ambiguous 0/O and 1/l are wrong for
@@ -82,23 +82,16 @@
 
 html, body, #root { height: 100%; margin: 0; }
 
-/*
- * The tokens above are global so the Main Window inherits the palette the day
- * it is converted; the *paint* is not, because that conversion is a follow-up
- * and repainting 700 lines of hard-coded zinc classes out from under it today
- * would only make it inconsistent with itself.
- */
 body {
-  color: #e6e6e6;
-  background: #1a1a1a;
+  color: var(--text-body);
+  background: var(--surface-recess);
   font-family: var(--font-ui);
 }
 
-/* ── Popover shell ──────────────────────────────────────────────────────── */
+/* ── Window shells ──────────────────────────────────────────────────────── */
 
-body[data-route="popover"] {
-  color: var(--text-body);
-  background: var(--surface-recess);
+body[data-route="popover"],
+body[data-route="main"] {
   overflow: hidden;
 }
 
@@ -299,6 +292,87 @@ body[data-route="popover"] {
   .fui-scroll::-webkit-scrollbar-track       { background: var(--void-1000); }
   .fui-scroll::-webkit-scrollbar-thumb       { background: var(--void-400); }
   .fui-scroll::-webkit-scrollbar-thumb:hover { background: var(--cyan-700); }
+
+  /* ── Main window ─────────────────────────────────────────────────────── */
+
+  /*
+   * A rail item wears the same "this is selected" treatment as a list row —
+   * cyan wash plus a 2px left edge — so the two readings of selection in this
+   * window are one reading.
+   */
+  .fui-rail-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 62px;
+    width: 100%;
+    color: var(--text-muted);
+    border-left: 2px solid transparent;
+    border-bottom: 1px solid var(--cyan-a12);
+    transition: background-color var(--dur-fast) ease-out, color var(--dur-fast) ease-out;
+  }
+
+  .fui-rail-item:hover { background: var(--surface-hover); color: var(--text-body); }
+
+  .fui-rail-item[aria-selected="true"] {
+    background: var(--surface-active);
+    border-left-color: var(--cyan-500);
+    color: var(--cyan-300);
+    text-shadow: 0 0 6px rgba(53, 230, 246, 0.35);
+  }
+
+  .fui-rail-item:focus-visible { outline: 1px solid var(--cyan-500); outline-offset: -1px; }
+
+  /* A bordered box with a labelled header band: pairing cards and settings groups. */
+  .fui-group {
+    border: 1px solid var(--cyan-a12);
+    background: var(--void-1000);
+  }
+
+  .fui-group[data-tone="active"] {
+    border-color: var(--cyan-a40);
+    box-shadow: inset 0 0 18px rgba(53, 230, 246, 0.06);
+  }
+
+  .fui-group[data-tone="alert"] { border-color: rgba(255, 107, 97, 0.4); }
+
+  .fui-group-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--cyan-a12);
+    background: var(--surface-band);
+    font-size: 11px;
+    letter-spacing: var(--track-word);
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .fui-group-head[data-tone="alert"] {
+    border-bottom-color: rgba(255, 107, 97, 0.4);
+    background: rgba(255, 107, 97, 0.08);
+    color: var(--alert-400);
+  }
+
+  .fui-field {
+    width: 100%;
+    padding: 6px 9px;
+    border: 1px solid var(--cyan-a20);
+    background: var(--void-1000);
+    color: var(--text-body);
+    font-family: var(--font-mono);
+    font-size: var(--size-data);
+    line-height: 1.5;
+    outline: none;
+    resize: none;
+  }
+
+  .fui-field:focus { border-color: var(--cyan-500); }
+  .fui-field[data-invalid="true"] { border-color: var(--alert-400); color: var(--alert-400); }
+  .fui-field::placeholder { color: var(--text-dim); }
 }
 
 /* Reduced motion kills the sweep and the status-light pulse (plan §1.2). */

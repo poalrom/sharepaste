@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useHistoryStore } from "../store/history";
-import { useAccountsStore } from "../store/accounts";
+import { usePairingsStore } from "../store/pairings";
 import { useUiStore } from "../store/ui";
 
 describe("history store", () => {
@@ -24,50 +24,65 @@ describe("history store", () => {
   });
 });
 
-describe("accounts store", () => {
-  beforeEach(() => useAccountsStore.setState({ accounts: [], active: undefined }));
+describe("pairings store", () => {
+  beforeEach(() => usePairingsStore.setState({ pairings: [], active: undefined }));
 
   it("hydrate sets active to the row flagged is_active", () => {
-    useAccountsStore.getState().hydrate([
+    usePairingsStore.getState().hydrate([
       { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Online", pending: 0, is_active: true },
       { user_id: "b", device_id: "d", label: "y", server_url: "https://s", status: "Disconnected", pending: 0, is_active: false },
     ]);
-    expect(useAccountsStore.getState().active).toBe("a");
+    expect(usePairingsStore.getState().active).toBe("a");
   });
 
   it("hydrate leaves active undefined when no row is flagged", () => {
-    useAccountsStore.getState().hydrate([
+    usePairingsStore.getState().hydrate([
       { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Disconnected", pending: 0, is_active: false },
     ]);
-    expect(useAccountsStore.getState().active).toBeUndefined();
+    expect(usePairingsStore.getState().active).toBeUndefined();
   });
 
-  it("removing a non-active account leaves active alone", () => {
-    useAccountsStore.getState().hydrate([
+  it("removing a non-active pairing leaves active alone", () => {
+    usePairingsStore.getState().hydrate([
       { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Online", pending: 0, is_active: true },
       { user_id: "b", device_id: "d", label: "y", server_url: "https://s", status: "Disconnected", pending: 0, is_active: false },
     ]);
-    useAccountsStore.getState().remove("b");
-    expect(useAccountsStore.getState().active).toBe("a");
+    usePairingsStore.getState().remove("b");
+    expect(usePairingsStore.getState().active).toBe("a");
   });
 
-  it("removing the active account clears active and waits for backend", () => {
-    useAccountsStore.getState().hydrate([
+  it("removing the Active Pairing clears active and waits for backend", () => {
+    usePairingsStore.getState().hydrate([
       { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Online", pending: 0, is_active: true },
       { user_id: "b", device_id: "d", label: "y", server_url: "https://s", status: "Disconnected", pending: 0, is_active: false },
     ]);
-    useAccountsStore.getState().remove("a");
-    expect(useAccountsStore.getState().active).toBeUndefined();
+    usePairingsStore.getState().remove("a");
+    expect(usePairingsStore.getState().active).toBeUndefined();
   });
 });
 
 describe("useUiStore mainSection", () => {
-  it("defaults to 'accounts'", () => {
-    expect(useUiStore.getState().mainSection).toBe("accounts");
+  it("defaults to 'history'", () => {
+    expect(useUiStore.getState().mainSection).toBe("history");
   });
 
   it("setMainSection updates the field", () => {
-    useUiStore.getState().setMainSection("pairing");
-    expect(useUiStore.getState().mainSection).toBe("pairing");
+    useUiStore.getState().setMainSection("settings");
+    expect(useUiStore.getState().mainSection).toBe("settings");
+  });
+
+  // A query left over from the last visit would silently hide rows the
+  // returning reader expects to see, and the selection it indexed is gone.
+  it("switching pane or Viewed Pairing drops the filter and the selection", () => {
+    useUiStore.setState({ search: "ss://", selectedIndex: 4 });
+    useUiStore.getState().setMainSection("history");
+    expect(useUiStore.getState().search).toBe("");
+    expect(useUiStore.getState().selectedIndex).toBe(0);
+
+    useUiStore.setState({ search: "npm", selectedIndex: 2 });
+    useUiStore.getState().setViewedUserId("u-other");
+    expect(useUiStore.getState().viewedUserId).toBe("u-other");
+    expect(useUiStore.getState().search).toBe("");
+    expect(useUiStore.getState().selectedIndex).toBe(0);
   });
 });
