@@ -2,11 +2,11 @@
 
 The SVGs are the source of truth; the PNG/ICO next to them are generated.
 
-| Source              | Grid | Feeds                                                    |
-| ------------------- | ---- | -------------------------------------------------------- |
-| `icon.svg`          | 1024 | `icon.png` (1024²), the 64 and 256 px `icon.ico` entries   |
-| `icon-small.svg`    | 16   | the 16/24/32/48 px `icon.ico` entries, `tray.png` (32²)    |
-| `tray-template.svg` | 16   | `tray-template.png`                                        |
+| Source              | Grid | Feeds                                                        |
+| ------------------- | ---- | ------------------------------------------------------------ |
+| `icon.svg`          | 1024 | `icon.png` (512²), `icon@2x.png` (1024²), `128x128@2x.png` (256²), the 64 and 256 px `icon.ico` entries |
+| `icon-small.svg`    | 16   | the 16/24/32/48 px `icon.ico` entries, `tray.png` (32²), `32x32@2x.png` (64²) |
+| `tray-template.svg` | 16   | `tray-template.png`                                            |
 
 `icon.ico` is byte-identical to `../../ui/public/favicon.ico` — regenerate both together.
 
@@ -34,13 +34,44 @@ pixels would be drawn literally and vanish into a dark taskbar.
 variant at 32×32, whose greens read on a light or dark taskbar and survive
 Windows downscaling them to the 16/24 px tray slot.
 
+## The macOS icns slot sizes are not free choices
+
+`bundle.icon` lists four PNGs because `tauri-bundler` packs one icns slot per
+file and errors out on any size it cannot map. `icns::IconType::from_pixel_size_and_density`
+accepts a fixed table, and only some of it keeps an alpha channel:
+
+| File               | Pixels | Density  | Slot                 |
+| ------------------ | ------ | -------- | -------------------- |
+| `icon.png`         | 512    | 1        | `RGBA32_512x512`     |
+| `icon@2x.png`      | 1024   | 2 (@2x)  | `RGBA32_512x512_2x`  |
+| `128x128@2x.png`   | 256    | 2 (@2x)  | `RGBA32_128x128_2x`  |
+| `32x32@2x.png`     | 64     | 2 (@2x)  | `RGBA32_32x32_2x`    |
+
+Density comes from the filename, not the content: `is_retina` is
+`file_stem().ends_with("@2x")`. A 1024 px file without that suffix asks for
+`(1024, 1024, 1)`, which is not in the table — the bundler fails with
+`Failed to create app icon: No matching IconType`, as CI caught.
+
+The 1x sizes below 256 px are deliberately absent: `(16,16,1)`, `(32,32,1)`,
+`(48,48,1)` and `(128,128,1)` map to `RGB24_*` slots, which have no alpha and
+would flatten these transparent glyphs onto black.
+
+`icons/icon.ico` is deliberately NOT in `bundle.icon`. Both `tauri-codegen` and
+`tauri-build` fall back to that literal path when the list holds no `.ico`, so
+Windows still gets its window and resource icon, while the icns builder — which
+would otherwise `image::open` the multi-size `.ico` and pack whichever frame it
+picked — never sees it.
+
 ## Regenerating
 
 With ImageMagick 7 (`brew install imagemagick`, which pulls in librsvg):
 
 ```sh
 cd clients/desktop/src-tauri/icons
-magick -background none icon.svg          -resize 1024x1024 icon.png
+magick -background none icon.svg          -resize 512x512   icon.png
+magick -background none icon.svg          -resize 1024x1024 icon@2x.png
+magick -background none icon.svg          -resize 256x256   128x128@2x.png
+magick -background none icon-small.svg    -resize 64x64     32x32@2x.png
 magick -background none tray-template.svg -resize 16x16     tray-template.png
 magick -background none icon-small.svg    -resize 32x32     tray.png
 magick \
