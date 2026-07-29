@@ -433,18 +433,28 @@ jobs:
       #
       # Seen for real on the first push to main after the secrets were added.
       #
-      # What it does and does not prove, measured rather than assumed. Against a
-      # scratch keystore with deliberately different store and key passwords,
-      # `keytool -list` rejects a wrong store password and a wrong alias, and
-      # ACCEPTS a wrong key password — it falls back to the store password for
-      # the entry. `-certreq` behaves identically. So this catches the store
-      # password (the one that actually failed) and the alias in about a second;
-      # a wrong `ANDROID_KEY_PASSWORD` alone still surfaces late, in
-      # `packageRelease`. That case is rare because `keytool -genkeypair`
-      # defaults the key password to the store password, but it is not covered —
-      # do not read a green step here as all four secrets verified.
+      # What it proves, measured rather than assumed against scratch keystores.
       #
-      # Output is captured rather than printed: a successful listing prints the
+      # `keytool -list` rejects a wrong store password and a wrong alias. It does
+      # NOT validate the key password — for a JKS it falls back to the store
+      # password for the entry, and `-certreq` and `-importkeystore` behave the
+      # same. `jarsigner` refuses even correct credentials on JDK 25, so it is no
+      # use as a probe either.
+      #
+      # The PKCS12 comparison below covers the gap for every keystore made this
+      # decade. `keytool -genkeypair` has defaulted to PKCS12 since JDK 9, and
+      # PKCS12 cannot hold a separate key password — keytool prints "Different
+      # store and key passwords not supported for PKCS12 KeyStores. Ignoring
+      # user-specified -keypass value" and stores the key under the store
+      # password. So for a PKCS12 store the two secrets MUST match, and if they
+      # do not, AGP fails in `packageRelease` with "Get Key failed: Given final
+      # block not properly padded". That is exactly how this was found: a
+      # nine-minute build to learn that two secrets disagreed.
+      #
+      # A genuine JKS with a mismatched key password is still only caught late.
+      # It would have to have been made deliberately, with `-storetype jks`.
+      #
+      # Output is captured, not printed: a successful listing prints the
       # certificate fingerprint, and nothing about a signing key belongs in a
       # public log. Both streams go to the file, because keytool does not put all
       # of its diagnostics on stderr.
@@ -457,28 +467,59 @@ jobs:
         run: |
           set -euo pipefail
           for name in ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
-            if [ -z "${!name:-}" ]; then
+            if [ -z "${!name}" ]; then
               echo "$name is not set; the release APK would build unsigned." >&2
               exit 1
             fi
           done
 
+          # Two invocations, because `-list` prints "Keystore type:" only when it
+          # lists the whole store — add `-alias` and the output is just that one
+          # entry, with or without `-v`. Measured; the single-call version of this
+          # step extracted an empty type and the guard below silently never fired.
+          if ! keytool -list \
+                 -keystore "$RUNNER_TEMP/release.jks" \
+                 -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+                 >"$RUNNER_TEMP/keytool.out" 2>&1; then
+            echo 'ANDROID_KEYSTORE_PASSWORD does not open the keystore.' >&2
+            echo 'keytool said:' >&2
+            sed 's/^/  /' "$RUNNER_TEMP/keytool.out" >&2
+            echo >&2
+            echo 'Often a trailing newline rather than a wrong password:' >&2
+            echo '`echo pw | gh secret set X` stores "pw\n". Re-set with `gh secret set X`' >&2
+            echo 'on its own, which prompts, or `printf %s "$pw" | gh secret set X`.' >&2
+            exit 1
+          fi
+          store_type="$(sed -n 's/^Keystore type: *//p' "$RUNNER_TEMP/keytool.out" | head -1)"
+
           if ! keytool -list \
                  -keystore "$RUNNER_TEMP/release.jks" \
                  -storepass "$ANDROID_KEYSTORE_PASSWORD" \
                  -alias "$ANDROID_KEY_ALIAS" \
-                 -keypass "$ANDROID_KEY_PASSWORD" >"$RUNNER_TEMP/keytool.out" 2>&1; then
-            echo 'The signing secrets do not open the keystore.' >&2
-            echo 'keytool said:' >&2
-            sed 's/^/  /' "$RUNNER_TEMP/keytool.out" >&2
-            echo >&2
-            echo 'Most often this is a trailing newline in a secret rather than a wrong' >&2
-            echo 'password: `echo pw | gh secret set X` stores "pw\n". Re-set them with' >&2
-            echo '`gh secret set X` on its own, which prompts and stores exactly what you type,' >&2
-            echo 'or `printf %s "$pw" | gh secret set X`.' >&2
+                 >"$RUNNER_TEMP/alias.out" 2>&1; then
+            echo "ANDROID_KEY_ALIAS ($ANDROID_KEY_ALIAS) is not in the keystore." >&2
+            sed 's/^/  /' "$RUNNER_TEMP/alias.out" >&2
             exit 1
           fi
-          echo 'Signing credentials verified against the keystore.'
+
+          # A PKCS12 store keeps the key under the store password, so two
+          # different secrets cannot both be right.
+          if [ "${store_type^^}" = 'PKCS12' ] \
+             && [ "$ANDROID_KEY_PASSWORD" != "$ANDROID_KEYSTORE_PASSWORD" ]; then
+            echo 'This keystore is PKCS12, which cannot hold a separate key password:' >&2
+            echo 'keytool ignores -keypass for PKCS12 and stores the key under the store' >&2
+            echo 'password. ANDROID_KEY_PASSWORD and ANDROID_KEYSTORE_PASSWORD therefore have' >&2
+            echo 'to be the same value, and they are not.' >&2
+            echo >&2
+            echo 'Set ANDROID_KEY_PASSWORD to the store password:' >&2
+            echo '  printf %s "$store_password" | gh secret set ANDROID_KEY_PASSWORD' >&2
+            echo >&2
+            echo 'Left alone, AGP fails in :app:packageRelease with' >&2
+            echo '"Get Key failed: Given final block not properly padded".' >&2
+            exit 1
+          fi
+
+          echo "Signing credentials verified against the keystore (${store_type:-type unknown})."
 
       # One universal APK carrying both shipped ABIs. The `testing` Cargo feature
       # is off in this variant by the build file's own decision, not by a flag
