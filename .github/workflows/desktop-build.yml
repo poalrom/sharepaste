@@ -269,8 +269,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
-            'ndk;27.2.12479018' 'platforms;android-35' 'build-tools;36.0.0'
+          # A here-string, never a pipe — see the same step in `build-android`
+          # for why `yes |` fails under `pipefail` and a bounded producer does too.
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            'ndk;27.2.12479018' 'platforms;android-35' 'build-tools;36.0.0' \
+            <<< "$(printf 'y\n%.0s' $(seq 1 50))"
 
       # A JVM test still needs the native library built. `testDebugUnitTest`
       # depends on `compileDebugKotlin`, which consumes the UniFFI bindings,
@@ -368,8 +371,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
-            'ndk;27.2.12479018' 'platforms;android-35' 'build-tools;36.0.0'
+          # A here-string, never a pipe. sdkmanager stops reading stdin as soon
+          # as it has its answers — and reads none at all when the licences are
+          # already accepted — so any producer piped into it dies of SIGPIPE and
+          # `pipefail` turns that into a failed step. Seen for real on the first
+          # CI run: "yes: standard output: Broken pipe", exit 1, after the NDK
+          # had unzipped to 100%. A bounded `printf` is NOT a fix; measured, it
+          # still exits 141, because the race is when the reader closes the pipe
+          # rather than how much the writer had left to write. A here-string is
+          # a file descriptor, so there is no pipe to break. `integration-filter`
+          # below records the same trap from the other direction.
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            'ndk;27.2.12479018' 'platforms;android-35' 'build-tools;36.0.0' \
+            <<< "$(printf 'y\n%.0s' $(seq 1 50))"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
