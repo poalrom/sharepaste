@@ -6,8 +6,8 @@ import type { Pairing } from "../types";
 import PairingsSection from "../views/sections/PairingsSection";
 
 const PAIRINGS: Pairing[] = [
-  { user_id: "u-active", device_id: "d1", label: "Laptop", username: "alice", server_url: "https://relay.one", status: "Online", pending: 0, is_active: true },
-  { user_id: "u-other", device_id: "d2", label: "Desktop", username: "bob", server_url: "https://relay.two", status: "Disconnected", pending: 0, is_active: false },
+  { user_id: "u-active", device_id: "d1", label: "Laptop", username: "alice", server_url: "https://relay.one", relay_host: "relay.one", status: "Online", pending: 0, is_active: true },
+  { user_id: "u-other", device_id: "d2", label: "Desktop", username: "bob", server_url: "https://relay.two", relay_host: "relay.two", status: "Disconnected", pending: 0, is_active: false },
 ];
 
 /** Reads the `user_id` the component sent, failing loudly if the shape drifts. */
@@ -150,8 +150,8 @@ describe("PairingsSection", () => {
    */
   it("names user_id @ host in the forget confirmation, not the shared heading", async () => {
     rows = [
-      { ...PAIRINGS[0]!, user_id: "u-prod", username: "alice", server_url: "https://relay.one" },
-      { ...PAIRINGS[1]!, user_id: "u-lab", username: "alice", server_url: "https://relay.lab" },
+      { ...PAIRINGS[0]!, user_id: "u-prod", username: "alice", server_url: "https://relay.one", relay_host: "relay.one" },
+      { ...PAIRINGS[1]!, user_id: "u-lab", username: "alice", server_url: "https://relay.lab", relay_host: "relay.lab" },
     ];
     await renderPairings();
     fireEvent.click(screen.getByTestId("pair-forget-u-lab"));

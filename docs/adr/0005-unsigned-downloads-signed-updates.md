@@ -42,6 +42,40 @@ has to be replaced by hand. It lives in Actions secrets, password-protected,
 with an offline backup, and that backup is the single most load-bearing file in
 this project's operations.
 
+### The signing-key drill
+
+There are now **two** irreplaceable keys, and they are backed up by one habit
+rather than two. [ADR 0008](0008-sideloaded-and-not-self-updating.md) added the
+second — the Android release keystore, which Android's package manager pins, so
+losing it means no installed copy can ever be updated again either. Its drill is
+recorded here, beside the first, because two drills in two places is one drill
+that gets done.
+
+Both private halves live in **one offline directory** — an encrypted volume, not
+a laptop's home directory and not any repository, with a second copy on separate
+physical media kept somewhere else. Losing that directory is unrecoverable for
+every existing install of both clients. The directory holds, beside each key, the
+passphrase that opens it and the exact command that rebuilds the Actions secret
+from it; a key whose passphrase is only in someone's head is a key that is
+already lost.
+
+The Actions secrets are derived from those files and are never the only copy:
+
+| secret | from |
+| --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | the minisign private key |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | its passphrase |
+| `ANDROID_KEYSTORE_BASE64` | `base64 -w0 sharepaste-release.jks` |
+| `ANDROID_KEYSTORE_PASSWORD` | the keystore passphrase |
+| `ANDROID_KEY_ALIAS` | the key alias inside the keystore |
+| `ANDROID_KEY_PASSWORD` | the key's passphrase |
+
+Rotating either key is not an upgrade path, it is a migration: a minisign
+rotation strands every install that has not yet taken an update signed by the old
+key, and a keystore rotation strands **every** Android install outright — each
+phone must uninstall and reinstall, losing its pairings. Treat both as
+never-rotated for the life of the application id.
+
 The endpoint is the `releases/latest/download/latest.json` redirect, which
 resolves only to non-draft, non-prerelease releases. That is why 0.x builds
 publish as full releases rather than prereleases: marking them honestly would

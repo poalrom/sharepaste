@@ -149,8 +149,8 @@ describe("Main shell", () => {
       invoke: (command) => {
         if (command === "list_pairings") {
           return [
-            { user_id: "u-active", device_id: "d1", label: "mac", username: "alice", server_url: "https://relay.one", status: "Online", pending: 0, is_active: true },
-            { user_id: "u-other", device_id: "d2", label: "mac", username: "bob", server_url: "https://relay.two", status: "Disconnected", pending: 0, is_active: false },
+            { user_id: "u-active", device_id: "d1", label: "mac", username: "alice", server_url: "https://relay.one", relay_host: "relay.one", status: "Online", pending: 0, is_active: true },
+            { user_id: "u-other", device_id: "d2", label: "mac", username: "bob", server_url: "https://relay.two", relay_host: "relay.two", status: "Disconnected", pending: 0, is_active: false },
           ];
         }
         if (command === "list_history") return [];

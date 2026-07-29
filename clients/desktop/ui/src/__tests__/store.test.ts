@@ -8,9 +8,9 @@ describe("history store", () => {
 
   it("add prepends and dedupes by id", () => {
     const { add } = useHistoryStore.getState();
-    add({ id: 1, user_id: "u", preview: "a", created_at: 1, device_id: "d" });
-    add({ id: 2, user_id: "u", preview: "b", created_at: 2, device_id: "d" });
-    add({ id: 1, user_id: "u", preview: "a-new", created_at: 3, device_id: "d" });
+    add({ id: 1, user_id: "u", preview: "a", plaintext: "a", created_at: 1, device_id: "d", origin_label: "d", undecryptable: false });
+    add({ id: 2, user_id: "u", preview: "b", plaintext: "b", created_at: 2, device_id: "d", origin_label: "d", undecryptable: false });
+    add({ id: 1, user_id: "u", preview: "a-new", plaintext: "a-new", created_at: 3, device_id: "d", origin_label: "d", undecryptable: false });
     const state = useHistoryStore.getState();
     expect(state.entries.map((e) => e.id)).toEqual([1, 2]);
     expect(state.entries[0]?.preview).toBe("a-new");
@@ -18,7 +18,7 @@ describe("history store", () => {
 
   it("remove filters by id", () => {
     const { add, remove } = useHistoryStore.getState();
-    add({ id: 1, user_id: "u", preview: "a", created_at: 1, device_id: "d" });
+    add({ id: 1, user_id: "u", preview: "a", plaintext: "a", created_at: 1, device_id: "d", origin_label: "d", undecryptable: false });
     remove(1);
     expect(useHistoryStore.getState().entries.length).toBe(0);
   });
@@ -29,23 +29,23 @@ describe("pairings store", () => {
 
   it("hydrate sets active to the row flagged is_active", () => {
     usePairingsStore.getState().hydrate([
-      { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Online", pending: 0, is_active: true },
-      { user_id: "b", device_id: "d", label: "y", server_url: "https://s", status: "Disconnected", pending: 0, is_active: false },
+      { user_id: "a", device_id: "d", label: "x", server_url: "https://s", relay_host: "s", status: "Online", pending: 0, is_active: true },
+      { user_id: "b", device_id: "d", label: "y", server_url: "https://s", relay_host: "s", status: "Disconnected", pending: 0, is_active: false },
     ]);
     expect(usePairingsStore.getState().active).toBe("a");
   });
 
   it("hydrate leaves active undefined when no row is flagged", () => {
     usePairingsStore.getState().hydrate([
-      { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Disconnected", pending: 0, is_active: false },
+      { user_id: "a", device_id: "d", label: "x", server_url: "https://s", relay_host: "s", status: "Disconnected", pending: 0, is_active: false },
     ]);
     expect(usePairingsStore.getState().active).toBeUndefined();
   });
 
   it("removing a non-active pairing leaves active alone", () => {
     usePairingsStore.getState().hydrate([
-      { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Online", pending: 0, is_active: true },
-      { user_id: "b", device_id: "d", label: "y", server_url: "https://s", status: "Disconnected", pending: 0, is_active: false },
+      { user_id: "a", device_id: "d", label: "x", server_url: "https://s", relay_host: "s", status: "Online", pending: 0, is_active: true },
+      { user_id: "b", device_id: "d", label: "y", server_url: "https://s", relay_host: "s", status: "Disconnected", pending: 0, is_active: false },
     ]);
     usePairingsStore.getState().remove("b");
     expect(usePairingsStore.getState().active).toBe("a");
@@ -53,8 +53,8 @@ describe("pairings store", () => {
 
   it("removing the Active Pairing clears active and waits for backend", () => {
     usePairingsStore.getState().hydrate([
-      { user_id: "a", device_id: "d", label: "x", server_url: "https://s", status: "Online", pending: 0, is_active: true },
-      { user_id: "b", device_id: "d", label: "y", server_url: "https://s", status: "Disconnected", pending: 0, is_active: false },
+      { user_id: "a", device_id: "d", label: "x", server_url: "https://s", relay_host: "s", status: "Online", pending: 0, is_active: true },
+      { user_id: "b", device_id: "d", label: "y", server_url: "https://s", relay_host: "s", status: "Disconnected", pending: 0, is_active: false },
     ]);
     usePairingsStore.getState().remove("a");
     expect(usePairingsStore.getState().active).toBeUndefined();

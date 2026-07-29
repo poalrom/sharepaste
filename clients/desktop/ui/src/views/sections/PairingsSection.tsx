@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { cmd } from "../../ipc/commands";
 import { events } from "../../ipc/events";
-import { relayHost } from "../../lib/format";
 import { usePairingsStore, useUiStore } from "../../store";
 import { CONNECTION } from "../connection";
 import { IconButton, PanelMessage, StatusLight, Strip } from "../fui";
@@ -130,7 +129,7 @@ export default function PairingsSection() {
                         className="truncate font-mono text-chrome tracking-phrase text-text-muted"
                         title={p.server_url}
                       >
-                        {p.user_id} @ {relayHost(p.server_url)}
+                        {p.user_id} @ {p.relay_host}
                       </span>
                       <span className="truncate font-mono text-chrome tracking-phrase text-text-dim">
                         THIS DEVICE: {p.label}
@@ -215,7 +214,7 @@ export default function PairingsSection() {
                         pairings can share a username and this is the one action
                         that cannot be undone. */}
                     <span className="my-1 flex-1 text-data normal-case tracking-phrase">
-                      Erase the local key and cached history for {p.user_id} @ {relayHost(p.server_url)}? The relay
+                      Erase the local key and cached history for {p.user_id} @ {p.relay_host}? The relay
                       itself is untouched.
                     </span>
                     <button

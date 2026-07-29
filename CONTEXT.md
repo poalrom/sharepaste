@@ -14,8 +14,8 @@ opaque `user_id`.
 _Avoid_: account, owner, customer
 
 **Device**:
-One paired machine belonging to a user. Every entry records the device it came
-from.
+One paired machine belonging to a user — a desktop, a phone or a tablet. Every
+entry records the device it came from.
 _Avoid_: client, install, node
 
 **Device Label**:
@@ -59,9 +59,25 @@ A user's entries, newest first, as held by the relay and mirrored locally.
 _Avoid_: log, feed, buffer
 
 **Capture**:
-The act of a device noticing a local clipboard change and turning it into an
-entry.
+The act of a device turning local content into an entry. How the device comes by
+that content is not uniform: see **Watched Capture** and **Offered Capture**.
 _Avoid_: watch, grab, sync-up
+
+**Watched Capture**:
+Capture where the device noticed the clipboard change itself, unprompted. Desktop
+only — no mobile OS lets a backgrounded app watch the clipboard.
+_Avoid_: auto-capture, monitoring, polling
+
+**Offered Capture**:
+Capture where the person handed the content over, so the device never sees a
+clipboard it was not shown. The only capture a phone or tablet performs.
+_Avoid_: manual capture, import, paste
+
+**Recall**:
+Placing an entry's plaintext back onto this device's clipboard, the reverse of
+capture. Distinct from reading an entry, which shows it without touching the
+clipboard.
+_Avoid_: copy, restore, paste, retrieve
 
 **Undecryptable**:
 An entry this device holds ciphertext for but cannot decrypt, because it does
@@ -86,19 +102,27 @@ _Avoid_: sync, last seen, heartbeat, online since
 ### Surfaces
 
 **Popover**:
-The tray window: a keyboard-first picker for pasting a recent entry.
+The tray window: a keyboard-first picker for pasting a recent entry. Desktop
+only.
 _Avoid_: tray menu, panel, quick view
 
 **Main Window**:
 The full surface: history, pairings, devices, capture rules. The only place an
-entry can be read in full rather than merely picked.
+entry can be read in full rather than merely picked. A phone presents its
+functions without a window.
 _Avoid_: preferences, dashboard, console
+
+**Standing Actions**:
+The verbs a device exposes without being opened: offer the clipboard, recall the
+latest entry. Unlike the popover they show nothing and pick nothing.
+_Avoid_: quick actions, shortcuts, widget, tile
 
 ### Distribution
 
 **Release**:
-One published version of the desktop app: a version number, notes, and one
-installable bundle per platform.
+One published version: a version number, notes, and one installable artifact per
+platform. Every client shares the number, so a release always names the same code
+everywhere.
 _Avoid_: build, drop, version bump
 
 **Update**:
@@ -107,7 +131,9 @@ which moves entries, never code.
 _Avoid_: upgrade, patch, sync
 
 **Update Source**:
-The public location a device asks for the newest release. The only counterparty
-besides the relay that a device ever contacts, and unlike the relay it is not
-self-hosted: it sees a device's address, though never an entry.
+The public location the newest release is asked for. A desktop asks directly,
+which makes the update source the only counterparty besides the relay that it
+ever contacts, and unlike the relay it is not self-hosted: it sees a device's
+address, though never an entry. A phone never asks — something else asks on its
+behalf — so a phone's only counterparty is the relay.
 _Avoid_: update server, endpoint, CDN, release feed

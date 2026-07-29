@@ -1,12 +1,33 @@
 export type ConnectionState = "Disconnected" | "Connecting" | "Online" | "AuthFailed";
 
+/**
+ * One entry as `list_history` returns it and `entry-added` carries it.
+ *
+ * `preview` is the Preview on both paths: one line, control characters
+ * flattened, capped, built by the core. Rows render it as it arrives.
+ *
+ * `plaintext` is the whole text — what the reader pane renders (ADR 0003), what
+ * the search matches so a query can find a word on an entry's third line, and
+ * what the header's byte count measures. `null` only for an Undecryptable
+ * entry.
+ *
+ * `undecryptable` is stated by the backend and must never be re-derived. An
+ * entry whose plaintext is genuinely empty is indistinguishable from one this
+ * device holds no key for to anything guessing from an empty `preview`.
+ *
+ * `origin_label` is the Device Label or a slice of the Device id, resolved by
+ * the core so the phone and this window cannot disagree about it.
+ */
 export type EntryView = {
   id: number;
   user_id: string;
   preview: string;
+  plaintext: string | null;
   created_at: number;
   device_id: string;
   device_label?: string;
+  origin_label: string;
+  undecryptable: boolean;
 };
 
 export type Pairing = {
@@ -16,6 +37,8 @@ export type Pairing = {
   /** The User's name on the relay, mirrored by `GET /me`; absent until first contact. */
   username?: string | null;
   server_url: string;
+  /** The relay as a person reads it: host and port, no scheme, no credentials. */
+  relay_host: string;
   status: ConnectionState;
   pending: number;
   is_active: boolean;

@@ -261,7 +261,7 @@ fn calculate_fallback_popover_position(
 
 #[cfg(target_os = "macos")]
 fn query_tray_rect() -> Option<tauri::Rect> {
-    crate::core::capture::macos::find_tray_rect()
+    crate::capture::macos::find_tray_rect()
 }
 
 #[cfg(target_os = "macos")]

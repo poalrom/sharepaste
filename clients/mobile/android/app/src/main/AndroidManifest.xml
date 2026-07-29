@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!--
+      Pairing by QR needs the camera, and only then. `uses-feature` is
+      `required="false"` on purpose: a device with no usable camera still
+      installs and still pairs, by typing the code. Marking it required would
+      turn "type it instead" into "cannot install".
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+
+    <!--
+      The Standing Actions notification. A runtime grant from API 33 and
+      implicit below it, so this path has two variants across the supported
+      floor (`minSdk 29`) regardless — both are exercised, on `spike35` and on
+      `spike30`. A denial leaves the app usable: the in-app Offer and Recall
+      still work, and the History screen says why the notification is missing
+      rather than failing silently.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
+      A notification does not survive a reboot, so the one thing this client
+      offers someone who never opens it would be gone until they did. The
+      receiver posts a notification and returns; it schedules no work. There is
+      deliberately **no foreground service anywhere in this manifest** — see
+      `StandingActions` for the three independent reasons, and
+      `MergedManifestTest`, which fails if one appears.
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application
+        android:name=".SharepasteApplication"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Sharepaste"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:usesCleartextTraffic="false"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          The window a Standing Action needs in order to touch the clipboard.
+
+          Not exported: the only things that start it are this app's own
+          `PendingIntent`s. `taskAffinity=""` puts it in a task of its own so it
+          never rearranges the stack of a Sharepaste window somebody left open,
+          and `excludeFromRecents` keeps an invisible one-shot out of the recents
+          list. `singleTask` with the empty affinity means a second press while
+          one is still working reuses this window rather than stacking a second
+          invisible activity behind it — which is *why* the activity overrides
+          `onNewIntent`: reusing the window is the platform delivering a new
+          `Intent` to a live instance, and an activity that does not adopt it
+          drops the second verb on the floor.
+        -->
+        <activity
+            android:name=".standing.StandingActionActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Sharepaste.Invisible"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask" />
+
+        <!--
+          The share target: text from any app becomes an Offered Capture, unless
+          the sender marked its content sensitive. Exported by necessity — a
+          share target nothing else can reach is not a share target — and
+          `android:label` is the line a person reads in the share sheet.
+          `singleTask` here has the same consequence as above, and the same
+          answer: see `ShareTargetActivity.onNewIntent`.
+        -->
+        <activity
+            android:name=".standing.ShareTargetActivity"
+            android:exported="true"
+            android:label="@string/share_target_label"
+            android:theme="@style/Theme.Sharepaste.Invisible"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name=".standing.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

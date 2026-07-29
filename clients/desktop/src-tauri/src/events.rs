@@ -1,4 +1,13 @@
+//! The desktop's wire format, and the one adapter that produces it.
+//!
+//! Every name and payload here is what `ui/` already listens for. The sink
+//! below is a pure mapping from [`CoreEvent`] onto them — no logic, no second
+//! event path, nothing the core does not already know.
+
+use sharepaste_core::event::CoreEvent;
+use sharepaste_core::platform::EventSink;
 use serde::Serialize;
+use tauri::Emitter;
 
 pub(crate) const PAIRING_ADDED: &str   = "pairing-added";
 pub(crate) const PAIRING_REMOVED: &str = "pairing-removed";
@@ -8,7 +17,6 @@ pub(crate) const ENTRY_ADDED: &str     = "entry-added";
 pub(crate) const ENTRY_DELETED: &str   = "entry-deleted";
 pub(crate) const HISTORY_CHANGED: &str = "history-changed";
 pub(crate) const PENDING_COUNT: &str   = "pending-count";
-pub(crate) const DECRYPTION_ERROR: &str = "decryption-error";
 pub(crate) const CONTACT_EVENT: &str      = "contact";
 pub(crate) const PAIR_SHORTCODE: &str  = "pair-shortcode";
 pub(crate) const PAIR_CLAIMED: &str    = "pair-claimed";
@@ -28,31 +36,24 @@ pub(crate) struct ActivePairingChanged { pub user_id: Option<String> }
 #[derive(Serialize, Clone)]
 pub(crate) struct ConnectionStateEvent {
     pub(crate) user_id: String,
-    pub(crate) state: crate::core::sync::ConnectionState,
+    pub(crate) state: sharepaste_core::sync::ConnectionState,
     pub(crate) last_error: Option<String>,
 }
 
+/// The entry travels as the core built it.
+///
+/// `Entry` carries `Serialize` for exactly this: a shell-side copy of the struct
+/// would be one more place for a field to go missing, which is how the
+/// `undecryptable` flag came to be inferred from an empty preview in the first
+/// place.
 #[derive(Serialize, Clone)]
-pub(crate) struct EntryAdded { pub user_id: String, pub entry: EntryView }
-
-#[derive(Serialize, Clone)]
-pub(crate) struct EntryView {
-    pub(crate) id: i64,
-    pub(crate) user_id: String,
-    pub(crate) preview: String,
-    pub(crate) created_at: i64,
-    pub(crate) device_id: String,
-    pub(crate) device_label: Option<String>,
-}
+pub(crate) struct EntryAdded { pub user_id: String, pub entry: sharepaste_core::event::Entry }
 
 #[derive(Serialize, Clone)]
 pub(crate) struct EntryDeleted { pub user_id: String, pub entry_id: i64 }
 
 #[derive(Serialize, Clone)]
 pub(crate) struct PendingCount { pub user_id: String, pub count: i64 }
-
-#[derive(Serialize, Clone)]
-pub(crate) struct DecryptionError { pub user_id: String, pub entry_id: i64 }
 
 /// Contact for one user, as the popover renders it: `LAST CONTACT 3m AGO`.
 ///
@@ -80,3 +81,62 @@ pub(crate) struct MainNavigate { pub section: String, pub entry_id: Option<i64> 
 /// from the commit log.
 #[derive(Serialize, Clone)]
 pub(crate) struct UpdateAvailable { pub version: String, pub notes: Option<String> }
+
+/// Emits the core's events into the Tauri event bus.
+pub(crate) struct TauriEventSink {
+    app: tauri::AppHandle,
+}
+
+impl TauriEventSink {
+    pub(crate) fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl EventSink for TauriEventSink {
+    fn emit(&self, event: CoreEvent) {
+        // A closed webview is the normal way an emit fails, and there is nothing
+        // the protocol could do about it — the same reason every call site here
+        // used to end in `.ok()`.
+        match event {
+            CoreEvent::PairingAdded { user_id, device_id, label } => {
+                let _ = self.app.emit(PAIRING_ADDED, PairingAdded { user_id, device_id, label });
+            }
+            CoreEvent::PairingRemoved { user_id } => {
+                let _ = self.app.emit(PAIRING_REMOVED, PairingRemoved { user_id });
+            }
+            CoreEvent::ActivePairingChanged { user_id } => {
+                let _ = self.app.emit(ACTIVE_PAIRING_CHANGED, ActivePairingChanged { user_id });
+            }
+            CoreEvent::ConnectionState { user_id, state, last_error } => {
+                let _ = self
+                    .app
+                    .emit(CONNECTION_STATE, ConnectionStateEvent { user_id, state, last_error });
+            }
+            CoreEvent::EntryAdded { user_id, entry } => {
+                let _ = self.app.emit(ENTRY_ADDED, EntryAdded { user_id, entry });
+            }
+            CoreEvent::EntryDeleted { user_id, entry_id } => {
+                let _ = self.app.emit(ENTRY_DELETED, EntryDeleted { user_id, entry_id });
+            }
+            CoreEvent::HistoryChanged { user_id } => {
+                let _ = self.app.emit(HISTORY_CHANGED, serde_json::json!({ "user_id": user_id }));
+            }
+            CoreEvent::PendingCount { user_id, count } => {
+                let _ = self.app.emit(PENDING_COUNT, PendingCount { user_id, count });
+            }
+            CoreEvent::Contact { user_id, last_contact_at } => {
+                let _ = self.app.emit(CONTACT_EVENT, ContactEvent { user_id, last_contact_at });
+            }
+            CoreEvent::PairShortcode { code, expires_at } => {
+                let _ = self.app.emit(PAIR_SHORTCODE, PairShortcode { code, expires_at });
+            }
+            CoreEvent::PairClaimed { user_id, device_label } => {
+                let _ = self.app.emit(PAIR_CLAIMED, PairClaimed { user_id, device_label });
+            }
+            CoreEvent::PairExpired => {
+                let _ = self.app.emit(PAIR_EXPIRED, ());
+            }
+        }
+    }
+}

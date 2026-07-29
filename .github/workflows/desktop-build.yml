@@ -1,20 +1,21 @@
 name: Desktop Builds
 
-# `test` gates pull requests; `build` (a ~15 minute bundle) only runs once the
-# change is on main. Without a pull_request trigger the suite would only ever
-# run *after* merge, which is no gate at all.
+# `test` and `android-guards` gate pull requests; `build` (a ~15 minute bundle)
+# and `build-android` only run once the change is on main. Without a
+# pull_request trigger the suite would only ever run *after* merge, which is no
+# gate at all.
 on:
   push:
     branches:
       - main
     paths:
-      - clients/desktop/**
+      - clients/**
       - .github/workflows/desktop-build.yml
       - .github/scripts/**
       - .github/release-body-header.md
   pull_request:
     paths:
-      - clients/desktop/**
+      - clients/**
       - .github/workflows/desktop-build.yml
       - .github/scripts/**
       - .github/release-body-header.md
@@ -62,9 +63,10 @@ jobs:
       # has not yet bumped the changelog is not a broken release, it is not a
       # release at all.
       #
-      # Fails on drift between tauri.conf.json, package.json and Cargo.toml, or
-      # on a version with no changelog section. Not cosmetic: core/http/client.rs
-      # builds the Relay User-Agent from CARGO_PKG_VERSION.
+      # Fails on drift between tauri.conf.json, package.json and the two
+      # Cargo.toml files, or on a version with no changelog section. Not
+      # cosmetic: clients/core/src/http/client.rs builds the Relay User-Agent
+      # from CARGO_PKG_VERSION.
       - name: Check the version numbers agree
         id: versions
         if: github.event_name == 'push'
@@ -115,8 +117,12 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # The workspace, not the desktop crate: the core's tests are the larger
+      # half of the suite and were invisible to a desktop-only invocation.
+      # `default-members` in clients/Cargo.toml keeps the ACL crate out of this
+      # build graph, which is what makes the separate invocation below safe.
       - name: Run Rust unit tests
-        run: cargo test --lib --manifest-path clients/desktop/src-tauri/Cargo.toml
+        run: cargo test --lib --manifest-path clients/Cargo.toml
 
       # Separate crate and separate invocation on purpose: it links Tauri's mock
       # runtime, which cannot coexist with wry in one test binary, and Cargo
@@ -198,12 +204,268 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: sharepaste-desktop-${{ matrix.platform }}
+          # The workspace root is `clients/`, so Cargo — and with it the Tauri
+          # bundler — writes to `clients/target/`, not to a target directory
+          # under the app crate.
           path: |
-            clients/desktop/src-tauri/target/release/bundle/**/*.dmg
-            clients/desktop/src-tauri/target/release/bundle/**/*.app.tar.gz
-            clients/desktop/src-tauri/target/release/bundle/**/*.app.tar.gz.sig
-            clients/desktop/src-tauri/target/release/bundle/**/*.exe
-            clients/desktop/src-tauri/target/release/bundle/**/*.exe.sig
+            clients/target/release/bundle/**/*.dmg
+            clients/target/release/bundle/**/*.app.tar.gz
+            clients/target/release/bundle/**/*.app.tar.gz.sig
+            clients/target/release/bundle/**/*.exe
+            clients/target/release/bundle/**/*.exe.sig
+          if-no-files-found: error
+
+  # The Android guards — and the only job that compiles Kotlin on a pull request.
+  #
+  # No emulator and no device. `:app:testDebugUnitTest` runs the whole JVM source
+  # set — every `@Test` under `app/src/test/kotlin`, including whatever has been
+  # added there since this comment — and `:app:compileDebugAndroidTestKotlin`
+  # type-checks the instrumented set without running it. There is deliberately no
+  # test count here: the first version of this comment said "nine", two files
+  # arrived, and it was wrong by fifteen with nothing to notice.
+  #
+  # The guards the record leans on are the ones that read the *merged* manifest:
+  # all of `MergedManifestTest`, and, in `SettingsThatDoNotExistTest`, only
+  # `nothing_offers_a_biometric_gate` — that class's other assertions read
+  # `strings.xml`. What a merged-manifest assertion catches is a library
+  # contributing `FOREGROUND_SERVICE`, `USE_BIOMETRIC` or `allowBackup="true"`
+  # with not a line changing in this project's own manifest. An AndroidX bump is
+  # exactly how that arrives, and a bump arrives in a pull request.
+  #
+  # Its own job, and neither of the two places it looks like it belongs:
+  #
+  # - Not steps of `test`. That matrix is macOS + Windows, billed at 10x and 2x a
+  #   Linux minute, and these assertions need neither OS. Adding them there
+  #   installs an Android SDK, a pinned NDK and cargo-ndk twice and runs the same
+  #   source set twice for one bit of information.
+  # - Not steps of `build-android`. That job is
+  #   `if: github.event_name != 'pull_request'`, which is precisely the event
+  #   where the guard is wanted.
+  #
+  # No `needs`, so it starts alongside `test` rather than behind it: a manifest
+  # guard says nothing about the desktop suite, and queueing behind a macOS
+  # matrix would add that matrix's whole duration to the feedback loop for
+  # nothing. `publish` needs this job, so no signed APK is released past a failed
+  # guard. `build-android` deliberately does *not* — see the note there.
+  android-guards:
+    name: Android guards (JVM)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+          # AndroidX, Compose and the wrapper itself are a hundred-odd downloads
+          # this job would otherwise repeat every run. `build-android` is left
+          # uncached on purpose: its cost is the release cross-compile and
+          # packaging rather than dependency resolution, and two jobs writing one
+          # cache key is a race bought for nothing.
+          cache: gradle
+
+      # The same pin, for the same reason, as `build-android`: the NDK is a
+      # compile-time input to every `.so` and the runner image's default moves
+      # between image releases. `build-tools` tracks `buildToolsVersion` in the
+      # Gradle build.
+      - name: Install the pinned Android SDK components
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A here-string, never a pipe — see the same step in `build-android`
+          # for why `yes |` fails under `pipefail` and a bounded producer does too.
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            'ndk;27.2.12479018' 'platforms;android-35' 'build-tools;36.0.0' \
+            <<< "$(printf 'y\n%.0s' $(seq 1 50))"
+
+      # A JVM test still needs the native library built. `testDebugUnitTest`
+      # depends on `compileDebugKotlin`, which consumes the UniFFI bindings,
+      # which are generated out of a *built* `libsharepaste_ffi.so` — see
+      # `generateUniffiBindingsDebug` in `clients/mobile/android/app/build.gradle.kts`.
+      # So the guards are cheap but their prerequisite is not, and this job
+      # carries the same Rust toolchain as `build-android`. There is no shortcut:
+      # a unit test that cannot compile the variant cannot run.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --version 4.1.2 --locked
+
+      # No keystore and no `-Psharepaste.ffi.features`: this is the debug
+      # variant, which builds unsigned and with the `testing` feature on, and
+      # neither is anything these tests read.
+      #
+      # `:app:compileDebugAndroidTestKotlin` is the second half of the point. The
+      # 104 instrumented tests only ever run on a developer's emulator, so
+      # compiling them here is the difference between a broken instrumented suite
+      # being found now and being found by whoever next boots an AVD. It costs
+      # one Kotlin compile against a variant this job has already built.
+      #
+      # `sh gradlew`, not `./gradlew`: Git on Windows does not record an exec
+      # bit, so a re-add of the wrapper from a Windows checkout silently drops
+      # mode 100755 and CI fails with "Permission denied" before Gradle is
+      # reached — a CI-only error that reads like a runner problem. The mode is
+      # correct in the index today; this is what keeps it from mattering when it
+      # is not. The wrapper's shebang is `#!/bin/sh`, so this is equivalent.
+      # `build-android` does the same, for the same reason.
+      - name: Run the Android JVM tests and compile the instrumented sources
+        working-directory: clients/mobile/android
+        run: sh gradlew --no-daemon :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin
+
+      # Gradle's console prints the failing test's name and none of its message,
+      # and for these tests the message *is* the finding — "the merged manifest
+      # declares android.permission.FOREGROUND_SERVICE" is the whole value of the
+      # run. Without the report a red guard says only which line threw.
+      #
+      # `warn`, not `error`: a failure in the Kotlin compile above produces no
+      # test report at all, and that must not be reported as a missing artifact.
+      - name: Upload the test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-guard-report
+          path: clients/mobile/android/app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: warn
+
+  # The Android artifact. A separate job rather than a third entry in `build`'s
+  # matrix: it needs the Android SDK, a pinned NDK and two Rust
+  # cross-compilation targets, and none of that belongs on a runner whose job is
+  # to bundle a desktop app.
+  #
+  # Ubuntu on purpose. The desktop crate compiles only on macOS and Windows —
+  # `keyring` is declared for those two targets — but nothing here builds the
+  # desktop crate. `sharepaste-core` and `sharepaste-ffi` cross-compile to
+  # Android from any host, so this takes the cheapest minute available.
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    needs: test
+    # Same reasoning as `build`: an artifact nobody consumes from a pull
+    # request. `test` and `android-guards` are what gate the merge.
+    #
+    # Not `needs: android-guards`, deliberately. Both jobs cross-compile
+    # sharepaste-ffi for two ABIs, so chaining them would put one Android
+    # cross-compile in front of the other and buy nothing: `publish` already
+    # needs `android-guards`, so a failed guard cannot release this APK however
+    # cleanly it built.
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 25
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # The exact NDK the Gradle build pins (`ndkVersionPinned`), installed
+      # rather than assumed: the runner image's default NDK moves between image
+      # releases, and the NDK is a compile-time input to every `.so` in the APK.
+      - name: Install the pinned Android SDK components
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A here-string, never a pipe. sdkmanager stops reading stdin as soon
+          # as it has its answers — and reads none at all when the licences are
+          # already accepted — so any producer piped into it dies of SIGPIPE and
+          # `pipefail` turns that into a failed step. Seen for real on the first
+          # CI run: "yes: standard output: Broken pipe", exit 1, after the NDK
+          # had unzipped to 100%. A bounded `printf` is NOT a fix; measured, it
+          # still exits 141, because the race is when the reader closes the pipe
+          # rather than how much the writer had left to write. A here-string is
+          # a file descriptor, so there is no pipe to break. `integration-filter`
+          # below records the same trap from the other direction.
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            'ndk;27.2.12479018' 'platforms;android-35' 'build-tools;36.0.0' \
+            <<< "$(printf 'y\n%.0s' $(seq 1 50))"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # The two ABIs the release carries. `armeabi-v7a` and `x86` are
+          # excluded on purpose; see `shippedAbis` in the Gradle build.
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      # Version-pinned and `--locked`: this program chooses the linker and the
+      # sysroot for the library that ships, so "whatever released this morning"
+      # is not an acceptable answer for what built it.
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --version 4.1.2 --locked
+
+      # The keystore is a secret and never a file in this repository. It is
+      # decoded into the runner's temp directory, which the runner takes with it.
+      #
+      # The emptiness check is not defensive padding: an unset secret expands to
+      # an empty string, `base64 -d` of which is a zero-byte file that exists, so
+      # Gradle would accept it as a keystore and fail several tasks later with a
+      # message about a truncated archive.
+      - name: Materialise the release keystore
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo 'ANDROID_KEYSTORE_BASE64 is not set. An unsigned APK cannot install over' >&2
+            echo 'or be updated by a signed one, so this is a failure and not a fallback.' >&2
+            exit 1
+          fi
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          test -s "$RUNNER_TEMP/release.jks"
+
+      # One universal APK carrying both shipped ABIs. The `testing` Cargo feature
+      # is off in this variant by the build file's own decision, not by a flag
+      # passed here — see `ffiFeaturesFor`.
+      - name: Build the signed universal APK
+        working-directory: clients/mobile/android
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: sh gradlew --no-daemon :app:assembleRelease
+
+      # AGP calls it `app-release.apk`, which is not a name to put on a Release
+      # page beside five desktop bundles. Two things are load-bearing here:
+      #
+      # - The version comes from `tauri.conf.json`, the authority
+      #   `check-versions.mjs` has already proved the Gradle `versionName` agrees
+      #   with, so this cannot name the APK a version it is not.
+      # - `app-release.apk` is the *signed* name. AGP writes
+      #   `app-release-unsigned.apk` when it has no signing config, so this
+      #   `test -f` is also the assertion that the secrets took effect.
+      #
+      # `-universal` rather than an ABI in the name: Obtainium has a per-app
+      # setting that tries to pick an APK by CPU architecture out of the file
+      # name, and a name carrying `arm64` would invite it to guess. There is one
+      # APK and it runs everywhere.
+      - name: Name the artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./clients/desktop/src-tauri/tauri.conf.json').version")"
+          built=clients/mobile/android/app/build/outputs/apk/release/app-release.apk
+          test -f "$built"
+          mkdir -p android-artifact
+          cp "$built" "android-artifact/sharepaste-$version-universal.apk"
+
+      - name: Upload the Android artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sharepaste-android
+          path: android-artifact/*.apk
           if-no-files-found: error
 
   # Opt-in: the live-server tests need a relay to talk to, so they run on
@@ -253,7 +515,7 @@ jobs:
           fi
 
           if git diff --name-only "$base" '${{ github.sha }}' \
-               | grep -Eq '^clients/desktop/src-tauri/src/core/(http|pairing)/'; then
+               | grep -Eq '^clients/core/src/(http|pairing)/'; then
             echo 'run=true' >> "$GITHUB_OUTPUT"
           else
             echo 'run=false' >> "$GITHUB_OUTPUT"
@@ -320,7 +582,7 @@ jobs:
         env:
           SHAREPASTE_TEST_CLI: node ${{ github.workspace }}/server/dist/index.js
         run: |
-          cargo test --manifest-path clients/desktop/src-tauri/Cargo.toml \
+          cargo test --manifest-path clients/core/Cargo.toml \
             --test flow1_invite --test flow2_pairing
 
       - name: Dump server log on failure
@@ -333,10 +595,14 @@ jobs:
   # `needs` carries the whole gate: on a non-release commit `integration` is
   # skipped, which skips this job, which is the wanted outcome — so no
   # `always()` or `!cancelled()` is needed anywhere.
+  #
+  # `android-guards` is in that list rather than in `build-android`'s: it runs
+  # concurrently with every other dependency here, so it refuses the release
+  # without adding a minute to the path that produces it.
   publish:
     name: Publish v${{ needs.release-gate.outputs.version }}
     runs-on: ubuntu-latest
-    needs: [release-gate, build, integration]
+    needs: [release-gate, build, build-android, android-guards, integration]
     if: needs.release-gate.outputs.publish == 'true'
 
     # Scoped to this job alone; the workflow default stays `contents: read`.
@@ -356,11 +622,14 @@ jobs:
         with:
           node-version: 25
 
-      - name: Download both platforms' bundles
+      - name: Download every platform's artifacts
         uses: actions/download-artifact@v7
         with:
           path: artifacts
-          pattern: sharepaste-desktop-*
+          # Both jobs' names start with this, and the per-pattern check in
+          # "Upload every asset" is what notices if one of them contributed
+          # nothing.
+          pattern: sharepaste-*
 
       - name: Extract the release notes
         run: node .github/scripts/changelog.mjs clients/desktop/CHANGELOG.md "$VERSION" > notes.md
@@ -397,10 +666,17 @@ jobs:
           shopt -s globstar nullglob
           # One match per pattern, or no release. A half-built release —
           # published, plausible, and missing a platform — is worse than none,
-          # and this is the only step that would notice.
+          # and this is the only step that would notice. It has already earned
+          # its keep once, on exactly that mistake.
+          #
+          # `*.apk` is the Android artifact, and it belongs in this list rather
+          # than in a separate `gh release upload` beside it: a phone missing
+          # from a Release that names it is the same failure as a missing
+          # desktop bundle, and routing around the check is how it would stop
+          # being caught.
           assets=()
           for pattern in '*.dmg' '*.app.tar.gz' '*.app.tar.gz.sig' \
-                         '*.exe' '*.exe.sig'; do
+                         '*.exe' '*.exe.sig' '*.apk'; do
             # shellcheck disable=SC2206 # $pattern is a glob; expanding it is the point.
             matches=(artifacts/**/$pattern)
             if [ "${#matches[@]}" -ne 1 ]; then

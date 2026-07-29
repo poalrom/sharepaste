@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agePhrase, normalizePreview, originLabel, relativeAge } from "../lib/format";
+import { agePhrase, relativeAge } from "../lib/format";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -49,49 +49,5 @@ describe("agePhrase", () => {
     expect(agePhrase(t, t + MINUTE)).toBe("1m ago");
     expect(agePhrase(t, t + 4 * HOUR)).toBe("4h ago");
     expect(agePhrase(t, t + 30 * DAY)).toBe("1mo ago");
-  });
-});
-
-describe("normalizePreview", () => {
-  it("collapses every run of whitespace to a single space", () => {
-    expect(normalizePreview("npm   run\tdev")).toBe("npm run dev");
-  });
-
-  it("flattens a multi-line entry so the row is not visually empty", () => {
-    expect(normalizePreview("\n\n    const x = 1;\n    const y = 2;\n")).toBe(
-      "const x = 1; const y = 2;",
-    );
-  });
-
-  it("trims leading indentation that would otherwise render as a blank row", () => {
-    expect(normalizePreview("        indented")).toBe("indented");
-  });
-
-  it("bounds the string so an unbounded plaintext cannot enter the DOM whole", () => {
-    expect(normalizePreview("x".repeat(500))).toHaveLength(200);
-    expect(normalizePreview("x".repeat(500), 400)).toHaveLength(400);
-  });
-
-  it("leaves a short string untouched", () => {
-    expect(normalizePreview("ss://Y2hhY2hh")).toBe("ss://Y2hhY2hh");
-  });
-
-  it("returns an empty string for whitespace-only plaintext", () => {
-    expect(normalizePreview("   \n\t ")).toBe("");
-  });
-});
-
-describe("originLabel", () => {
-  it("prefers the mirrored Device Label", () => {
-    expect(originLabel("iphone-15", "abcdef123456")).toBe("iphone-15");
-  });
-
-  it("falls back to a 4-char device id slice for an unlabelled legacy membership", () => {
-    expect(originLabel(null, "abcdef123456")).toBe("abcd");
-    expect(originLabel(undefined, "abcdef123456")).toBe("abcd");
-  });
-
-  it("treats a blank label as unlabelled", () => {
-    expect(originLabel("   ", "abcdef123456")).toBe("abcd");
   });
 });

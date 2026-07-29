@@ -20,6 +20,7 @@ const pairingA: Pairing = {
   label: "MBP-14",
   username: "alice",
   server_url: "https://relay.one",
+  relay_host: "relay.one",
   status: "Online",
   pending: 0,
   is_active: true,
@@ -30,25 +31,47 @@ const pairingB: Pairing = {
   label: "MBP-14",
   username: "bob",
   server_url: "https://relay.two",
+  relay_host: "relay.two",
   status: "Disconnected",
   pending: 0,
   is_active: false,
 };
 
 /**
- * `preview` is the *complete* plaintext over IPC (ADR 0003), so only a fixture
- * with real newlines can tell the row's collapsed line apart from the reader.
+ * An entry the row and the reader must render differently.
+ *
+ * `preview` is the facade's Preview — one line, every control character a
+ * space, trimmed — and `plaintext` is the text it was built from. Stated rather
+ * than derived: re-deriving it here would be the second normaliser this split
+ * exists to delete.
  */
 const MULTILINE = "ssh admin@10.0.0.4\n  -i ~/.ssh/id_ed25519\n  -p 2222";
-const MULTILINE_COLLAPSED = "ssh admin@10.0.0.4 -i ~/.ssh/id_ed25519 -p 2222";
+const MULTILINE_PREVIEW = "ssh admin@10.0.0.4   -i ~/.ssh/id_ed25519   -p 2222";
+
+/**
+ * An entry whose third line falls past the Preview's 80-character cap, and the
+ * word that lives only there.
+ *
+ * The reason the search reads `plaintext`. `borogoves` appears nowhere in
+ * `LONG_PREVIEW`, so a filter over the Preview cannot find this row at all —
+ * which is what truncating the one field into the other would have caused.
+ */
+const THIRD_LINE_WORD = "borogoves";
+const LONG_PLAINTEXT =
+  "twas brillig and the slithy toves did gyre and gimble in the wabe\n" +
+  "  all mimsy were the\n" +
+  `  ${THIRD_LINE_WORD}`;
+/** Its Preview, as the facade builds one: controls to spaces, trimmed, 80 characters. */
+const LONG_PREVIEW =
+  "twas brillig and the slithy toves did gyre and gimble in the wabe   all mimsy we";
 
 /** Longer than the render cap, with a marker on each side of the cut. */
 const OVERSIZE = `HEAD-${"A".repeat(RENDER_CAP)}-TAIL`;
 
 const entriesA: EntryView[] = [
-  { id: 11, user_id: "u-a", preview: MULTILINE, created_at: NOW - 2 * MINUTE, device_id: "dev-a", device_label: "MBP-14" },
-  { id: 12, user_id: "u-a", preview: "bravo", created_at: NOW - 6 * HOUR, device_id: "dev-phone", device_label: "IPHONE-15" },
-  { id: 13, user_id: "u-a", preview: "charlie", created_at: NOW - 3 * HOUR, device_id: "dev-a", device_label: "MBP-14" },
+  { id: 11, user_id: "u-a", preview: MULTILINE_PREVIEW, plaintext: MULTILINE, created_at: NOW - 2 * MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
+  { id: 12, user_id: "u-a", preview: "bravo", plaintext: "bravo", created_at: NOW - 6 * HOUR, device_id: "dev-phone", device_label: "IPHONE-15", origin_label: "IPHONE-15", undecryptable: false },
+  { id: 13, user_id: "u-a", preview: "charlie", plaintext: "charlie", created_at: NOW - 3 * HOUR, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
 ];
 
 /**
@@ -56,8 +79,8 @@ const entriesA: EntryView[] = [
  * id, so a seed that outlives its one hydration would land on this row.
  */
 const entriesB: EntryView[] = [
-  { id: 21, user_id: "u-b", preview: "from the laptop", created_at: NOW - MINUTE, device_id: "dev-a", device_label: "MBP-14" },
-  { id: 13, user_id: "u-b", preview: "same id other pairing", created_at: NOW - 2 * MINUTE, device_id: "dev-b", device_label: "PIXEL-9" },
+  { id: 21, user_id: "u-b", preview: "from the laptop", plaintext: "from the laptop", created_at: NOW - MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
+  { id: 13, user_id: "u-b", preview: "same id other pairing", plaintext: "same id other pairing", created_at: NOW - 2 * MINUTE, device_id: "dev-b", device_label: "PIXEL-9", origin_label: "PIXEL-9", undecryptable: false },
 ];
 
 const bulkEntries = (count: number): EntryView[] =>
@@ -65,8 +88,11 @@ const bulkEntries = (count: number): EntryView[] =>
     id: 200 + i,
     user_id: "u-a",
     preview: `entry-${i}`,
+    plaintext: `entry-${i}`,
     created_at: NOW - i * MINUTE,
     device_id: "dev-a",
+    origin_label: "dev-",
+    undecryptable: false,
   }));
 
 let ipc: MockIpc;
@@ -161,13 +187,34 @@ describe("HistorySection — the reader", () => {
     await renderPane();
 
     const row = screen.getAllByTestId("main-entry-row")[0]!;
-    // The join point: the newline-plus-indent between lines became one space.
-    expect(row.textContent).toContain("10.0.0.4 -i");
-    expect(row.textContent).toContain(MULTILINE_COLLAPSED);
+    expect(row.textContent).toContain(MULTILINE_PREVIEW);
     expect(row.textContent).not.toContain("\n");
 
     // Exact, not `toContain`: the pane's contract is the original text whole.
     expect(screen.getByTestId("entry-detail-body").textContent).toBe(MULTILINE);
+  });
+
+  /*
+    The behaviour that made truncating `preview` into one field unacceptable:
+    a query has to reach a word the Preview does not carry.
+  */
+  it("matches a query against a word past the Preview's cap on an entry's third line", async () => {
+    expect(LONG_PREVIEW).not.toContain(THIRD_LINE_WORD);
+    historyByUser["u-a"] = [
+      { id: 14, user_id: "u-a", preview: LONG_PREVIEW, plaintext: LONG_PLAINTEXT, created_at: NOW - 4 * MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
+      ...entriesA,
+    ];
+    await renderPane();
+
+    fireEvent.change(screen.getByLabelText("Filter entries"), {
+      target: { value: THIRD_LINE_WORD },
+    });
+
+    const rows = screen.getAllByTestId("main-entry-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toContain(LONG_PREVIEW);
+    // And the reader beside it still holds the whole entry, third line included.
+    expect(screen.getByTestId("entry-detail-body").textContent).toBe(LONG_PLAINTEXT);
   });
 
   it("falls back to a prompt when the addressed position holds no entry", async () => {
@@ -410,9 +457,14 @@ describe("HistorySection — undecryptable entries", () => {
   const undecryptable: EntryView = {
     id: 99,
     user_id: "u-a",
+    // As it arrives from the facade: no cached plaintext at all, which is both
+    // an empty Preview and the flag. The flag is what the row must read.
     preview: "",
+    plaintext: null,
     created_at: NOW - MINUTE,
     device_id: "dev-a",
+    origin_label: "dev-",
+    undecryptable: true,
   };
 
   beforeEach(() => {
@@ -491,7 +543,13 @@ describe("HistorySection — the popover's handoff", () => {
 
 describe("HistorySection — the oversize guard", () => {
   beforeEach(() => {
-    historyByUser["u-a"] = [{ ...entriesA[0]!, preview: OVERSIZE }, entriesA[1]!, entriesA[2]!];
+    // On `plaintext`: the cap guards what the reader lays out, and the row's
+    // Preview is 80 characters whatever the entry weighs.
+    historyByUser["u-a"] = [
+      { ...entriesA[0]!, preview: "HEAD-AAAA", plaintext: OVERSIZE },
+      entriesA[1]!,
+      entriesA[2]!,
+    ];
   });
 
   it("cuts an entry past the render cap and reveals the rest on request", async () => {

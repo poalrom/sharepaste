@@ -1,7 +1,7 @@
 import { forwardRef } from "react";
 import type { EntryView } from "../types";
 import { cmd } from "../ipc/commands";
-import { normalizePreview, originLabel, relativeAge } from "../lib/format";
+import { relativeAge } from "../lib/format";
 import { useHistoryStore, useUiStore } from "../store";
 import { IconButton } from "./fui";
 
@@ -27,7 +27,7 @@ export type EntryRowProps = {
  */
 export async function copyEntry(entry: EntryView, opts: { keepOpen: boolean }): Promise<void> {
   const { showToast } = useUiStore.getState();
-  if (entry.preview === "") {
+  if (entry.undecryptable) {
     showToast({
       tone: "alert",
       text: "CAN'T COPY",
@@ -43,7 +43,7 @@ export async function copyEntry(entry: EntryView, opts: { keepOpen: boolean }): 
     return;
   }
   if (opts.keepOpen) {
-    showToast({ tone: "cyan", text: "COPIED", detail: normalizePreview(entry.preview) });
+    showToast({ tone: "cyan", text: "COPIED", detail: entry.preview });
     return;
   }
   // A failed hide is not a failed copy: the text is already on the clipboard,
@@ -70,8 +70,7 @@ const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
   { entry, index, selected, ownDeviceId, now, onPoint },
   ref,
 ) {
-  // Nothing on the wire flags it: a NULL plaintext arrives as an empty preview.
-  const undecryptable = entry.preview === "";
+  const { undecryptable } = entry;
   const elsewhere = entry.device_id !== ownDeviceId;
 
   return (
@@ -99,9 +98,9 @@ const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
       ) : (
         <span
           className="min-w-0 flex-1 truncate font-mono text-data text-text-body"
-          title={normalizePreview(entry.preview, 400)}
+          title={entry.preview}
         >
-          {normalizePreview(entry.preview)}
+          {entry.preview}
         </span>
       )}
 
@@ -115,10 +114,10 @@ const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
                 The tooltip is the untruncated counterpart of what is shown, not
                 a second fallback: a label reads in full, an unlabelled legacy
                 membership reads its full device id behind the 4-char slice
-                (plan §4). Routing it through originLabel would hide the id.
+                (plan §4). Routing it through `origin_label` would hide the id.
               */}
               <span className="uppercase" title={entry.device_label?.trim() || entry.device_id}>
-                {originLabel(entry.device_label, entry.device_id).slice(0, 12)}
+                {entry.origin_label.slice(0, 12)}
               </span>
               {" · "}
             </>

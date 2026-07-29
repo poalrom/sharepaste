@@ -1,5 +1,22 @@
 # Main Window redesign — plan
 
+> Completed plan, kept as a record. Two things it names have moved since.
+>
+> Its Rust citations predate the extraction of `sharepaste-core`: paths of the form `core/…`
+> and `commands.rs` were relative to `clients/desktop/src-tauri/src/` and now live under
+> `clients/core/src/`. See the note at the top of
+> [ADR 0006](adr/0006-one-protocol-three-shells.md).
+>
+> And the renderings this plan treats as the UI's own are the core's now:
+> `normalizePreview`, `originLabel` and `relayHost` are gone from
+> `clients/desktop/ui/src/lib/format.ts`, replaced by `preview`, `origin_label` and
+> `relay_host` in `clients/core/src/render.rs`, so both shells cannot disagree about the
+> answer. `relativeAge` stayed in the UI. The Entry contract split with it: `Entry.preview`
+> is a rendered one-line Preview and `Entry.plaintext` is the whole text, where a single
+> `preview` field once carried both — so wherever this plan says the filter matches
+> `preview`, it now matches `plaintext`, which is what made the claim true in the first
+> place.
+
 Target: bring `clients/desktop`'s main window to the same FUI/HUD language as the
 tray popover, add the History reader the product has never had, and rename
 `Account` to `Pairing` from the tray menu down to the Rust command names.
