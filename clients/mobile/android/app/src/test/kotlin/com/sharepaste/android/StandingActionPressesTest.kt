@@ -40,6 +40,11 @@ import org.junit.Test
  * [the_two_standing_action_activities_adopt_a_new_intent] closes the other half:
  * [Presses] cannot be reached at all unless `onNewIntent` exists, and its absence
  * was the bug.
+ *
+ * [a_press_that_arrived_unfocused_keeps_the_window_open] is the second pass's
+ * half of the same bug: the fix above counted only the presses it *started*, and
+ * the one route that always arrives unfocused is a notification action — the
+ * shade has to take the focus in order to open.
  */
 class StandingActionPressesTest {
 
@@ -140,6 +145,46 @@ class StandingActionPressesTest {
 
         assertTrue("the last verb finished and the window did not close", presses.finished())
         assertTrue(presses.idle)
+    }
+
+    /**
+     * **The regression the second-press fix left behind.** A press that arrived
+     * while the shade held the focus keeps the window open.
+     *
+     * A verb is counted only once it starts, and it can only start with focus, so
+     * an unfocused press lives in `owed` and nowhere else. **The notification
+     * shade is precisely what removes window focus**, so an `onNewIntent` from a
+     * notification action arrives with no focus by construction. If the verb
+     * already working finished in that gap — and an Offer's drain can end
+     * anywhere in its ten seconds — `finished()` answered "idle",
+     * `StandingActionActivity` called `finish()`, and the recorded press died
+     * with the window in silence: the dropped second press the fix was written
+     * for, arriving by the one route that always removes focus.
+     */
+    @Test
+    fun a_press_that_arrived_unfocused_keeps_the_window_open() {
+        val presses = Presses()
+        presses.arrived(OFFER)
+        assertEquals(OFFER, presses.focus(true))
+
+        // The shade opens over the window, and one of its actions is pressed.
+        assertNull("nothing runs without focus", presses.focus(false))
+        assertNull("and the press cannot start yet either", presses.arrived(RECALL))
+
+        assertFalse(
+            "the Offer finished while the shade held the focus and the window was told it " +
+                "could close, on a press it had already recorded",
+            presses.finished(),
+        )
+        assertTrue(
+            "`onStop` still closes on `idle` alone, deliberately: a window whose focus is " +
+                "gone for good — a press on a locked screen — has to be able to go",
+            presses.idle,
+        )
+
+        // The shade goes away and the press that was owed runs.
+        assertEquals(RECALL, presses.focus(true))
+        assertTrue("the last verb finished and the window did not close", presses.finished())
     }
 
     /**

@@ -217,21 +217,27 @@ jobs:
 
   # The Android guards — and the only job that compiles Kotlin on a pull request.
   #
-  # Nine JVM tests, no emulator and no device. Four are the ones the record leans
-  # on: `MergedManifestTest.no_foreground_service_is_declared` and
-  # `.cloud_backup_is_denied`, plus both of `SettingsThatDoNotExistTest`'s
-  # manifest assertions. Every one reads the *merged* manifest, so what they
-  # catch is a library contributing `FOREGROUND_SERVICE`, `USE_BIOMETRIC` or
-  # `allowBackup="true"` with not a line changing in this project's own manifest.
-  # An AndroidX bump is exactly how that arrives, and a bump arrives in a pull
-  # request.
+  # No emulator and no device. `:app:testDebugUnitTest` runs the whole JVM source
+  # set — every `@Test` under `app/src/test/kotlin`, including whatever has been
+  # added there since this comment — and `:app:compileDebugAndroidTestKotlin`
+  # type-checks the instrumented set without running it. There is deliberately no
+  # test count here: the first version of this comment said "nine", two files
+  # arrived, and it was wrong by fifteen with nothing to notice.
+  #
+  # The guards the record leans on are the ones that read the *merged* manifest:
+  # all of `MergedManifestTest`, and, in `SettingsThatDoNotExistTest`, only
+  # `nothing_offers_a_biometric_gate` — that class's other assertions read
+  # `strings.xml`. What a merged-manifest assertion catches is a library
+  # contributing `FOREGROUND_SERVICE`, `USE_BIOMETRIC` or `allowBackup="true"`
+  # with not a line changing in this project's own manifest. An AndroidX bump is
+  # exactly how that arrives, and a bump arrives in a pull request.
   #
   # Its own job, and neither of the two places it looks like it belongs:
   #
   # - Not steps of `test`. That matrix is macOS + Windows, billed at 10x and 2x a
   #   Linux minute, and these assertions need neither OS. Adding them there
   #   installs an Android SDK, a pinned NDK and cargo-ndk twice and runs the same
-  #   nine tests twice for one bit of information.
+  #   source set twice for one bit of information.
   # - Not steps of `build-android`. That job is
   #   `if: github.event_name != 'pull_request'`, which is precisely the event
   #   where the guard is wanted.

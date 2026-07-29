@@ -3,8 +3,11 @@
 //! Each type here restates a core type. The duplication buys one thing: the
 //! core stays free to hold `Instant`s, `PathBuf`s and doubly-optional patches,
 //! while the boundary carries only what a foreign binding can spell. Every
-//! conversion is `From`, one direction, so a field added to the core is a
-//! compile error here rather than a field a phone silently never sees.
+//! conversion is `From`, one direction, and every one of them takes its source
+//! apart by name — records destructure, enums `match` — so a field added to a
+//! core type is a compile error here rather than a field a phone silently never
+//! sees. Projecting fields off the source (`id: e.id`) would compile through
+//! exactly the omission this module exists to catch: never do that here.
 
 use sharepaste_core::capture::filter::SkipReason as CoreSkipReason;
 use sharepaste_core::event::{CoreEvent as CoreCoreEvent, Entry as CoreEntry};
@@ -62,7 +65,18 @@ impl From<CoreConnectionState> for ConnectionState {
 /// `origin_label` is the Device Label, or a short slice of the Device id when
 /// the mirror has none. Resolved by the core because the alternative was the
 /// same three lines in Kotlin and in TypeScript.
-#[derive(Debug, Clone, uniffi::Record)]
+///
+/// No `Debug`, for the reason `sharepaste_core::event::Entry` has none and
+/// `ShortCode` and `Recalled` below have none: `plaintext` is whatever the
+/// person copied, and a struct that formats itself is one `tracing::debug!`
+/// away from putting it in a log file.
+///
+/// That closes the Rust half only. UniFFI generates a Kotlin `data class`,
+/// whose `toString` prints every field regardless of what this side derives, so
+/// the phone's half of the rule is that nothing logs an event object.
+/// `FlowEventSink` holds that line by logging `event::class.java.simpleName`
+/// rather than the event — do not "improve" it to `$event`.
+#[derive(Clone, uniffi::Record)]
 pub struct Entry {
     pub id: i64,
     pub user_id: String,
@@ -77,16 +91,27 @@ pub struct Entry {
 
 impl From<CoreEntry> for Entry {
     fn from(e: CoreEntry) -> Self {
+        let CoreEntry {
+            id,
+            user_id,
+            preview,
+            plaintext,
+            created_at,
+            device_id,
+            device_label,
+            origin_label,
+            undecryptable,
+        } = e;
         Entry {
-            id: e.id,
-            user_id: e.user_id,
-            preview: e.preview,
-            plaintext: e.plaintext,
-            created_at: e.created_at,
-            device_id: e.device_id,
-            device_label: e.device_label,
-            origin_label: e.origin_label,
-            undecryptable: e.undecryptable,
+            id,
+            user_id,
+            preview,
+            plaintext,
+            created_at,
+            device_id,
+            device_label,
+            origin_label,
+            undecryptable,
         }
     }
 }
@@ -113,16 +138,27 @@ pub struct PairingSummary {
 
 impl From<CorePairingSummary> for PairingSummary {
     fn from(p: CorePairingSummary) -> Self {
+        let CorePairingSummary {
+            user_id,
+            device_id,
+            label,
+            username,
+            server_url,
+            relay_host,
+            status,
+            pending,
+            is_active,
+        } = p;
         PairingSummary {
-            user_id: p.user_id,
-            device_id: p.device_id,
-            label: p.label,
-            username: p.username,
-            server_url: p.server_url,
-            relay_host: p.relay_host,
-            status: p.status.into(),
-            pending: p.pending,
-            is_active: p.is_active,
+            user_id,
+            device_id,
+            label,
+            username,
+            server_url,
+            relay_host,
+            status: status.into(),
+            pending,
+            is_active,
         }
     }
 }
@@ -136,7 +172,8 @@ pub struct PairedDevice {
 
 impl From<CorePairedDevice> for PairedDevice {
     fn from(p: CorePairedDevice) -> Self {
-        PairedDevice { user_id: p.user_id, device_id: p.device_id }
+        let CorePairedDevice { user_id, device_id } = p;
+        PairedDevice { user_id, device_id }
     }
 }
 
@@ -154,7 +191,8 @@ pub struct ShortCode {
 
 impl From<CoreShortCode> for ShortCode {
     fn from(c: CoreShortCode) -> Self {
-        ShortCode { code: c.code, expires_at: c.expires_at }
+        let CoreShortCode { code, expires_at } = c;
+        ShortCode { code, expires_at }
     }
 }
 
@@ -170,7 +208,8 @@ pub struct Contact {
 
 impl From<CoreContact> for Contact {
     fn from(c: CoreContact) -> Self {
-        Contact { user_id: c.user_id, last_contact_at: c.last_contact_at }
+        let CoreContact { user_id, last_contact_at } = c;
+        Contact { user_id, last_contact_at }
     }
 }
 
@@ -209,12 +248,8 @@ pub struct Recalled {
 
 impl From<CoreRecalled> for Recalled {
     fn from(r: CoreRecalled) -> Self {
-        Recalled {
-            text: r.text,
-            entry_id: r.entry_id,
-            created_at: r.created_at,
-            source: r.source.into(),
-        }
+        let CoreRecalled { text, entry_id, created_at, source } = r;
+        Recalled { text, entry_id, created_at, source: source.into() }
     }
 }
 
@@ -289,13 +324,21 @@ pub struct Settings {
 
 impl From<CoreSettings> for Settings {
     fn from(s: CoreSettings) -> Self {
+        let CoreSettings {
+            capture_enabled,
+            deny_list,
+            autostart,
+            hotkey,
+            last_active_user_id,
+            update_check_enabled,
+        } = s;
         Settings {
-            capture_enabled: s.capture_enabled,
-            deny_list: s.deny_list,
-            autostart: s.autostart,
-            hotkey: s.hotkey,
-            last_active_user_id: s.last_active_user_id,
-            update_check_enabled: s.update_check_enabled,
+            capture_enabled,
+            deny_list,
+            autostart,
+            hotkey,
+            last_active_user_id,
+            update_check_enabled,
         }
     }
 }
@@ -330,15 +373,25 @@ pub struct SettingsPatch {
 
 impl From<SettingsPatch> for CoreSettingsPatch {
     fn from(p: SettingsPatch) -> Self {
+        // This one runs the other way, so the destructure guards the near side:
+        // a field added to the boundary's `SettingsPatch` and not forwarded is a
+        // compile error rather than a setting a phone can never change.
+        let SettingsPatch {
+            capture_enabled,
+            deny_list,
+            autostart,
+            hotkey,
+            update_check_enabled,
+        } = p;
         CoreSettingsPatch {
-            capture_enabled: p.capture_enabled,
-            deny_list: p.deny_list,
-            autostart: p.autostart,
-            hotkey: p.hotkey.map(|h| match h {
+            capture_enabled,
+            deny_list,
+            autostart,
+            hotkey: hotkey.map(|h| match h {
                 HotkeyPatch::Set { hotkey } => Some(hotkey),
                 HotkeyPatch::Clear => None,
             }),
-            update_check_enabled: p.update_check_enabled,
+            update_check_enabled,
         }
     }
 }
@@ -349,7 +402,11 @@ impl From<SettingsPatch> for CoreSettingsPatch {
 /// caller's thread and not on the platform's main thread. A Kotlin
 /// implementation must marshal onto the main dispatcher before touching UI
 /// state.
-#[derive(Debug, Clone, uniffi::Enum)]
+///
+/// No `Debug`: `EntryAdded` embeds an [`Entry`] and `PairShortcode` carries the
+/// same short code the core refuses to make printable — it *is* the pairing
+/// secret for the next two minutes.
+#[derive(Clone, uniffi::Enum)]
 pub enum CoreEvent {
     PairingAdded { user_id: String, device_id: String, label: String },
     PairingRemoved { user_id: String },

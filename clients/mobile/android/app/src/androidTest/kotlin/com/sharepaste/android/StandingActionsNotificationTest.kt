@@ -247,11 +247,11 @@ class StandingActionsNotificationTest {
         /**
          * The tag both Standing Action activities log under.
          *
-         * Repeated here rather than reached for, because the production
-         * constant is private and making it visible for a test would be the
-         * wrong direction: `adb logcat -s SharepasteStandingAction` is the
-         * documented diagnostic, so the string is part of the contract and a
-         * test that pinned it by importing it could not notice it changing.
+         * Repeated here rather than reached for. `StandingActions.TAG` is
+         * `internal` and this test could import it, but
+         * `adb logcat -s SharepasteStandingAction` is the documented diagnostic,
+         * so the string itself is the contract — a test that pinned it by
+         * importing the constant could not notice it changing.
          */
         const val STANDING_ACTION_TAG = "SharepasteStandingAction"
 

@@ -93,10 +93,20 @@ impl Uploader {
             let b64 = base64_encode(&item.ciphertext);
             match self.transport.upload(&b64).await {
                 Ok(uploaded) => {
-                    let conn = self.conn.lock().await;
-                    pending::ack(&conn, item.rowid)?;
-                    let count = pending::count(&conn, &self.user_id)?;
-                    self.cache_own_entry(&conn, &b64, uploaded);
+                    // Scoped so the database guard is gone before anything
+                    // reaches the sink: see [`EventSink`].
+                    let (count, cached) = {
+                        let conn = self.conn.lock().await;
+                        pending::ack(&conn, item.rowid)?;
+                        let cached = self.cache_own_entry(&conn, &b64, uploaded);
+                        (pending::count(&conn, &self.user_id)?, cached)
+                    };
+                    if let Some(entry) = cached {
+                        self.events.emit(CoreEvent::EntryAdded {
+                            user_id: self.user_id.clone(),
+                            entry,
+                        });
+                    }
                     self.pending_count(count);
                 }
                 Err(AppError::Auth(s)) => {
@@ -105,10 +115,12 @@ impl Uploader {
                     return Err(AppError::Auth(s));
                 }
                 Err(AppError::BadInput(s)) => {
-                    let conn = self.conn.lock().await;
-                    pending::ack(&conn, item.rowid)?;
-                    tracing::warn!(err = %s, rowid = item.rowid, "dropped malformed pending entry");
-                    let count = pending::count(&conn, &self.user_id)?;
+                    let count = {
+                        let conn = self.conn.lock().await;
+                        pending::ack(&conn, item.rowid)?;
+                        tracing::warn!(err = %s, rowid = item.rowid, "dropped malformed pending entry");
+                        pending::count(&conn, &self.user_id)?
+                    };
                     self.pending_count(count);
                 }
                 Err(e) => {
@@ -121,7 +133,8 @@ impl Uploader {
         Ok(())
     }
 
-    /// Put an Entry this device just uploaded into its own cache.
+    /// Put an Entry this device just uploaded into its own cache, and hand back
+    /// the Entry the caller owes the sink.
     ///
     /// **A device must not depend on a network echo to learn about content it
     /// created itself.** Before this, the only way an offered Entry reached the
@@ -140,12 +153,22 @@ impl Uploader {
     /// watermark the ordinary way; [`crate::storage::entries_cache::upsert_and_prune`]
     /// is idempotent, so ingesting it a second time costs nothing.
     ///
+    /// **It returns the Entry rather than emitting it**, because its caller holds
+    /// the database guard and [`EventSink`] forbids reaching a shell from under
+    /// one. `Some` is the caller's instruction to announce it once the guard is
+    /// gone.
+    ///
     /// A failure here is logged and swallowed. The Entry is on the relay, which
     /// is the part that matters; the cache catches up on the next backfill.
-    fn cache_own_entry(&self, conn: &Connection, ciphertext_b64: &str, uploaded: Uploaded) {
+    fn cache_own_entry(
+        &self,
+        conn: &Connection,
+        ciphertext_b64: &str,
+        uploaded: Uploaded,
+    ) -> Option<Entry> {
         let Ok(Some(account)) = accounts::find(conn, &self.user_id) else {
             tracing::warn!(user_id = %self.user_id, "no pairing to attribute this device's own Entry to");
-            return;
+            return None;
         };
         let row = EntryRow {
             id: uploaded.id,
@@ -159,26 +182,25 @@ impl Uploader {
             // duplicate row on screen — a more visible bug than the missing row
             // this method exists to prevent.
             Ok(out) if out.first_insert => {
-                let device_label = devices::map_for(conn, &self.user_id)
-                    .unwrap_or_default()
-                    .remove(&account.device_id);
-                self.events.emit(CoreEvent::EntryAdded {
-                    user_id: self.user_id.clone(),
-                    entry: Entry::new(
-                        uploaded.id,
-                        self.user_id.clone(),
-                        out.plaintext,
-                        uploaded.created_at,
-                        account.device_id,
-                        device_label,
-                    ),
-                });
+                let device_label =
+                    devices::label_for(conn, &self.user_id, &account.device_id).unwrap_or_default();
+                Some(Entry::new(
+                    uploaded.id,
+                    self.user_id.clone(),
+                    out.plaintext,
+                    uploaded.created_at,
+                    account.device_id,
+                    device_label,
+                ))
             }
-            Ok(_) => {}
-            Err(e) => tracing::warn!(
-                err = %e, entry_id = uploaded.id,
-                "could not cache this device's own Entry; the next backfill will fetch it"
-            ),
+            Ok(_) => None,
+            Err(e) => {
+                tracing::warn!(
+                    err = %e, entry_id = uploaded.id,
+                    "could not cache this device's own Entry; the next backfill will fetch it"
+                );
+                None
+            }
         }
     }
 }
@@ -260,7 +282,7 @@ mod tests {
         assert_eq!(
             sink.pending_counts(),
             vec![2, 1, 0],
-            "the queue shrinking is the only thing that surfaces a backlog draining"
+            "the queue shrinking is the only thing that surfaces Pending draining"
         );
     }
 

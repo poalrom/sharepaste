@@ -78,6 +78,18 @@ object StandingActions {
     const val ACTION_RECALL_LATEST = "com.sharepaste.android.standing.RECALL_LATEST"
 
     /**
+     * The one diagnostic both Standing Action surfaces log under.
+     *
+     * `adb logcat -s SharepasteStandingAction` is the whole of it, and that
+     * contract is only worth anything if there is exactly one tag: this used to
+     * be declared privately in [StandingActionActivity] and again in
+     * [ShareTargetActivity], where a rename on either side would have quietly
+     * halved what that command shows. It names what happened and never what was
+     * in the Entry.
+     */
+    internal const val TAG = "SharepasteStandingAction"
+
+    /**
      * Whether the platform will actually show it.
      *
      * One question rather than two, and it is the right one at every API level.

@@ -21,7 +21,8 @@ pub enum ServerEvent {
     Delete { id: i64 },
 }
 
-/// Stamp Contact for every chunk the relay delivers.
+/// Stamp Contact for every chunk the relay delivers — invariant 3's tap half,
+/// whose other half is `SessionCtx::set_conn_state`.
 ///
 /// This wraps the byte stream **below** the SSE parser, and that placement is
 /// the whole point. The relay writes `: heartbeat` every 15s, but a comment

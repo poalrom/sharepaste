@@ -1,6 +1,8 @@
 use crate::errors::AppError;
 use rusqlite::{params, Connection};
 
+/// The cap that makes the pending queue bounded — invariant 4, whose FIFO half
+/// is [`head`] and whose eviction half is [`enqueue`].
 pub(crate) const MAX_PER_USER: i64 = 1000;
 
 #[derive(Debug, Clone, PartialEq)]

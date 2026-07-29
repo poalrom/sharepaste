@@ -44,7 +44,13 @@ use serde::Serialize;
 /// [`Settings`](crate::storage::settings::Settings) carry it: the desktop hands
 /// this straight to its webview, and a shell-side copy of the struct would be one
 /// more place for a field to go missing.
-#[derive(Debug, Clone, Serialize)]
+///
+/// No `Debug`, for the reason [`ShortCode`](crate::facade::ShortCode) and
+/// [`Recalled`](crate::facade::Recalled) have none: `plaintext` is whatever the
+/// person copied, and a struct that formats itself is one `tracing::debug!` away
+/// from putting it in a log file. A shell that genuinely needs a rendering should
+/// write a `Debug` that redacts the payload rather than reach for the derive.
+#[derive(Clone, Serialize)]
 pub struct Entry {
     pub id: i64,
     pub user_id: String,
@@ -98,7 +104,13 @@ impl Entry {
 /// row says so; a second event naming the same id told no shell anything it did
 /// not have, fired once per row on a backfill, and both shells ended up
 /// discarding it.
-#[derive(Debug, Clone)]
+///
+/// No `Debug`, for the reason [`Entry`] has none. `EntryAdded` embeds one, and
+/// `PairShortcode` carries the pairing secret itself for the next two minutes —
+/// which is exactly what [`ShortCode`](crate::facade::ShortCode) refuses to make
+/// printable. A sink is the one place a shell is most likely to log the thing it
+/// was handed.
+#[derive(Clone)]
 pub enum CoreEvent {
     PairingAdded { user_id: String, device_id: String, label: String },
     PairingRemoved { user_id: String },

@@ -29,7 +29,6 @@ cli = ["uniffi/cli"]
 [dependencies]
 sharepaste-core = { path = "../../core" }
 uniffi = "0.32"
-tokio = { version = "1", features = ["rt"] }
 thiserror = "1"
 tracing = "0.1"
 # Only the known-answer vector needs it, to build a `UserKey` (a

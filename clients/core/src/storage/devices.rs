@@ -56,6 +56,32 @@ pub fn map_for(conn: &Connection, user_id: &str) -> Result<HashMap<String, Strin
     Ok(rows)
 }
 
+/// The label for one device, or `None` when the mirror holds none for it.
+///
+/// The single-row form of [`map_for`], and the one to reach for on a per-Entry
+/// path: the live SSE loop and the uploader each need exactly one label, and
+/// building the whole mirror to take one entry out of it is a `SELECT` and a
+/// `HashMap` per Entry. [`map_for`] stays for `list_history`, which needs the
+/// whole map once for a batch.
+///
+/// Same silence as [`map_for`] on the difference between unlabelled and unknown
+/// — ask [`is_mirrored`] when that matters.
+pub fn label_for(
+    conn: &Connection,
+    user_id: &str,
+    device_id: &str,
+) -> Result<Option<String>, AppError> {
+    let label = conn
+        .query_row(
+            "SELECT label FROM devices WHERE user_id = ?1 AND device_id = ?2",
+            params![user_id, device_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(label)
+}
+
 /// Whether the mirror has heard of this device at all, label or not.
 ///
 /// The one signal that the mirror is stale: an entry from an unknown device
@@ -134,6 +160,30 @@ mod tests {
         upsert_many(&c, "other", &[dev("d1", Some("theirs"))], 10).unwrap();
         assert_eq!(map_for(&c, "u").unwrap().get("d1").map(String::as_str), Some("mine"));
         assert!(!is_mirrored(&c, "nobody", "d1").unwrap());
+    }
+
+    /*
+     * `label_for` is what the per-Entry paths use, so it has to agree with the
+     * batch form on every case the batch form is careful about: an unlabelled
+     * device, an unknown device, and another user's device with the same id.
+     */
+    #[test]
+    fn label_for_answers_exactly_what_the_map_would_have_held() {
+        let c = open_in_memory().unwrap();
+        upsert_many(&c, "u", &[dev("d1", Some("mine")), dev("d2", None)], 10).unwrap();
+        upsert_many(&c, "other", &[dev("d1", Some("theirs"))], 10).unwrap();
+
+        for id in ["d1", "d2", "ghost"] {
+            assert_eq!(
+                label_for(&c, "u", id).unwrap(),
+                map_for(&c, "u").unwrap().remove(id),
+                "label_for and map_for disagree about {id}"
+            );
+        }
+        assert_eq!(label_for(&c, "u", "d1").unwrap().as_deref(), Some("mine"));
+        assert_eq!(label_for(&c, "u", "d2").unwrap(), None, "mirrored but unlabelled");
+        assert!(is_mirrored(&c, "u", "d2").unwrap(), "which is not the same as unknown");
+        assert_eq!(label_for(&c, "u", "ghost").unwrap(), None);
     }
 
     #[test]

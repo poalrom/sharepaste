@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
@@ -131,6 +132,28 @@ class SharepasteRepository private constructor(
     @Volatile
     private var closed = false
 
+    /**
+     * The Pairings this process is holding a session for.
+     *
+     * Not a second opinion about core state — a record of **this shell's own
+     * acts**, which is a different fact and the one [drainPending] needs: a
+     * Standing Action has to put down the session it brought up and has to
+     * leave alone the one an open screen is using. Asking the core would not
+     * answer it anyway. `connectionState` reads `Disconnected` for a Pairing no
+     * session has ever run for, for one whose session was stopped, and for one
+     * merely out of contact, and the map that does know (`sync_tasks`) is not on
+     * the FFI.
+     *
+     * It cannot drift. A session ends only by being stopped — the core's two
+     * tasks retry rather than exit — and every start and stop this application
+     * makes goes through the three methods below, because this class is the only
+     * thing that touches the core at all.
+     *
+     * Concurrent because [io] resumes its callers on whatever thread the FFI
+     * call finished on.
+     */
+    private val heldSessions: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
     // -- pairings and sessions ----------------------------------------------
 
     suspend fun listPairings(): List<PairingSummary> = io { it.listPairings() }
@@ -151,11 +174,28 @@ class SharepasteRepository private constructor(
 
     suspend fun resumeActivePairing(): String? = io { it.resumeActivePairing() }
 
-    override suspend fun startSession(userId: String) = io { it.startSession(userId) }
+    override suspend fun startSession(userId: String) {
+        io { it.startSession(userId) }
+        // Recorded after the call, so a start that raised — no route to the
+        // Relay, a Pairing that would not unlock — is not a session this process
+        // believes it holds.
+        heldSessions.add(userId)
+    }
 
-    override suspend fun stopSession(userId: String) = io { it.stopSession(userId) }
+    override suspend fun stopSession(userId: String) {
+        // Forgotten before the call rather than after it: the record says "this
+        // process asked for a session and has not given it up", and asking is
+        // exactly what it has just stopped doing.
+        heldSessions.remove(userId)
+        io { it.stopSession(userId) }
+    }
 
-    suspend fun stopAllSessions() = io { it.stopAllSessions() }
+    suspend fun stopAllSessions() {
+        heldSessions.clear()
+        io { it.stopAllSessions() }
+    }
+
+    override fun holdsSession(userId: String): Boolean = userId in heldSessions
 
     override suspend fun pendingOn(userId: String): Long? =
         io { core -> core.listPairings().firstOrNull { it.userId == userId }?.pending }
@@ -273,15 +313,27 @@ class SharepasteRepository private constructor(
      *
      * **Why this is not the background work ADR 0007 forbids.** The rule is that
      * nothing runs while nobody is looking. This runs because somebody pressed a
-     * control; it is bounded by [timeoutMs]; and the session is brought back down
+     * control; [timeoutMs] bounds the wait; and the session is brought back down
      * before the caller's window closes **even if the caller is cancelled** —
-     * which is the one part of that sentence a `finally` alone does not buy. See
-     * [drainPending], where the ordering lives and where a JVM test pins it.
+     * which is the one part of that sentence a `finally` alone does not buy. The
+     * teardown carries a bound of its own, [TEARDOWN_MS], rather than living
+     * inside [timeoutMs]'s: it deliberately runs where cancellation cannot reach
+     * it, so it needs a limit that is not the caller's to revoke. The worst case
+     * one press can cost is therefore the two added together.
      *
-     * Only [userId]'s session is stopped, rather than every session, so this
-     * cannot reach past its own business. In practice there is nothing to reach
-     * past: a Standing Action's window taking focus is what put any open screen
-     * through `onStop`, and `onStop` is what stops sessions.
+     * **A session an open screen is already holding is left alone**, neither
+     * started nor stopped. Stopping it is what this used to do, on an argument
+     * that measured false: the claim was that a Standing Action's window taking
+     * focus is what puts any open screen through `onStop`, and `onStop` is what
+     * stops sessions. `Theme.Sharepaste.Invisible` is translucent, and an
+     * activity left drawn is not stopped. Measured on `spike35` — an `am start`
+     * of `StandingActionActivity` over an open `MainActivity` logs
+     * `wm_on_paused_called` for it and never `wm_on_stop_called`, and the way
+     * back is `wm_on_resume_called` with no `wm_on_start_called` either. So
+     * `onLeaveForeground` never ran, the visible History screen still held its
+     * session, this stopped it, and no `onStart` was coming to put it back: the
+     * screen went silently deaf to new Entries. See [drainPending], where the
+     * ordering lives and where JVM tests pin all three parts.
      *
      * Answers whether the queue emptied. Not emptying is the ordinary offline
      * outcome and not an error — the Entry is kept, the pending count is on the
@@ -425,10 +477,11 @@ class SharepasteRepository private constructor(
  *
  * Every member is one [SharepasteRepository] already had, so this adds no
  * behaviour — it exists to be **faked**. What [drainPending] has to get right is
- * an ordering no device can be relied on to exercise on demand (the session
- * comes down even when the coroutine draining it is cancelled), and a fake makes
- * that a JVM test in `PendingDrainTest`, which runs in CI, rather than an
- * instrumented one, which does not.
+ * three orderings no device can be relied on to exercise on demand: the session
+ * comes down when the coroutine draining it is cancelled, it comes down even
+ * when the teardown itself never returns, and a session this drain did not start
+ * is never touched. A fake makes those JVM tests in `PendingDrainTest`, which
+ * runs in CI, rather than instrumented ones, which do not.
  */
 internal interface PendingQueue {
 
@@ -438,6 +491,16 @@ internal interface PendingQueue {
     suspend fun startSession(userId: String)
 
     suspend fun stopSession(userId: String)
+
+    /**
+     * Whether this process is already holding a session for [userId].
+     *
+     * Not `suspend`, and that is the whole point of it: this is a read of the
+     * shell's record of what it has itself asked the core for, so it crosses no
+     * boundary and cannot fail. `SharepasteRepository.heldSessions` is where it
+     * lives and where the reason the core is not the one asked is written down.
+     */
+    fun holdsSession(userId: String): Boolean
 
     /**
      * How many Entries are waiting to upload on [userId], or `null` when this
@@ -450,18 +513,52 @@ internal interface PendingQueue {
 }
 
 /**
- * Bring [userId]'s session up, wait for its queue to drain, and put it back down
- * — whatever happens to the caller in between.
+ * How long the teardown gets, once it is somewhere cancellation cannot reach.
  *
- * **The session comes down even if this coroutine is cancelled**, and that is
- * the reason this function is worth a test of its own. `stopSession` suspends,
- * and a suspending call in a `finally` reached *by cancellation* throws
- * `CancellationException` at its first suspension point — before the FFI, so the
- * session is never touched, and a `runCatching` around it swallows the evidence.
- * `StandingActionActivity.onDestroy` cancels its scope, so an activity destroyed
- * inside the drain used to leave a session running with no window on screen:
- * unattended sync, which ADR 0007 forbids, arrived at silently. [NonCancellable]
- * is what makes the teardown happen anyway.
+ * A bound of its own rather than the drain's, because it runs inside
+ * [NonCancellable]: nothing outside can end it, so it has to be able to end
+ * itself. Stopping a session is local work — cancel two tasks, drop an upload
+ * trigger — with no network in it, so the only thing that can make it slow is a
+ * facade still opening behind it, and two seconds is more than that needs.
+ * Exceeding it releases the window with the session possibly still up, which is
+ * the lesser of the two failures: a window nothing can close is a window nobody
+ * can report.
+ */
+internal const val TEARDOWN_MS = 2_000L
+
+/**
+ * Bring [userId]'s session up unless something already holds one, wait for its
+ * queue to drain, and put down whatever this call brought up — whatever happens
+ * to the caller in between.
+ *
+ * **The session comes down even if this coroutine is cancelled.** `stopSession`
+ * suspends, and a suspending call in a `finally` reached *by cancellation*
+ * throws `CancellationException` at its first suspension point — before the FFI,
+ * so the session is never touched, and a `runCatching` around it swallows the
+ * evidence. `StandingActionActivity.onDestroy` cancels its scope, so an activity
+ * destroyed inside the drain used to leave a session running with no window on
+ * screen: unattended sync, which ADR 0007 forbids, arrived at silently.
+ * [NonCancellable] is what makes the teardown happen anyway.
+ *
+ * **And the teardown is bounded, because [NonCancellable] took away the
+ * caller's last lever.** `stopSession` awaits the facade before it calls
+ * anything, so a facade that never finishes opening — the same stall that ends
+ * the drain body by timeout — left this `finally` suspended forever in a scope
+ * nothing could cancel: work outliving the press that authorised it, which is
+ * the thing [NonCancellable] was added to prevent. [TEARDOWN_MS] is the bound,
+ * and the shape is the narrow one — non-cancellable, so a destroyed window still
+ * tears the session down; bounded, so it cannot hold the process instead. What a
+ * bound cannot do is cut short a blocking FFI call already in progress; nothing
+ * on this platform can, and it is the suspending half that hangs.
+ *
+ * **Nothing is started or stopped for a Pairing this process already holds a
+ * session for**, and that is not an optimisation. A Standing Action's window is
+ * translucent, so an open screen behind it is paused and *not* stopped:
+ * `onLeaveForeground` never runs and that screen still has its session. Both
+ * halves would be wrong on it — `startSession` cancels whichever session it
+ * replaces, and the teardown would then stop the replacement, leaving a visible
+ * History screen receiving no Entries with no `onStart` coming to restore it.
+ * Measured on `spike35`; the logcat is in [SharepasteRepository.sendPending].
  *
  * **It awaits an event rather than polling for a number.** The core already
  * emits [CoreEvent.PendingCount] whenever the queue moves — the state holder
@@ -478,31 +575,61 @@ internal interface PendingQueue {
  * emptied after it arrives as an event. One call across the boundary, and no
  * window on it.
  *
- * Answers whether the queue emptied. [timeoutMs] bounds the whole of it, session
- * start included, so a stalled upload ends the caller's window instead of
- * holding it; not emptying in time is the ordinary offline outcome and not an
- * error.
+ * **It raises nothing.** Both crossings inside the subscription can throw
+ * [AppException] — `startSession` where there is no route to the Relay, and
+ * `pendingOn` through the same facade await — and every caller is a
+ * `try`/`finally` under a bare `MainScope` with no handler, reached *after* the
+ * person has been shown "Offered.". A queue that did not empty is a `false`.
+ *
+ * Answers whether the queue emptied. [timeoutMs] bounds the drain — the session
+ * start and the wait — and not the teardown, which has [TEARDOWN_MS] instead, so
+ * one press costs at most the two together. Not emptying in time is the ordinary
+ * offline outcome and not an error.
  */
-internal suspend fun PendingQueue.drainPending(userId: String, timeoutMs: Long): Boolean = try {
-    withTimeoutOrNull(timeoutMs) {
-        events
-            .onSubscription {
-                try {
-                    startSession(userId)
-                } catch (e: AppException) {
-                    // No route to the Relay. Queued is the right answer and the
-                    // History already says so; there is nothing to bring down,
-                    // and the teardown below is tolerant of that.
+internal suspend fun PendingQueue.drainPending(userId: String, timeoutMs: Long): Boolean {
+    // Ours to bring up and ours to put down, or somebody else's to leave alone.
+    // Read before anything is started, because starting is what would make it
+    // ours.
+    val ours = !holdsSession(userId)
+    return try {
+        withTimeoutOrNull(timeoutMs) {
+            events
+                .onSubscription {
+                    if (ours) {
+                        try {
+                            startSession(userId)
+                        } catch (e: AppException) {
+                            // No route to the Relay. Queued is the right answer
+                            // and the History already says so; there is nothing
+                            // to bring down, and the teardown below is tolerant
+                            // of that.
+                        }
+                    }
+                    val depth = try {
+                        pendingOn(userId)
+                    } catch (e: AppException) {
+                        // The gap-closing read is the one thing here that can be
+                        // lost cheaply: a session may well be up and uploading,
+                        // so wait for the event and let the bound above end it.
+                        // `null` is also what an unknown Pairing answers, and the
+                        // drain does the same thing with both.
+                        null
+                    }
+                    // Already empty, so no further count is coming. Emitted into
+                    // this collector rather than returned around it, so the drain
+                    // has one ending instead of two.
+                    if (depth == 0L) emit(CoreEvent.PendingCount(userId, 0L))
                 }
-                // Already empty, so no further count is coming. Emitted into
-                // this collector rather than returned around it, so the drain
-                // has one ending instead of two.
-                if (pendingOn(userId) == 0L) emit(CoreEvent.PendingCount(userId, 0L))
+                .first { it is CoreEvent.PendingCount && it.userId == userId && it.count == 0L }
+        } != null
+    } finally {
+        if (ours) {
+            // Reached by a return, by the timeout, or by the caller being
+            // cancelled. The third is why this is [NonCancellable], and being
+            // [NonCancellable] is why it is bounded.
+            withContext(NonCancellable) {
+                withTimeoutOrNull(TEARDOWN_MS) { runCatching { stopSession(userId) } }
             }
-            .first { it is CoreEvent.PendingCount && it.userId == userId && it.count == 0L }
-    } != null
-} finally {
-    // Reached by a return, by the timeout, or by the caller being cancelled, and
-    // the third is the one that needs [NonCancellable]: see above.
-    withContext(NonCancellable) { runCatching { stopSession(userId) } }
+        }
+    }
 }

@@ -90,19 +90,23 @@ class SessionLifecycleTest {
             "onStop must not leave the app thinking it is in front",
             !model.state.value.foreground,
         )
-        // What is deliberately *not* asserted here: that the core now reads
-        // `DISCONNECTED`. It does not, and that is by design — ticket 05's
-        // `stop_all_sessions_ends_the_streams_but_forgets_nothing` pins it. The
-        // last Contact reading survives a teardown so the next `onStart` has
-        // something to render before the Relay answers, and `connectionState`
-        // keeps reporting `ONLINE` until a live session says otherwise.
+        // The core reads `DISCONNECTED` from here on: `stop_all_sessions` walks
+        // every session it stopped to that state before it returns, because a
+        // Pairing row rendering `Online` for a session that no longer exists was
+        // its own bug. What survives the teardown is **Contact** — the last
+        // moment this device had a live connection, flushed to the account row on
+        // the way out — so the next `onStart` has something to render before the
+        // Relay answers. `stop_all_sessions_ends_the_streams_but_forgets_nothing`
+        // pins that half.
         //
-        // Which is exactly why the screen must not read that value directly, and
-        // does not: `onLeaveForeground` states `Resting` itself. A phone that
-        // rendered the core's stale reading would sit in the background claiming
-        // to be in contact with a Relay it has hung up on.
+        // The screen still must not read `connectionState` for this, and does not:
+        // `onLeaveForeground` states `Resting` itself. `Disconnected` is also what
+        // a Pairing no session has ever run for reads, and what one that is merely
+        // out of contact reads, so it cannot tell a phone that was put down from a
+        // phone that cannot reach the Relay. `SharepasteRepository.heldSessions`
+        // makes the same argument for the same reason.
         assertEquals(
-            "the resting phase must not be derived from a stale ONLINE reading",
+            "the resting phase must not be derived from a connection state at all",
             SessionPhase.Resting(paired.userId),
             model.state.value.session,
         )
@@ -113,8 +117,8 @@ class SessionLifecycleTest {
         )
         Evidence.log(
             "onStop        = ${model.state.value.session}; " +
-                "core still reads ${runBlocking { repo.connectionState(paired.userId) }} " +
-                "(the last reading survives a teardown on purpose)",
+                "core reads ${runBlocking { repo.connectionState(paired.userId) }} " +
+                "(Contact is the reading that survives a teardown, not this one)",
         )
 
         // --- something happens while the phone is not listening -------------

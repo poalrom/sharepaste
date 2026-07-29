@@ -9,6 +9,44 @@
 //! own. It notifies through [`EventSink`], reads and writes the facade's
 //! [`SessionState`], and spawns on the handle that state carries — which is the
 //! facade's private runtime, never the caller's.
+//!
+//! # The four invariants
+//!
+//! Four rules hold however the relay behaves. Each has exactly one
+//! implementation, and that implementation names its own number, so
+//! `grep -rn "invariant [1-4]" clients/core/src` lands on the code every
+//! reference below points at. A numbered reference to a list nobody wrote is the
+//! one kind of comment the code cannot contradict, which is why the list is
+//! here.
+//!
+//! 1. **The watermark only advances past a row that stored.** `last_seen_id`
+//!    means "everything up to here has been fetched", so moving it past a row
+//!    that failed to ingest loses that row for good — the next `since=` fetch
+//!    starts after it. [`backfill`] stops at the first failure and the whole
+//!    tail is re-fetched on the next iteration.
+//! 2. **A 404 on `GET /me` latches the route off for the session.** The device
+//!    mirror is on its own route by
+//!    [ADR 0001](../../../../../docs/adr/0001-device-metadata-out-of-band.md),
+//!    so a client can be newer than its relay, and a 404 there stays a 404
+//!    until someone redeploys. [`MirrorRoute`] states that once rather than
+//!    once a minute, and re-arms on the next reconnect because a redeploy is
+//!    what dropped the stream.
+//! 3. **Contact is tapped below the SSE parser and written only on the edge out
+//!    of `Online`.** A `: heartbeat` comment dispatches no event under the
+//!    WHATWG rules, so only the byte stream distinguishes a healthy idle stream
+//!    from a dead one — `sse::stamp_contact` stores into a live cell from
+//!    there. [`SessionCtx::set_conn_state`] is the one thing that ever moves
+//!    that cell into the database, which is what keeps a heartbeat off SQLite.
+//! 4. **The pending queue is a capped FIFO that says what it dropped.** The
+//!    uploader drains it head-first so entries reach the relay in the order they
+//!    were captured, and
+//!    [`storage::pending::enqueue`](crate::storage::pending::enqueue) evicts the
+//!    oldest at `MAX_PER_USER` rather than growing without bound — reporting the
+//!    eviction count in `dropped_oldest`, because a clipboard entry silently
+//!    discarded is the one loss nothing else would surface.
+//!
+//! 1 to 3 are testable with no relay running because [`SessionTransport`] is a
+//! trait; 4 splits across [`Uploader`] and storage, and needs no network at all.
 
 use crate::crypto::UserKey;
 use crate::errors::AppError;
@@ -47,9 +85,10 @@ const BACKFILL_LIMIT: u32 = 500;
 /// Everything a session needs from the relay.
 ///
 /// The same reason `UploadTransport` exists, applied to the rest of the loop:
-/// with the HTTP client behind a trait the four invariants below are testable
-/// with no relay running, which is the only way they get a test at all. There
-/// is exactly one production implementation, [`ServerSession`].
+/// with the HTTP client behind a trait, invariants 1 to 3 in this module's
+/// header are testable with no relay running, which is the only way they get a
+/// test at all. There is exactly one production implementation,
+/// [`ServerSession`].
 #[async_trait]
 pub trait SessionTransport: Send + Sync {
     async fn list_entries(&self, since: i64, limit: u32) -> Result<Vec<EntryRow>, AppError>;
@@ -112,7 +151,8 @@ impl UploadTransport for UploadVia {
     }
 }
 
-/// Whether this session's relay serves `GET /me` at all.
+/// Whether this session's relay serves `GET /me` at all — the one
+/// implementation of invariant 2.
 ///
 /// [ADR 0001](../../../../../docs/adr/0001-device-metadata-out-of-band.md) put
 /// the device mirror on its own route, which means a client can be newer than
@@ -190,6 +230,19 @@ impl SessionState {
     }
 }
 
+/// When the Contact write owed by the edge out of `Online` has to have happened.
+///
+/// The distinction only matters because the reading lives in an `AtomicI64`
+/// until it is written, so who is racing whom decides the answer: the session
+/// loop races nothing and cannot afford to block, a shell being backgrounded
+/// races the process being killed and cannot afford not to.
+enum ContactFlush {
+    /// On the facade's runtime, some time after the transition returns.
+    Spawned,
+    /// On the calling thread, before the transition returns.
+    BeforeReturning,
+}
+
 /// The handles both session tasks share: the sink to notify through, the
 /// facade's state, the pairing the session belongs to, the Device mirror's
 /// refresh clock, and whether that mirror's route exists at all.
@@ -213,19 +266,60 @@ impl SessionCtx {
         }
     }
 
-    /// Record a connection-state transition and tell the host about it.
+    /// Record a connection-state transition and tell the host about it — the
+    /// write half of invariant 3.
     ///
     /// Contact is flushed here, on the edge out of `Online` and nowhere else —
-    /// see [`should_persist_contact`]. Every transition in the session passes
-    /// through this one method, so a future caller cannot forget it.
+    /// see [`should_persist_contact`]. This method and
+    /// [`Self::set_conn_state_before_returning`] are the only two transitions
+    /// there are, and they differ in nothing but when that flush has finished,
+    /// so a future caller cannot forget it.
+    ///
+    /// For callers already on the facade's runtime — the session loop and the
+    /// uploader — which is why the flush is spawned: a `select!` arm must not
+    /// block on the database.
     pub(crate) fn set_conn_state(&self, new_state: ConnectionState, last_error: Option<String>) {
+        self.transition(new_state, last_error, ContactFlush::Spawned);
+    }
+
+    /// [`Self::set_conn_state`], with the Contact write finished before this
+    /// returns.
+    ///
+    /// For a shell tearing the session down rather than the session reacting to
+    /// a relay. `Sharepaste::stop_all_sessions` runs on an Android `onStop`,
+    /// which is precisely the moment the OS may stop the process — and until
+    /// this write lands, the live `AtomicI64` is the only copy of the reading.
+    /// A flush spawned onto the runtime races that kill and loses the reading
+    /// when it loses, which is no better than never having written it.
+    ///
+    /// Blocks the calling thread on the database, so it must not be called from
+    /// inside the facade's runtime — the same contract as
+    /// `Sharepaste::block_on`, and satisfied for the same reason: every caller
+    /// is a shell thread.
+    pub(crate) fn set_conn_state_before_returning(
+        &self,
+        new_state: ConnectionState,
+        last_error: Option<String>,
+    ) {
+        self.transition(new_state, last_error, ContactFlush::BeforeReturning);
+    }
+
+    fn transition(
+        &self,
+        new_state: ConnectionState,
+        last_error: Option<String>,
+        flush: ContactFlush,
+    ) {
         let prev = self
             .state
             .conn_states
             .lock()
             .insert(self.user_id.clone(), new_state);
         if should_persist_contact(prev, new_state) {
-            self.persist_contact();
+            match flush {
+                ContactFlush::Spawned => self.persist_contact_spawned(),
+                ContactFlush::BeforeReturning => self.persist_contact_before_returning(),
+            }
         }
         self.events.emit(CoreEvent::ConnectionState {
             user_id: self.user_id.clone(),
@@ -234,29 +328,62 @@ impl SessionCtx {
         });
     }
 
-    /// Write the live Contact reading to the database and tell the host,
-    /// off-thread because the database sits behind an async lock.
-    fn persist_contact(&self) {
-        let Some(cell) = self.state.last_contact.lock().get(&self.user_id).cloned() else {
+    /// The live Contact cell, if any session ever took a reading for this user.
+    fn contact_cell(&self) -> Option<Arc<AtomicI64>> {
+        self.state.last_contact.lock().get(&self.user_id).cloned()
+    }
+
+    /// Write the live Contact reading to the database, off-thread because the
+    /// database sits behind an async lock.
+    fn persist_contact_spawned(&self) {
+        let Some(cell) = self.contact_cell() else {
             return; // no session ever held a cell for this user
         };
         let ctx = self.clone();
         ctx.state.spawn.clone().spawn(async move {
             let at = {
                 let conn = ctx.state.conn.lock().await;
-                match flush_contact(&conn, &ctx.user_id, &cell) {
-                    Ok(Some(at)) => at,
-                    Ok(None) => return,
-                    Err(e) => {
-                        tracing::warn!(err = %e, "persisting contact failed");
-                        return;
-                    }
-                }
+                ctx.flushed(&conn, &cell)
             };
-            ctx.events.emit(CoreEvent::Contact {
-                user_id: ctx.user_id.clone(),
-                last_contact_at: Some(at),
-            });
+            // Outside the guard: a sink is foreign code, and one that re-enters
+            // the facade from here would deadlock on the database.
+            if let Some(at) = at {
+                ctx.report_contact(at);
+            }
+        });
+    }
+
+    /// The same write, on the calling thread and finished before returning.
+    fn persist_contact_before_returning(&self) {
+        let Some(cell) = self.contact_cell() else {
+            return;
+        };
+        let at = {
+            let conn = self.state.conn.blocking_lock();
+            self.flushed(&conn, &cell)
+        };
+        if let Some(at) = at {
+            self.report_contact(at);
+        }
+    }
+
+    /// [`flush_contact`] reduced to the one value worth reporting. A reading
+    /// that will not store is logged and dropped: it must not stop the
+    /// connection-state transition it is riding on.
+    fn flushed(&self, conn: &rusqlite::Connection, cell: &AtomicI64) -> Option<i64> {
+        match flush_contact(conn, &self.user_id, cell) {
+            Ok(at) => at,
+            Err(e) => {
+                tracing::warn!(err = %e, "persisting contact failed");
+                None
+            }
+        }
+    }
+
+    fn report_contact(&self, at: i64) {
+        self.events.emit(CoreEvent::Contact {
+            user_id: self.user_id.clone(),
+            last_contact_at: Some(at),
         });
     }
 
@@ -420,27 +547,35 @@ pub(crate) async fn backfill(
             .unwrap_or(0)
     };
     let rows = transport.list_entries(last_seen, BACKFILL_LIMIT).await?;
-    let conn = state.conn.lock().await;
-    let mut new_last = last_seen;
-    for row in rows {
-        let id = row.id;
-        // The last-seen id is a watermark, not a counter. Advancing it past a row
-        // we failed to store loses that row for good, because the next `since=`
-        // fetch starts after it — so the first failure ends the run and the whole
-        // tail is re-fetched on the next iteration.
-        if let Err(e) = decryptor::ingest(&conn, user_key, user_id, &row, crate::now_ms()) {
-            tracing::warn!(
-                err = %e, entry_id = id,
-                "backfill ingest failed; leaving last_seen_id where it was"
-            );
-            break;
+    // Scoped so the database guard is gone before anything reaches the sink:
+    // see `EventSink`.
+    let advanced = {
+        let conn = state.conn.lock().await;
+        let mut new_last = last_seen;
+        for row in rows {
+            let id = row.id;
+            // The last-seen id is a watermark, not a counter. Advancing it past a row
+            // we failed to store loses that row for good, because the next `since=`
+            // fetch starts after it — so the first failure ends the run and the whole
+            // tail is re-fetched on the next iteration.
+            if let Err(e) = decryptor::ingest(&conn, user_key, user_id, &row, crate::now_ms()) {
+                tracing::warn!(
+                    err = %e, entry_id = id,
+                    "backfill ingest failed; leaving last_seen_id where it was"
+                );
+                break;
+            }
+            if id > new_last {
+                new_last = id;
+            }
         }
-        if id > new_last {
-            new_last = id;
+        let advanced = new_last != last_seen;
+        if advanced {
+            let _ = accounts::set_last_seen(&conn, user_id, new_last);
         }
-    }
-    if new_last != last_seen {
-        let _ = accounts::set_last_seen(&conn, user_id, new_last);
+        advanced
+    };
+    if advanced {
         events.emit(CoreEvent::HistoryChanged { user_id: user_id.to_string() });
     }
     Ok(())
@@ -529,40 +664,52 @@ async fn run_sse_loop(
                     Some(sse::ServerEvent::Entry { id, ciphertext, created_at, device_id }) => {
                         refresh_mirror_if_unknown(&ctx, transport.as_ref(), &device_id).await;
                         let row = EntryRow { id, ciphertext, created_at, device_id: device_id.clone() };
-                        let conn = ctx.state.conn.lock().await;
-                        match decryptor::ingest(&conn, &user_key, &ctx.user_id, &row, crate::now_ms()) {
-                            Ok(out) => {
-                                let _ = accounts::set_last_seen(&conn, &ctx.user_id, id);
-                                let device_label = devices::map_for(&conn, &ctx.user_id)
-                                    .unwrap_or_default()
-                                    .remove(&device_id);
-                                // Emitted only when the cache did not already
-                                // hold this id. The uploader caches Entries this
-                                // device created, so the relay's echo of one of
-                                // them arrives here as a second ingest — and a
-                                // second `EntryAdded` would be a duplicate row
-                                // on screen. The watermark advances either way:
-                                // that is about what has been *fetched*.
-                                if out.first_insert {
-                                    ctx.events.emit(CoreEvent::EntryAdded {
-                                        user_id: ctx.user_id.clone(),
-                                        entry: Entry::new(
+                        // Scoped so the database guard is gone before anything
+                        // reaches the sink: see `EventSink`.
+                        let added = {
+                            let conn = ctx.state.conn.lock().await;
+                            match decryptor::ingest(&conn, &user_key, &ctx.user_id, &row, crate::now_ms()) {
+                                Ok(out) => {
+                                    let _ = accounts::set_last_seen(&conn, &ctx.user_id, id);
+                                    let device_label =
+                                        devices::label_for(&conn, &ctx.user_id, &device_id)
+                                            .unwrap_or_default();
+                                    // Announced only when the cache did not
+                                    // already hold this id. The uploader caches
+                                    // Entries this device created, so the relay's
+                                    // echo of one of them arrives here as a second
+                                    // ingest — and a second `EntryAdded` would be
+                                    // a duplicate row on screen. The watermark
+                                    // advances either way: that is about what has
+                                    // been *fetched*.
+                                    out.first_insert.then(|| {
+                                        Entry::new(
                                             id,
                                             ctx.user_id.clone(),
                                             out.plaintext,
                                             created_at,
                                             device_id,
                                             device_label,
-                                        ),
-                                    });
+                                        )
+                                    })
+                                }
+                                Err(e) => {
+                                    tracing::warn!(err = %e, "ingest failed");
+                                    None
                                 }
                             }
-                            Err(e) => tracing::warn!(err = %e, "ingest failed"),
+                        };
+                        if let Some(entry) = added {
+                            ctx.events.emit(CoreEvent::EntryAdded {
+                                user_id: ctx.user_id.clone(), entry,
+                            });
                         }
                     }
                     Some(sse::ServerEvent::Delete { id }) => {
-                        let conn = ctx.state.conn.lock().await;
-                        let _ = entries_cache::delete_one(&conn, &ctx.user_id, id);
+                        {
+                            let conn = ctx.state.conn.lock().await;
+                            let _ = entries_cache::delete_one(&conn, &ctx.user_id, id);
+                        }
                         ctx.events.emit(CoreEvent::EntryDeleted {
                             user_id: ctx.user_id.clone(), entry_id: id,
                         });

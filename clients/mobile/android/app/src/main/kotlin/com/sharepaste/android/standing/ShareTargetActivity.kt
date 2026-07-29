@@ -39,23 +39,18 @@ class ShareTargetActivity : Activity() {
      *
      * Safe for the reasons `StandingActionActivity` states, and it depends on the
      * same one: a share that queued goes on to `sendPending`, and the session that
-     * raises comes back down under `NonCancellable` — so a window destroyed inside
-     * the drain cannot leave one running.
+     * raises comes back down under `NonCancellable` and under a bound — so a
+     * window destroyed inside the drain can neither leave a session running nor
+     * leave this coroutine waiting on a teardown that never returns.
      */
     private val scope = MainScope()
 
     /**
-     * How many shares are still working.
-     *
-     * The window closes when the last of them is done rather than when the first
-     * one is. This activity is `singleTask`, so a second share arriving while the
-     * first is still inside its ten-second drain lands on this same instance, and
-     * finishing under it would cancel that upload.
-     *
-     * Touched only from the main thread: [onCreate], [onNewIntent] and a
-     * [MainScope] coroutine, so it needs no synchronisation.
+     * How many shares are still working. See [Verbs], which is the rule rather
+     * than a copy of it — this window closes when the last share is done, and so
+     * does the other surface's, for the same reason and out of the same value.
      */
-    private var working = 0
+    private val working = Verbs()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -87,7 +82,7 @@ class ShareTargetActivity : Activity() {
 
     /** Judge what arrived, say what became of it, and then send it. */
     private fun act(shared: Intent?) {
-        working++
+        working.began()
         scope.launch {
             try {
                 val (message, queuedOn) = offerFrom(shared)
@@ -98,7 +93,7 @@ class ShareTargetActivity : Activity() {
                 report(message)
                 queuedOn?.let { repository.sendPending(it) }
             } finally {
-                if (--working == 0 && !isFinishing) finish()
+                if (working.finished() && !isFinishing) finish()
             }
         }
     }
@@ -139,11 +134,7 @@ class ShareTargetActivity : Activity() {
     /** See [StandingActionActivity.report] — same surface, same rule about plaintext. */
     private fun report(message: String) {
         Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
-        Log.i(TAG, "share: $message")
-    }
-
-    private companion object {
-        const val TAG = "SharepasteStandingAction"
+        Log.i(StandingActions.TAG, "share: $message")
     }
 }
 

@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -17,6 +18,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * The session a Standing Action raises comes back down, on every way out.
@@ -31,6 +33,20 @@ import org.junit.Test
  * cancels its scope, so an activity destroyed inside the ten-second drain left a
  * session running with no window on screen: unattended sync, arrived at by
  * accident, reported nowhere.
+ *
+ * **Two more orderings live here now, both found by a second review of that
+ * fix.** [NonCancellable] removed the only lever anything had over the teardown,
+ * so a teardown that never returned held the caller's window forever instead of
+ * leaking a session — the same fault with its sign flipped, and
+ * [a_teardown_that_never_returns_still_ends_the_callers_window] is the bound that
+ * answers it. And the one read that closes the gap events cannot could throw
+ * `AppException` past every catch on the path, killing the process *after* the
+ * person had been told "Offered." — see
+ * [an_unreadable_queue_depth_is_not_thrown_at_the_caller]. The third,
+ * [a_session_the_drain_did_not_start_is_left_alone], came from a measurement
+ * rather than an inference: a Standing Action's translucent window does not put
+ * the screen behind it through `onStop`, so the session the teardown was stopping
+ * could be one a visible History screen still needed.
  *
  * A **JVM** test rather than an instrumented one, deliberately. Cancelling a real
  * activity at a chosen instant of a real drain is a race to arrange and a race to
@@ -56,11 +72,24 @@ class PendingDrainTest {
     private class Queue(
         private val pending: Long?,
         private val noRouteToTheRelay: Boolean = false,
+        private val depthUnreadable: Boolean = false,
+        private val teardownNeverReturns: Boolean = false,
+        sessionAlreadyUp: Boolean = false,
     ) : PendingQueue {
 
         private val sink = MutableSharedFlow<CoreEvent>(extraBufferCapacity = 8)
 
         override val events: SharedFlow<CoreEvent> = sink
+
+        /**
+         * The Pairings a session is up for, kept exactly as the repository keeps
+         * it — added to on a start that succeeded, removed from on a stop.
+         *
+         * Seeded when a screen is already holding one, which is the case the
+         * drain has to leave untouched.
+         */
+        private val held: MutableSet<String> = ConcurrentHashMap.newKeySet<String>()
+            .apply { if (sessionAlreadyUp) add(USER) }
 
         var started = 0
             private set
@@ -77,19 +106,31 @@ class PendingDrainTest {
 
         suspend fun raise(event: CoreEvent) = sink.emit(event)
 
+        override fun holdsSession(userId: String): Boolean = userId in held
+
         override suspend fun startSession(userId: String) {
             io {
                 started++
                 if (noRouteToTheRelay) throw AppException.Network("no route to the relay")
             }
+            held.add(userId)
         }
 
         override suspend fun stopSession(userId: String) {
+            // The stall goes **before** the hop, because that is where the real
+            // one is: `SharepasteRepository.io` awaits the facade before it
+            // touches the FFI, so a facade that never finishes opening never
+            // reaches the counter below either.
+            if (teardownNeverReturns) awaitCancellation()
+            held.remove(userId)
             io { stopped++ }
         }
 
         override suspend fun pendingOn(userId: String): Long? = io {
             depthReads++
+            // The same facade await `startSession` goes through, failing the same
+            // way: a keychain that will not open is raised at every caller of it.
+            if (depthUnreadable) throw AppException.Keychain("the keychain would not open")
             pending
         }
 
@@ -242,6 +283,103 @@ class PendingDrainTest {
     }
 
     /**
+     * A teardown that never returns still gives the caller's window back.
+     *
+     * [NonCancellable] is what makes the session come down at all, and it is also
+     * what took away the caller's last lever: `onDestroy` cancels the scope, and
+     * a `finally` running outside cancellation's reach cannot be ended by
+     * anything but itself. `stopSession` awaits the facade before it calls the
+     * FFI — the same await a stalled `startSession` hangs on — so a facade that
+     * never finished opening left this suspended for good, holding a `MainScope`
+     * coroutine on a window that is already destroyed. A cancellable leak traded
+     * for an uncancellable one; both are work outliving the press that
+     * authorised it.
+     *
+     * The fake stalls where the real one would, before its dispatcher hop, so
+     * `stopped` staying 0 is the stall being modelled rather than a failure: what
+     * is asserted is that the caller comes back, bounded by [TEARDOWN_MS]. Remove
+     * the `withTimeoutOrNull` from the teardown and this hangs until JUnit's own
+     * timeout fails it, while every other test in this class still passes.
+     */
+    @Test(timeout = HUNG_MS)
+    fun a_teardown_that_never_returns_still_ends_the_callers_window() = runBlocking {
+        val queue = Queue(pending = 0L, teardownNeverReturns = true)
+        val began = System.nanoTime()
+
+        assertTrue(
+            "the queue was already empty, so the drain itself succeeded",
+            queue.drainPending(USER, timeoutMs = FOREVER),
+        )
+
+        val elapsed = (System.nanoTime() - began) / 1_000_000
+        assertTrue("it came back in ${elapsed}ms, before the teardown's own bound", elapsed >= TEARDOWN_MS)
+        assertEquals("the teardown never reached the FFI, which is the stall being modelled", 0, queue.stopped)
+    }
+
+    /**
+     * A queue depth that cannot be read is not thrown at the caller.
+     *
+     * `pendingOn` crosses the boundary `startSession` crosses — the facade await
+     * and then the FFI — and `AppException` is live enough on that path that the
+     * session start is wrapped in a `catch`. Nothing caught this one:
+     * `drainPending` was `try`/`finally` with no `catch`, `sendPending` is a
+     * one-line delegate, and both Standing Action surfaces call it inside a
+     * `try`/`finally` under a bare `MainScope` with no `CoroutineExceptionHandler`
+     * — *after* the person has been shown "Offered.". The window died and took
+     * the process with it.
+     *
+     * A read that fails is a gap left unclosed rather than a failure, so the
+     * drain waits for the event and its own bound ends it. Take the `catch` out
+     * and this fails with the `AppException` instead of answering `false`.
+     */
+    @Test
+    fun an_unreadable_queue_depth_is_not_thrown_at_the_caller() = runBlocking {
+        val queue = Queue(pending = 1L, depthUnreadable = true)
+
+        assertFalse(
+            "an unreadable depth is a drain that did not empty, not one that throws",
+            queue.drainPending(USER, timeoutMs = STALLED_MS),
+        )
+        assertEquals("the teardown must run regardless", 1, queue.stopped)
+    }
+
+    /**
+     * A session this drain did not start is neither started nor stopped.
+     *
+     * `sendPending` used to stop [USER]'s session unconditionally, on the
+     * argument that a Standing Action's window taking focus is what puts any open
+     * screen through `onStop`, and `onStop` is what stops sessions.
+     * `Theme.Sharepaste.Invisible` is translucent, so the screen behind is left
+     * drawn — and an activity left drawn is paused, not stopped. Measured on
+     * `spike35`: `wm_on_paused_called` for `MainActivity` and never
+     * `wm_on_stop_called`, then `wm_on_resume_called` on the way back with no
+     * `wm_on_start_called`. So `onLeaveForeground` never ran, the visible History
+     * screen still held its session, this stopped it, and nothing was coming to
+     * put it back: the screen went quietly deaf to new Entries.
+     *
+     * Both halves matter. `startSession` cancels whichever session it replaces,
+     * so starting one over the screen's is already the same harm, and the drain
+     * needs neither — the uploader it wanted is the one already running.
+     */
+    @Test
+    fun a_session_the_drain_did_not_start_is_left_alone() = runBlocking {
+        val queue = Queue(pending = 2L, sessionAlreadyUp = true)
+        val drained = async(Dispatchers.Default) { queue.drainPending(USER, timeoutMs = FOREVER) }
+        awaitTrue("the drain must be listening before anything is raised") { queue.listeners == 1 }
+
+        queue.raise(CoreEvent.PendingCount(USER, 0L))
+
+        assertTrue("it still ends on the count the core emits", drained.await())
+        assertEquals("the screen's own session was restarted under it", 0, queue.started)
+        assertEquals(
+            "the screen's own session was stopped under it. A visible History screen then " +
+                "receives no Entries and no onStart is coming to restore it.",
+            0,
+            queue.stopped,
+        )
+    }
+
+    /**
      * Poll for a condition another coroutine will bring about, or say what was
      * being waited for.
      *
@@ -278,5 +416,11 @@ class PendingDrainTest {
 
         /** How long a set-up condition another thread has to bring about may take. */
         const val WAIT_MS = 10_000L
+
+        /**
+         * Long enough to tell a bounded teardown from a hung one, short enough
+         * that a hung one does not hold the build.
+         */
+        const val HUNG_MS = 15_000L
     }
 }

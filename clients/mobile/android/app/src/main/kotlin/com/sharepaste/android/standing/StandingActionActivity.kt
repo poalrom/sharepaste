@@ -64,9 +64,11 @@ class StandingActionActivity : Activity() {
      * What cancellation *could* cut short is the session teardown after an
      * Offer, because `stopSession` suspends and this scope dies in [onDestroy].
      * `SharepasteRepository.drainPending` brings the session down under
-     * `NonCancellable` for exactly that reason, so a destroyed window cannot
-     * leave one running. Past that, cancelling can only cost the sentence
-     * afterwards.
+     * `NonCancellable` for exactly that reason — and under a bound of its own,
+     * because a teardown nothing can cancel is also a teardown nothing can end.
+     * So a destroyed window can neither leave a session running nor leave a
+     * coroutine waiting on one forever. Past that, cancelling can only cost the
+     * sentence afterwards.
      */
     private val scope = MainScope()
 
@@ -144,7 +146,9 @@ class StandingActionActivity : Activity() {
             } finally {
                 // The window closes when the *last* verb is done, not the first:
                 // finishing under a second press would cancel the Offer it
-                // arrived beside.
+                // arrived beside. A press that has not started yet — one that
+                // arrived while the shade held the focus — is outstanding too;
+                // see [Presses.finished].
                 if (presses.finished() && !isFinishing) finish()
             }
         }
@@ -237,12 +241,7 @@ class StandingActionActivity : Activity() {
      */
     private fun report(action: String?, message: String) {
         Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
-        Log.i(TAG, "$action: $message")
-    }
-
-    private companion object {
-        /** `adb logcat -s SharepasteStandingAction` is the whole diagnostic. */
-        const val TAG = "SharepasteStandingAction"
+        Log.i(StandingActions.TAG, "$action: $message")
     }
 }
 
@@ -258,9 +257,11 @@ class StandingActionActivity : Activity() {
  * `launchMode="singleTask"` is what makes it more than a pair of fields. A second
  * press is not a second window: the platform delivers the new `Intent` to the
  * instance already running. So the verb is not a value fixed at creation, and
- * "the window may close" is not "the verb finished" but **"no verb is
- * outstanding"** — an Offer spends up to ten seconds draining its queue, and
- * finishing the window under it would cancel the upload the person asked for.
+ * "the window may close" is not "the verb finished" but **"nothing is
+ * outstanding"** — nothing working and nothing owed. An Offer spends up to ten
+ * seconds draining its queue and finishing the window under it would cancel the
+ * upload the person asked for; a press still waiting for focus has not started
+ * yet and would die with the window just as quietly.
  *
  * A value rather than three fields on the activity, for the reason `sharedFrom`
  * is a function rather than three private methods on the share target: this is
@@ -268,7 +269,9 @@ class StandingActionActivity : Activity() {
  * no window, no focus and no facade, so `StandingActionPressesTest` pins it on
  * the JVM — in CI, where the instrumented suite does not run, and where a
  * Standing Action cannot do real work at all because the shipped transport
- * policy refuses the only Relay a test can reach.
+ * policy refuses the only Relay a test can reach. The counting half is [Verbs],
+ * which the share target holds directly: it has the same window-closing rule and
+ * none of the focus one.
  *
  * **One slot, not a queue.** A press arriving before the window can act
  * supersedes the one before it, because two presses in that window are somebody
@@ -284,10 +287,10 @@ internal class Presses {
 
     private var focused = false
 
-    private var working = 0
+    private val verbs = Verbs()
 
     /** Nothing is working, so the window has nothing to stay open for. */
-    val idle: Boolean get() = working == 0
+    val idle: Boolean get() = verbs.idle
 
     /**
      * A press arrived, naming [action].
@@ -307,10 +310,27 @@ internal class Presses {
         return start()
     }
 
-    /** A verb finished. Answers whether the window may now close. */
+    /**
+     * A verb finished. Answers whether the window may now close.
+     *
+     * **Not while a press is still owed**, which is the hole a counter alone
+     * left. [start] counts only the verbs it actually starts, so a press that
+     * arrived without focus lives in [owed] and nowhere else — and **the
+     * notification shade is exactly what takes window focus away**, so an
+     * `onNewIntent` from a notification action arrives unfocused by
+     * construction. If the verb already working finished in that gap — an
+     * Offer's drain can end anywhere in its ten seconds — this answered "the
+     * window may close", the window closed, and the recorded press died with it
+     * in silence. That is the dropped second press this class exists to prevent,
+     * arriving by the one route that always removes focus.
+     *
+     * `onStop` still closes on [idle] alone, and that is deliberate: a window
+     * whose focus is gone for good — a press on a locked screen — has to be able
+     * to go, and an owed press is worth less than a task that never empties.
+     */
     fun finished(): Boolean {
-        working--
-        return idle
+        val nothingWorking = verbs.finished()
+        return nothingWorking && owed == null
     }
 
     /**
@@ -324,7 +344,7 @@ internal class Presses {
         if (!focused) return null
         val verb = owed ?: return null
         owed = null
-        working++
+        verbs.began()
         return verb
     }
 }

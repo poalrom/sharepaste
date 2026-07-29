@@ -4029,7 +4029,6 @@ dependencies = [
  "sharepaste-core",
  "sharepaste-ffi",
  "thiserror 1.0.69",
- "tokio",
  "tracing",
  "uniffi",
  "zeroize",

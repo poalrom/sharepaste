@@ -310,6 +310,16 @@ impl Sharepaste {
         }
     }
 
+    /// Cancel one pairing's session.
+    ///
+    /// A bare cancel, unlike [`Self::stop_all_sessions`]: this is the shape
+    /// `start_session` needs to replace a session with a fresh one, and the shape
+    /// [`Self::forget_pairing`] needs on its way to deleting the row the Contact
+    /// write would land in. Both leave `conn_states` to their own next step —
+    /// `start_session` overwrites it a moment later, `forget_pairing` clears it —
+    /// so neither wants a `Disconnected` transition, and neither can afford a
+    /// blocking database write: `forget_pairing` is awaited on the facade's own
+    /// runtime, where blocking on that lock would panic.
     pub fn stop_session(&self, user_id: &str) {
         if let Some(cancel) = self.state.sync_tasks.lock().remove(user_id) {
             cancel.cancel();
@@ -322,13 +332,39 @@ impl Sharepaste {
 
     /// Stop every session without forgetting anything — what an Android
     /// `onStop` calls. `resume_active_pairing` + `start_session` undoes it.
+    ///
+    /// Cancelling the tasks is not enough on its own. Every cancellation arm in
+    /// the session loop returns without a transition, so nothing below this
+    /// method takes the edge out of `Online` — and that edge is the only thing
+    /// that writes Contact to `accounts.last_contact_at` and the only thing that
+    /// stops [`Self::connection_state`] answering `Online` for a session that no
+    /// longer exists. A Pairing row renders that answer. So each stopped session
+    /// is walked to `Disconnected` through the one choke point, here.
+    ///
+    /// The Contact write is **synchronous**, unlike every other transition's.
+    /// This is the one lifecycle moment where the OS may stop the process
+    /// immediately afterwards, and until the write lands the live `AtomicI64` is
+    /// the only copy of the reading — a flush spawned onto the runtime races
+    /// that kill and loses the reading whenever it loses the race, which is not
+    /// meaningfully better than never writing at all. `onStop` pays a database
+    /// write to make the reading survive.
     pub fn stop_all_sessions(&self) {
         let stopped: Vec<(String, CancellationToken)> =
             self.state.sync_tasks.lock().drain().collect();
-        let mut triggers = self.state.upload_triggers.lock();
-        for (user_id, cancel) in stopped {
-            cancel.cancel();
-            triggers.remove(&user_id);
+        {
+            let mut triggers = self.state.upload_triggers.lock();
+            for (user_id, cancel) in &stopped {
+                cancel.cancel();
+                // The trigger belonged to the uploader just cancelled, for the
+                // same reason `stop_session` drops it.
+                triggers.remove(user_id);
+            }
+        }
+        // Outside the `triggers` guard: the transition emits, and a sink is
+        // foreign code — see [`EventSink`].
+        for (user_id, _) in stopped {
+            self.session_ctx(&user_id)
+                .set_conn_state_before_returning(ConnectionState::Disconnected, None);
         }
     }
 
@@ -1310,12 +1346,34 @@ mod tests {
     }
 
     /*
-     * What an Android `onStop` calls. Sessions end; the Contact reading and the
-     * connection state survive, because the next `onStart` has to render
-     * something before the relay answers.
+     * What an Android `onStop` calls, on the "forgets nothing" side. The streams
+     * end and the Contact reading stays answerable, because the next `onStart`
+     * has to render something before the relay answers; only forgetting the
+     * Pairing itself takes it away.
      */
     #[test]
     fn stop_all_sessions_ends_the_streams_but_forgets_nothing() {
+        let (sp, _sink, relay) = backgrounded_session();
+
+        until(|| relay.streams_closed() == 1);
+        assert!(sp.live_contact("u").is_some(), "the last reading is still answerable");
+
+        sp.forget_session_state("u");
+        assert_eq!(sp.connection_state("u"), ConnectionState::Disconnected);
+        assert_eq!(sp.live_contact("u"), None);
+    }
+
+    /*
+     * The other side, and the bug: `onStop` used to only cancel. Every
+     * cancellation arm in the session loop returns without a transition, so the
+     * edge out of `Online` — the one thing that writes Contact and the one thing
+     * that stops `connection_state` claiming `Online` — never happened. That left
+     * the only copy of the reading in an `AtomicI64` at the exact moment the OS
+     * may stop the process, and left a Pairing row rendering `Online` for a
+     * session that no longer existed.
+     */
+    #[test]
+    fn stop_all_sessions_writes_contact_and_stops_claiming_online() {
         let keychain = Arc::new(InMemoryKeychain::default());
         let sink = Arc::new(RecordingSink::default());
         let sp = Sharepaste::open_in_memory(SharepasteConfig {
@@ -1333,14 +1391,74 @@ mod tests {
             .block_on(sp.start_session_over("u", relay.clone()))
             .unwrap();
         until(|| sp.connection_state("u") == ConnectionState::Online);
+        assert_eq!(
+            persisted_contact(&sp),
+            None,
+            "a healthy session keeps the reading in the cell and off SQLite"
+        );
 
         sp.stop_all_sessions();
-        until(|| relay.streams_closed() == 1);
-        assert!(sp.live_contact("u").is_some(), "the last reading is still answerable");
 
-        sp.forget_session_state("u");
-        assert_eq!(sp.connection_state("u"), ConnectionState::Disconnected);
-        assert_eq!(sp.live_contact("u"), None);
+        // Deliberately not wrapped in `until`. The write is synchronous, and
+        // asserting it the statement after the call is what distinguishes that
+        // from a flush handed to the runtime: polling would pass either way, and
+        // against a process the OS is about to stop, only one of them is true.
+        let live = sp.live_contact("u").expect("the byte tap took a reading");
+        assert_eq!(
+            persisted_contact(&sp),
+            Some(live),
+            "the last reading is in the database before onStop returns"
+        );
+        assert_eq!(
+            sp.connection_state("u"),
+            ConnectionState::Disconnected,
+            "and no Pairing row can still render Online"
+        );
+        assert_eq!(
+            sink.connection_states().last().copied(),
+            Some(ConnectionState::Disconnected),
+            "reported, because the transition went through the one choke point"
+        );
+        assert_eq!(
+            sink.events().into_iter().find_map(|e| match e {
+                CoreEvent::Contact { last_contact_at, .. } => last_contact_at,
+                _ => None,
+            }),
+            Some(live),
+            "with the same number the database now holds"
+        );
+    }
+
+    /// A session that reached `Online` and has since been backgrounded.
+    fn backgrounded_session() -> (Arc<Sharepaste>, Arc<RecordingSink>, Arc<ScriptedRelay>) {
+        let keychain = Arc::new(InMemoryKeychain::default());
+        let sink = Arc::new(RecordingSink::default());
+        let sp = Sharepaste::open_in_memory(SharepasteConfig {
+            db_path: PathBuf::from("ignored-by-open_in_memory"),
+            keychain: keychain.clone(),
+            clipboard: FakeClipboard::new(),
+            events: sink.clone(),
+            require_https: false,
+        })
+        .unwrap();
+        seed_pairing(&sp, &keychain, "https://srv");
+
+        let relay = ScriptedRelay::new(vec![Ok(Vec::new())], vec![Wire::Holds(Vec::new())]);
+        sp.runtime
+            .block_on(sp.start_session_over("u", relay.clone()))
+            .unwrap();
+        until(|| sp.connection_state("u") == ConnectionState::Online);
+        sp.stop_all_sessions();
+        (sp, sink, relay)
+    }
+
+    /// What `accounts.last_contact_at` holds, which is the only copy that
+    /// survives the process.
+    fn persisted_contact(sp: &Sharepaste) -> Option<i64> {
+        sp.runtime.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            accounts::find(&conn, "u").unwrap().unwrap().last_contact_at
+        })
     }
 
     // -- the operation surface --------------------------------------------

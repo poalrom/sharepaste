@@ -41,8 +41,18 @@ pub trait Clipboard: Send + Sync {
 /// event, and the old `let _ = app.emit(..)` at every call site said the same
 /// thing less honestly.
 ///
-/// Implementations must not block: the session loop calls this while holding
-/// the connection-state lock.
+/// **No lock the core owns is held when `emit` runs, and the one that matters is
+/// the database.** `Sharepaste`'s `Connection` sits behind a
+/// `tokio::sync::Mutex`, and a sink is foreign code: a Kotlin implementation
+/// that marshals onto the main dispatcher and re-enters the facade from there
+/// would deadlock on that mutex, and it would look like a hung app rather than
+/// like a lock-ordering bug. So every path that writes and then announces scopes
+/// its guard shut first, and a helper that runs *under* a guard returns what to
+/// announce instead of announcing it — see `Uploader::cache_own_entry`. An
+/// implementation may therefore call straight back into the facade.
+///
+/// It should still not block for long. Emits arrive on the session's own tasks,
+/// so a sink that sleeps is a stream that has stopped reading.
 pub trait EventSink: Send + Sync {
     fn emit(&self, event: CoreEvent);
 }
