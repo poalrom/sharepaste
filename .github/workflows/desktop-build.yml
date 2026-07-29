@@ -425,6 +425,61 @@ jobs:
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
           test -s "$RUNNER_TEMP/release.jks"
 
+      # Prove the four secrets open the keystore before spending nine minutes
+      # cross-compiling two ABIs to find out. AGP checks them in
+      # `:app:packageRelease`, which is the *last* task in the build, so a wrong
+      # password costs a full run and reports itself from inside a Gradle worker
+      # as "Failed to read key *** from store" — accurate, and buried.
+      #
+      # Seen for real on the first push to main after the secrets were added.
+      #
+      # What it does and does not prove, measured rather than assumed. Against a
+      # scratch keystore with deliberately different store and key passwords,
+      # `keytool -list` rejects a wrong store password and a wrong alias, and
+      # ACCEPTS a wrong key password — it falls back to the store password for
+      # the entry. `-certreq` behaves identically. So this catches the store
+      # password (the one that actually failed) and the alias in about a second;
+      # a wrong `ANDROID_KEY_PASSWORD` alone still surfaces late, in
+      # `packageRelease`. That case is rare because `keytool -genkeypair`
+      # defaults the key password to the store password, but it is not covered —
+      # do not read a green step here as all four secrets verified.
+      #
+      # Output is captured rather than printed: a successful listing prints the
+      # certificate fingerprint, and nothing about a signing key belongs in a
+      # public log. Both streams go to the file, because keytool does not put all
+      # of its diagnostics on stderr.
+      - name: Check the signing credentials open the keystore
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "$name is not set; the release APK would build unsigned." >&2
+              exit 1
+            fi
+          done
+
+          if ! keytool -list \
+                 -keystore "$RUNNER_TEMP/release.jks" \
+                 -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+                 -alias "$ANDROID_KEY_ALIAS" \
+                 -keypass "$ANDROID_KEY_PASSWORD" >"$RUNNER_TEMP/keytool.out" 2>&1; then
+            echo 'The signing secrets do not open the keystore.' >&2
+            echo 'keytool said:' >&2
+            sed 's/^/  /' "$RUNNER_TEMP/keytool.out" >&2
+            echo >&2
+            echo 'Most often this is a trailing newline in a secret rather than a wrong' >&2
+            echo 'password: `echo pw | gh secret set X` stores "pw\n". Re-set them with' >&2
+            echo '`gh secret set X` on its own, which prompts and stores exactly what you type,' >&2
+            echo 'or `printf %s "$pw" | gh secret set X`.' >&2
+            exit 1
+          fi
+          echo 'Signing credentials verified against the keystore.'
+
       # One universal APK carrying both shipped ABIs. The `testing` Cargo feature
       # is off in this variant by the build file's own decision, not by a flag
       # passed here — see `ffiFeaturesFor`.
