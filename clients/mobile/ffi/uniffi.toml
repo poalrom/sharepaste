@@ -1,0 +1,7 @@
+[bindings.kotlin]
+# The generated bindings are the core, so they get the core's package. The
+# app's own code lives under `com.sharepaste.android` and imports from here.
+package_name = "com.sharepaste.core"
+# The `.so` in `jniLibs/<abi>/` is `libsharepaste_ffi.so`, which is what
+# `System.loadLibrary` is asked for.
+cdylib_name = "sharepaste_ffi"

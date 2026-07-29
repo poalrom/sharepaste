@@ -1,0 +1,52 @@
+[package]
+name = "sharepaste-ffi"
+# Pinned to the core's version, which is pinned to the desktop's. One artefact
+# version across the whole client side; `.github/scripts/check-versions.mjs`
+# refuses a release where any two disagree.
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.87"
+publish = false
+description = "The sharepaste facade across a foreign-function boundary. UniFFI scaffolding, no shell, no platform code."
+
+[lib]
+# `cdylib` is what Android loads out of `jniLibs/<abi>/`. `lib` is what the
+# `uniffi-bindgen` binary below links against, and what `cargo test` builds.
+crate-type = ["cdylib", "lib"]
+name = "sharepaste_ffi"
+
+[features]
+# Exposes the crypto known-answer vector and the in-memory facade to a foreign
+# test runner. **The Android build turns it on for `debug` and off for
+# `release`** (ticket 13; see `ffiFeaturesFor` in the app's build file), so the
+# instrumented tests get every hook and the shipped APK carries none of them.
+# `-Psharepaste.ffi.features=…` overrides that in either direction.
+testing = ["dep:zeroize", "sharepaste-core/testing"]
+# Pulls UniFFI's command-line machinery in for the `uniffi-bindgen` binary
+# only. Kept off by default so the cdylib never links clap.
+cli = ["uniffi/cli"]
+
+[dependencies]
+sharepaste-core = { path = "../../core" }
+uniffi = "0.32"
+tokio = { version = "1", features = ["rt"] }
+thiserror = "1"
+tracing = "0.1"
+# Only the known-answer vector needs it, to build a `UserKey` (a
+# `Zeroizing<[u8; 32]>`) from the vector's fixed key.
+zeroize = { version = "1", optional = true }
+
+[dev-dependencies]
+# The generator that produced the pinned known-answer vector in `kat.rs`, kept
+# as a dev-dependency so the test there can regenerate it and prove the
+# constant still describes XChaCha20-Poly1305.
+chacha20poly1305 = "0.10"
+sharepaste-ffi = { path = ".", features = ["testing"] }
+
+[[bin]]
+# The workspace-local bindings generator. UniFFI deliberately ships no
+# system-wide binary: a `uniffi-bindgen` of a different version than the
+# `uniffi` this crate links produces bindings whose checksums fail at load.
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]

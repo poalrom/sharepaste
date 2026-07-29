@@ -9,7 +9,7 @@
 //! Nothing in this module downloads or restarts on its own: [`spawn_launch_check`]
 //! asks and stops. [`install`] runs only from a click, per ADR 0005.
 
-use crate::errors::AppError;
+use sharepaste_core::errors::AppError;
 use crate::events::{UpdateAvailable, UPDATE_AVAILABLE};
 use crate::state::AppState;
 use std::sync::Arc;
@@ -21,10 +21,11 @@ use tauri_plugin_updater::UpdaterExt;
 /// [`install`], the same path the Settings button takes.
 pub(crate) const TRAY_ITEM_ID: &str = "install_update";
 
-impl From<tauri_plugin_updater::Error> for AppError {
-    fn from(e: tauri_plugin_updater::Error) -> Self {
-        AppError::Update(e.to_string())
-    }
+/// `AppError::Update` is the vocabulary for this failure, but since the error
+/// type and the enum both now live outside this crate the orphan rule forbids a
+/// `From` impl. A named mapper keeps the `?` sites as short as they were.
+fn update_err(e: tauri_plugin_updater::Error) -> AppError {
+    AppError::Update(e.to_string())
 }
 
 impl From<&tauri_plugin_updater::Update> for UpdateAvailable {
@@ -43,7 +44,12 @@ pub(crate) async fn check(
     app: &AppHandle,
     state: &Arc<AppState>,
 ) -> Result<Option<UpdateAvailable>, AppError> {
-    let found = app.updater()?.check().await?;
+    let found = app
+        .updater()
+        .map_err(update_err)?
+        .check()
+        .await
+        .map_err(update_err)?;
     let available = found.as_ref().map(UpdateAvailable::from);
     *state.pending_update.lock() = found;
 
@@ -71,7 +77,10 @@ pub(crate) async fn install(app: &AppHandle, state: &Arc<AppState>) -> Result<()
             "no update is pending on this device".into(),
         ));
     };
-    update.download_and_install(|_, _| {}, || {}).await?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(update_err)?;
     app.restart()
 }
 
@@ -86,16 +95,13 @@ pub(crate) fn current_version(app: &AppHandle) -> String {
 /// packet at all — that is the disclosure the README makes.
 pub(crate) fn spawn_launch_check(app: AppHandle, state: Arc<AppState>) {
     tauri::async_runtime::spawn(async move {
-        let enabled = {
-            let conn = state.conn.lock().await;
-            match crate::core::storage::settings::load(&conn) {
-                Ok(s) => s.update_check_enabled,
-                Err(e) => {
-                    // Unreadable settings must not be read as consent. A missing
-                    // row already loads as the default, so this is corruption.
-                    tracing::warn!(err = %e, "settings unreadable; skipping the update check");
-                    return;
-                }
+        let enabled = match state.core.get_settings().await {
+            Ok(s) => s.update_check_enabled,
+            Err(e) => {
+                // Unreadable settings must not be read as consent. A missing
+                // row already loads as the default, so this is corruption.
+                tracing::warn!(err = %e, "settings unreadable; skipping the update check");
+                return;
             }
         };
         if !enabled {

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { cmd } from "../../ipc/commands";
 import { events } from "../../ipc/events";
 import { useUiStore } from "../../store";
@@ -50,6 +51,19 @@ export default function PairingFlow({
   const [codeWindow, setCodeWindow] = useState<CodeWindow>();
   const [pairedDeviceLabel, setPairedDeviceLabel] = useState<string>();
 
+  /*
+   * One clock for the pane. The countdown used to own it, but the QR has to go
+   * dark on the same tick the bar empties on, and two intervals would be two
+   * expiry paths free to disagree by up to a second.
+   */
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (codeWindow === undefined) return;
+    setNow(Date.now());
+    const i = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(i);
+  }, [codeWindow]);
+
   useEffect(() => {
     const unsubs: Array<() => void> = [];
     (async () => {
@@ -94,6 +108,20 @@ export default function PairingFlow({
 
   const insecure = /^http:\/\/(?!localhost|127\.0\.0\.1)/i.test(serverUrl);
   const codeIsValid = /^[A-Z2-7\s\-]+$/i.test(code.trim()) && code.replace(/\s|-/g, "").length >= 80;
+
+  /*
+   * The QR's payload, and nothing at all once the slot is spent.
+   *
+   * `group_for_display` spaces the code in fives so a person can retype it, and
+   * `shortcode::decode` strips whitespace, dashes and case before base32 — so
+   * the camera is handed the compact form instead: a quarter shorter, and a
+   * denser symbol scans faster in poor light. It reads the same `codeWindow` and
+   * the same tick as the countdown, so expiry takes the code and the QR at once.
+   */
+  const qrPayload =
+    codeWindow !== undefined && now < codeWindow.expires
+      ? codeWindow.code.replace(/[\s-]/g, "")
+      : undefined;
 
   return (
     <div className="flex min-w-0 flex-col">
@@ -238,15 +266,41 @@ export default function PairingFlow({
             <p className="m-0 text-label uppercase tracking-word text-text-muted">
               Show this code on the new device
             </p>
-            <pre
-              data-testid="shortcode"
-              className={`m-0 whitespace-pre-wrap break-words border border-emitter bg-void-1000 px-3 py-4 text-center font-mono text-2xl tracking-[0.18em] ${
-                codeWindow ? "text-cyan-300" : "text-text-dim"
-              }`}
-            >
-              {codeWindow?.code ?? "REQUESTING…"}
-            </pre>
-            <Countdown codeWindow={codeWindow} />
+            <div className="flex flex-wrap items-start gap-3">
+              {/*
+               * A white plate and the spec's four-module quiet zone whatever the
+               * palette is doing: the void ramp is exactly what a camera fails
+               * on, and this is the one surface in the app a lens has to read
+               * rather than a person. The frame keeps it in the pane's language.
+               */}
+              {qrPayload !== undefined && (
+                <div
+                  data-testid="shortcode-qr"
+                  className="shrink-0 border border-emitter bg-white p-2 leading-none"
+                >
+                  <QRCodeSVG
+                    value={qrPayload}
+                    size={168}
+                    level="M"
+                    marginSize={4}
+                    bgColor="#ffffff"
+                    fgColor="#04080c"
+                    title="Pair code as a QR the new device can scan"
+                  />
+                </div>
+              )}
+              {/* Beside the QR, never instead of it: the typed form is the way in
+                  when the camera is refused or absent. */}
+              <pre
+                data-testid="shortcode"
+                className={`m-0 min-w-[18rem] flex-1 whitespace-pre-wrap break-words border border-emitter bg-void-1000 px-3 py-4 text-center font-mono text-2xl tracking-[0.18em] ${
+                  codeWindow ? "text-cyan-300" : "text-text-dim"
+                }`}
+              >
+                {codeWindow?.code ?? "REQUESTING…"}
+              </pre>
+            </div>
+            <Countdown codeWindow={codeWindow} now={now} />
             {/* No chooser behind a card-owned panel: its header band holds the way out. */}
             {forUserId === undefined && (
               <div className="flex items-center gap-2">
@@ -296,13 +350,11 @@ export default function PairingFlow({
  * A bar as well as a clock, because the person reading this is looking at the
  * code to retype it, not at the digits beside it; the drain from cyan through
  * amber to alert is legible without being read.
+ *
+ * `now` arrives from the pane rather than an interval of its own: the QR is
+ * withdrawn off the same tick, and a second clock would let the two disagree.
  */
-function Countdown({ codeWindow }: { codeWindow: CodeWindow | undefined }) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const i = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(i);
-  }, []);
+function Countdown({ codeWindow, now }: { codeWindow: CodeWindow | undefined; now: number }) {
   if (!codeWindow) return null;
   const remaining = Math.max(0, codeWindow.expires - now);
   const fraction = Math.min(1, remaining / Math.max(1, codeWindow.expires - codeWindow.issued));

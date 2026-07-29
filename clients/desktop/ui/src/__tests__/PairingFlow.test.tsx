@@ -1,11 +1,37 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { QRCodeSVG } from "qrcode.react";
 import { mockIpc, type MockIpc } from "./helpers";
 import { useUiStore } from "../store";
 import PairingFlow from "../views/sections/PairingFlow";
 
-/** Passes the field's plausibility check: base32 alphabet, full-length. */
-const PLAUSIBLE_CODE = "ABCDEFGH234567".repeat(6);
+/**
+ * One short code in its two forms: compact as `shortcode::encode` emits it and
+ * `shortcode::decode` accepts it, grouped in fives as `group_for_display` hands
+ * it to the pane. Full-length base32, so the compact form also passes the pair
+ * field's plausibility check.
+ */
+const COMPACT_CODE = "ABCDEFGH234567".repeat(6);
+const GROUPED_CODE = COMPACT_CODE.replace(/(.{5})(?=.)/g, "$1 ");
+
+/**
+ * The module geometry qrcode.react draws, which is a function of the bytes the
+ * symbol carries. Two renders agree only if they encode the same string, so
+ * this is as close to "what a camera would read" as jsdom gets.
+ */
+function geometryOf(root: Element): string {
+  const svg = root.querySelector("svg");
+  if (svg === null) throw new Error("no QR svg under the given element");
+  return [...svg.querySelectorAll("path")].map((p) => p.getAttribute("d")).join("|");
+}
+
+/**
+ * An independent render of `value` to compare geometry against. Level and
+ * margin have to match the pane's, because both move modules around.
+ */
+function referenceQr(value: string): Element {
+  return render(<QRCodeSVG value={value} size={168} level="M" marginSize={4} />).container;
+}
 
 let ipc: MockIpc;
 
@@ -45,7 +71,7 @@ describe("PairingFlow", () => {
     expect(screen.getByText(/valid pair code/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "PAIR" })).toBeDisabled();
 
-    fireEvent.change(field, { target: { value: PLAUSIBLE_CODE } });
+    fireEvent.change(field, { target: { value: COMPACT_CODE } });
     expect(field).toHaveAttribute("data-invalid", "false");
     expect(screen.getByRole("button", { name: "PAIR" })).toBeEnabled();
   });
@@ -110,5 +136,47 @@ describe("PairingFlow", () => {
     // in it either, so a click that never advanced would pass for free.
     expect(screen.getByText("Claim invite")).toBeInTheDocument();
     expect(view.container.textContent).not.toMatch(/account/i);
+  });
+
+  /*
+   * The code is 122 characters against a 120-second slot, so the QR is how it
+   * actually reaches a phone — but the typed form stays beside it, because a
+   * refused camera permission is the path with no other way in.
+   */
+  it("renders a QR beside the typed code, encoding the compact form", async () => {
+    render(<PairingFlow />);
+    await waitFor(() => expect(ipc.handlers.get("pair-shortcode")).toHaveLength(1));
+    expect(screen.queryByTestId("shortcode-qr")).toBeNull();
+
+    act(() => ipc.emit("pair-shortcode", { code: GROUPED_CODE, expires_at: Date.now() + 120_000 }));
+
+    const qr = await screen.findByTestId("shortcode-qr");
+    expect(screen.getByTestId("shortcode")).toHaveTextContent(GROUPED_CODE);
+
+    /*
+     * Both forms encode cleanly and both round-trip through the decoder, so
+     * only the geometry tells them apart: the negative half is what fails if
+     * the pane ever hands the camera the string it shows the person.
+     */
+    expect(geometryOf(qr)).toBe(geometryOf(referenceQr(COMPACT_CODE)));
+    expect(geometryOf(qr)).not.toBe(geometryOf(referenceQr(GROUPED_CODE)));
+  });
+
+  /*
+   * A QR outliving its slot is worse than a stale typed code: nobody reads it
+   * before pointing a camera at it, and the countdown it contradicts is off to
+   * one side. Same `codeWindow` and same tick as the countdown, so it goes when
+   * the bar empties; the typed code and its expiry message are untouched.
+   */
+  it("withdraws the QR once the code's window closes", async () => {
+    render(<PairingFlow />);
+    await waitFor(() => expect(ipc.handlers.get("pair-shortcode")).toHaveLength(1));
+
+    act(() => ipc.emit("pair-shortcode", { code: GROUPED_CODE, expires_at: Date.now() + 200 }));
+    expect(await screen.findByTestId("shortcode-qr")).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.queryByTestId("shortcode-qr")).toBeNull(), { timeout: 3000 });
+    expect(screen.getByTestId("shortcode")).toHaveTextContent(GROUPED_CODE);
+    expect(screen.getByTestId("countdown")).toHaveTextContent("EXPIRES IN 0:00");
   });
 });

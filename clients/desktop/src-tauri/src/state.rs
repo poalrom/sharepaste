@@ -1,33 +1,41 @@
-use crate::core::pairing::registry::PairingRegistry;
-use crate::core::keychain::Keychain;
-use crate::core::sync::ConnectionState;
+//! What the shell holds: the core, plus the three things that cannot cross into
+//! it because they are Tauri types.
+
 use parking_lot::Mutex;
-use rusqlite::Connection;
-use std::collections::HashMap;
-use std::sync::atomic::AtomicI64;
+use sharepaste_core::errors::AppError;
+use sharepaste_core::facade::Sharepaste;
+use sharepaste_core::platform::Clipboard;
 use std::sync::Arc;
-use tokio::sync::Notify;
-use tokio_util::sync::CancellationToken;
+
+/// The system clipboard, for the core.
+///
+/// A fresh `arboard::Clipboard` per call, exactly as `copy_to_clipboard` did
+/// before the write moved into the facade: the handle is cheap and holding one
+/// open across the app's lifetime is what the crate warns against.
+pub(crate) struct SystemClipboard;
+
+impl Clipboard for SystemClipboard {
+    fn read_text(&self) -> Result<Option<String>, AppError> {
+        let mut cb = arboard::Clipboard::new().map_err(|e| AppError::Storage(e.to_string()))?;
+        match cb.get_text() {
+            Ok(text) => Ok(Some(text)),
+            // Anything that is not text is not an error here; Watched Capture
+            // goes through `PasteboardSniff`, which inspects types first.
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn write_text(&self, text: &str) -> Result<(), AppError> {
+        let mut cb = arboard::Clipboard::new().map_err(|e| AppError::Storage(e.to_string()))?;
+        cb.set_text(text.to_string())
+            .map_err(|e| AppError::Storage(e.to_string()))
+    }
+}
 
 pub(crate) struct AppState {
-    pub(crate) conn: Arc<tokio::sync::Mutex<Connection>>,
-    pub(crate) keychain: Arc<dyn Keychain>,
-    pub(crate) registry: Arc<PairingRegistry>,
-    pub(crate) sync_tasks: Mutex<HashMap<String, CancellationToken>>,
-    pub(crate) upload_triggers: Mutex<HashMap<String, Arc<Notify>>>,
-    pub(crate) conn_states: Mutex<HashMap<String, ConnectionState>>,
-    /// Live Contact, one cell per user with a running session.
-    ///
-    /// The SSE byte tap stores into these on every chunk the relay sends, so
-    /// the reading stays out of SQLite entirely while the session is up.
-    /// `get_contact` reads a cell directly; `set_conn_state` flushes it on
-    /// the way offline. A cell outlives its session so the last reading is
-    /// still answerable after the stream drops.
-    pub(crate) last_contact: Mutex<HashMap<String, Arc<AtomicI64>>>,
-    pub(crate) last_self_write: Mutex<Option<(std::time::Instant, String)>>,
-    /// Plaintext of the last clipboard capture that was enqueued, used to drop
-    /// consecutive duplicates before they cost an encrypt, upload or server row.
-    pub(crate) last_capture: Mutex<Option<String>>,
+    pub(crate) core: Arc<Sharepaste>,
+
+    // -- shell-only: Tauri types, which must never cross into the core -----
     pub(crate) last_tray_rect: Mutex<Option<tauri::Rect>>,
     /// The Release the last check found, held because three callers need the
     /// same answer: the tray item's presence, the Settings pane, and the
@@ -43,21 +51,9 @@ pub(crate) struct AppState {
 }
 
 impl AppState {
-    pub(crate) fn new(
-        conn: Arc<tokio::sync::Mutex<Connection>>,
-        keychain: Arc<dyn Keychain>,
-        registry: Arc<PairingRegistry>,
-    ) -> Self {
+    pub(crate) fn new(core: Arc<Sharepaste>) -> Self {
         Self {
-            conn,
-            keychain,
-            registry,
-            sync_tasks: Mutex::new(HashMap::new()),
-            upload_triggers: Mutex::new(HashMap::new()),
-            conn_states: Mutex::new(HashMap::new()),
-            last_contact: Mutex::new(HashMap::new()),
-            last_self_write: Mutex::new(None),
-            last_capture: Mutex::new(None),
+            core,
             last_tray_rect: Mutex::new(None),
             pending_update: Mutex::new(None),
             tray_menu: Mutex::new(None),

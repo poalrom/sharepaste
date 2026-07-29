@@ -7,6 +7,13 @@ history copy.
 `CONTEXT.md` at the repo root holds the domain glossary; `docs/adr/` holds the
 decisions behind the surfaces this client presents.
 
+The protocol, crypto, storage and sync live in `sharepaste-core` (`clients/core`), shared
+with the Android client; this crate is the Tauri shell over it. Both are members of one
+Cargo workspace at `clients/` with a single `clients/Cargo.lock`. Nothing in CI covers the
+tray, the popover geometry or the global hotkey, which is why the two manual checklists
+below are the regression check after any change to the core
+([ADR 0006](../../docs/adr/0006-one-protocol-three-shells.md)).
+
 ## Prerequisites
 
 - Rust stable (`rustup` will pick up `rust-toolchain.toml`)
@@ -55,7 +62,7 @@ instances straight from the binary it built — they reuse that dev server, beca
 SHAREPASTE_DATA_DIR=/tmp/sp-a npm run dev
 
 # terminal 2 - instance B, reusing A's dev server (add .exe on Windows)
-SHAREPASTE_DATA_DIR=/tmp/sp-b src-tauri/target/debug/sharepaste-desktop
+SHAREPASTE_DATA_DIR=/tmp/sp-b ../target/debug/sharepaste-desktop
 ```
 
 Only the first instance wins the global hotkey; the rest log
@@ -69,7 +76,7 @@ instance you started most recently.
 npm run build
 ```
 
-macOS output: `src-tauri/target/release/bundle/macos/sharepaste.app`
+macOS output: `../target/release/bundle/macos/sharepaste.app`
 and a `.dmg` alongside.
 
 Windows output: a standalone NSIS installer `.exe`.
@@ -95,6 +102,11 @@ update it fetches never carries the quarantine attribute.
 it is what every release page shows, so change it there and mirror it here, not
 the other way round. The reasoning is in
 [ADR 0005](../../docs/adr/0005-unsigned-downloads-signed-updates.md).
+
+The same Release also carries the Android app as `sharepaste-<version>-universal.apk`. It
+has nothing to do with a desktop install: the desktop's update manifest names no mobile
+target, so the updater never sees it. Install and update instructions for it are in the
+root [`README.md`](../../README.md).
 
 ## Windows smoke checklist
 

@@ -1,0 +1,89 @@
+# The single place a version is written down.
+#
+# AGP 9 carries its own Kotlin Gradle plugin (built-in Kotlin), so there is no
+# `kotlin` version here to drift out of step with it.
+
+[versions]
+# AGP 9.3 requires Gradle 9.5+, SDK build-tools 36 and JDK 17+. The wrapper is
+# pinned to 9.6.1 and the JDK on this machine is 25, which is why the Kotlin JVM
+# target below is pinned to 17 rather than left to follow the toolchain.
+agp = "9.3.0"
+coroutines = "1.10.2"
+# UniFFI's Kotlin bindings call into the `.so` through JNA direct mapping;
+# 5.12.0 is its stated floor.
+jna = "5.19.1"
+# AndroidX pinned to the last releases that compile against API 35. Newer ones
+# demand `compileSdk 36`, and `compileSdk` is fixed at 35 by the effort's
+# ledger — the dependency versions are not.
+androidxSecurityCrypto = "1.1.0-alpha06"
+androidxTestCore = "1.6.1"
+androidxTestRunner = "1.6.2"
+# Same train as the runner; `GrantPermissionRule` lives here.
+androidxTestRules = "1.6.1"
+androidxTestJunit = "1.2.1"
+junit = "4.13.2"
+# Compose, CameraX and ZXing, all pinned to the newest release whose published
+# `aar-metadata.properties` says `minCompileSdk=35`. AGP 9 hard-fails when a
+# dependency asks for more than the consumer's `compileSdk`, and `compileSdk` is
+# fixed at 35 by the effort's ledger — so these are ceilings, not preferences:
+#   compose-ui 1.12.0 / material3 1.5.x  → minCompileSdk 37
+#   activity-compose 1.11.0+, camerax 1.6.0+ → minCompileSdk 36
+# Google's own Compose setup page recommends activity-compose 1.13.0, which is
+# one of those. Follow the metadata, not the snippet.
+#
+# `composeCompiler` must equal the Kotlin version AGP 9.3.0 bundles (its POM
+# declares `kotlin-gradle-plugin:2.2.10` as a runtime dependency). AGP's
+# built-in Kotlin does *not* apply the Compose compiler plugin for a
+# conventional build script — only for the declarative DSL — so the plugin is
+# applied by hand below, and an unversioned id would not resolve.
+composeCompiler = "2.2.10"
+composeBom = "2026.06.01"
+activityCompose = "1.10.1"
+lifecycle = "2.10.0"
+camerax = "1.5.3"
+# Pure Java, one test-scoped dependency, zero `android.*` classes and no network
+# of its own. That last property is why it is here and ML Kit is not: ML Kit's
+# unbundled variant fetches models from Google, and ticket 13 has to prove this
+# app talks to nothing but the Relay.
+zxing = "3.5.4"
+
+[libraries]
+# `androidx.core` is deliberately absent: nothing here uses it, and its current
+# releases would force `compileSdk 36`.
+androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "androidxSecurityCrypto" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+# `@aar` matters: the plain jar carries no Android native payload and fails at
+# first call with an UnsatisfiedLinkError.
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+
+junit = { module = "junit:junit", version.ref = "junit" }
+androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTestCore" }
+androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
+androidx-test-rules = { module = "androidx.test:rules", version.ref = "androidxTestRules" }
+androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestJunit" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+
+# The BOM manages the `androidx.compose.*` groups only — activity and lifecycle
+# are outside it and stay pinned by hand, which is exactly where the
+# compileSdk-35 ceiling bites.
+androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { module = "androidx.compose.ui:ui" }
+androidx-compose-ui-graphics = { module = "androidx.compose.ui:ui-graphics" }
+androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
+androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
+androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+
+androidx-camera-core = { module = "androidx.camera:camera-core", version.ref = "camerax" }
+androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "composeCompiler" }

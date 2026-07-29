@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { agePhrase, byteSize, capturedAt, originLabel } from "../../lib/format";
+import { agePhrase, byteSize, capturedAt } from "../../lib/format";
 import type { EntryView } from "../../types";
 import { copyEntry, deleteEntry } from "../EntryRow";
 import { IconButton, PanelMessage } from "../fui";
@@ -8,8 +8,8 @@ import { IconButton, PanelMessage } from "../fui";
  * Where the pane stops laying out text and offers the rest on request.
  *
  * Nothing caps an entry's size — not capture, not `entries_cache`, not the
- * relay (plan §2) — and `preview` is already the complete plaintext, in memory,
- * for every row. So this is a guard on *rendering*, not on the data: `COPY`
+ * relay (plan §2) — and `plaintext` is the complete text, in memory, for every
+ * row. So this is a guard on *rendering*, not on the data: `COPY`
  * still copies the whole thing, and the byte count in the header is what
  * explains the cut.
  */
@@ -59,10 +59,16 @@ export default function EntryDetail({ entry, index, ownDeviceId, now }: Props) {
     );
   }
 
-  // Nothing on the wire flags it: a NULL plaintext arrives as an empty preview.
-  const undecryptable = entry.preview === "";
+  const { undecryptable } = entry;
   const elsewhere = entry.device_id !== ownDeviceId;
-  const capped = entry.preview.length > RENDER_CAP && !showAll;
+  /*
+   * `plaintext` and not `preview`: this is the one surface that shows an entry
+   * whole, and `preview` is one flattened line of it by definition. It is
+   * `null` only for an Undecryptable entry, which takes the branch below
+   * instead of this text.
+   */
+  const text = entry.plaintext ?? "";
+  const capped = text.length > RENDER_CAP && !showAll;
 
   return (
     <div className="flex min-h-0 min-w-0 flex-col border border-hairline bg-void-1000">
@@ -71,7 +77,7 @@ export default function EntryDetail({ entry, index, ownDeviceId, now }: Props) {
           ENTRY {String(index).padStart(2, "0")}
         </span>
         <span className="shrink-0 font-mono text-chrome text-text-dim">
-          {byteSize(entry.preview)}
+          {byteSize(text)}
         </span>
       </header>
 
@@ -85,7 +91,7 @@ export default function EntryDetail({ entry, index, ownDeviceId, now }: Props) {
           data-testid="entry-detail-body"
           className="fui-scroll min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words p-3 font-mono text-data leading-relaxed text-text-body"
         >
-          {capped ? entry.preview.slice(0, RENDER_CAP) : entry.preview}
+          {capped ? text.slice(0, RENDER_CAP) : text}
           {capped && (
             <div className="mt-3">
               <button
@@ -105,7 +111,7 @@ export default function EntryDetail({ entry, index, ownDeviceId, now }: Props) {
       <footer className="fui-band flex shrink-0 flex-col gap-2 border-t border-hairline p-3">
         <span className="font-mono text-chrome uppercase tracking-phrase text-text-dim">
           {/* Origin in full here, where the row could only afford 12 chars. */}
-          {elsewhere && `${originLabel(entry.device_label, entry.device_id)} · `}
+          {elsewhere && `${entry.origin_label} · `}
           CAPTURED {capturedAt(entry.created_at, now)} ·{" "}
           <span className="normal-case">{agePhrase(entry.created_at, now)}</span>
         </span>

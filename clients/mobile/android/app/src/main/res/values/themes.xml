@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The window, before Compose has drawn anything.
+
+  Everything visible is Material 3 from Compose, so this theme's only job is to
+  make the first frame — the window background behind the composition — the right
+  colour and free of a platform action bar. `DayNight` is inherited so that a
+  device in dark mode does not flash white on launch; it exists from API 29,
+  which is this app's floor.
+-->
+<resources>
+    <style name="Theme.Sharepaste" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+
+    <!--
+      The window a Standing Action needs in order to exist, and nothing more.
+
+      A clipboard read requires window focus (Android 10+), so an action has to
+      open a window — but the result of both verbs is a Toast and a change to
+      the clipboard, so there is nothing whatsoever to draw. A window that
+      flashed up and vanished would be the only visible part of the operation
+      and would read as a crash, which is why the background is transparent and
+      `windowAnimationStyle` is null: no slide in, no fade out, nothing to see.
+
+      `windowIsTranslucent` is what keeps the activity behind it drawn and its
+      own surface see-through; `backgroundDimEnabled` false stops the platform
+      greying out whatever is underneath.
+    -->
+    <style name="Theme.Sharepaste.Invisible" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
+</resources>

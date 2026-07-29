@@ -10,8 +10,11 @@ const base: EntryView = {
   id: 1,
   user_id: "u",
   preview: "npm run dev",
+  plaintext: "npm run dev",
   created_at: NOW - 2 * 60_000,
   device_id: "own",
+  origin_label: "own",
+  undecryptable: false,
 };
 
 let ipc: MockIpc;
@@ -67,7 +70,7 @@ describe("EntryRow", () => {
   });
 
   it("explains itself instead of copying an undecryptable entry", async () => {
-    renderRow({ preview: "" });
+    renderRow({ preview: "", undecryptable: true });
     expect(screen.queryByRole("button", { name: "Copy and keep open" })).toBeNull();
     fireEvent.click(screen.getByTestId("entry-row"));
     await waitFor(() => {
@@ -81,12 +84,12 @@ describe("EntryRow", () => {
   });
 
   it("names the origin device for an entry captured elsewhere", () => {
-    renderRow({ device_id: "other", device_label: "iPhone-15" });
+    renderRow({ device_id: "other", device_label: "iPhone-15", origin_label: "iPhone-15" });
     expect(screen.getByTestId("entry-row")).toHaveTextContent("iPhone-15 · 2m");
   });
 
   it("omits the origin for an entry captured on this device", () => {
-    renderRow({ device_id: "own", device_label: "this-mac" });
+    renderRow({ device_id: "own", device_label: "this-mac", origin_label: "this-mac" });
     const row = screen.getByTestId("entry-row");
     expect(row).not.toHaveTextContent("this-mac");
     expect(row).toHaveTextContent("2m");

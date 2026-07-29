@@ -16,9 +16,11 @@ the list is there, arrow keys and copy are what a reader is for.
 
 **No history in the main window at all**, leaving it the settings surface its
 glossary entry described. Rejected because the gap above is real and the fix
-costs nothing on the wire: `EntryView.preview` is already the *complete*
-plaintext (`commands.rs:392`), shipped over IPC for all hundred rows on every
-`list_history`. The pane is a rendering decision, not a data one.
+costs nothing on the wire: the *complete* plaintext already ships over IPC for all hundred
+rows on every `list_history` — as `EntryView.preview` when this was written, and since the
+extraction as `Entry.plaintext` beside a separately rendered `preview`
+(`clients/core/src/event.rs:48-59`, built by the one constructor below it). The pane is a
+rendering decision, not a data one.
 
 ## Consequences
 
@@ -39,7 +41,7 @@ becoming an entry at all.
 
 **It stops at the same hundred rows as the popover.** The relay keeps everything
 — `GET /entries` prunes on neither age nor count — but the local cache prunes at
-`MAX_PER_USER = 100` and thirty days (`entries_cache.rs:24-25`), and it stores
+`MAX_PER_USER = 100` and thirty days (now `clients/core/src/storage/entries_cache.rs:24-25`), and it stores
 **plaintext at rest**. Deepening the reader by raising that cap trades a fuller
 list for more secrets on disk on every paired machine, which is the wrong trade
 in an end-to-end-encrypted clipboard. Back-paging the relay is possible but

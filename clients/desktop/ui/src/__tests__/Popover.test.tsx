@@ -17,6 +17,7 @@ const accounts: Pairing[] = [
     device_id: "d-oldest",
     label: "Oldest",
     server_url: "https://srv",
+    relay_host: "srv",
     status: "Disconnected",
     pending: 0,
     is_active: false,
@@ -26,6 +27,7 @@ const accounts: Pairing[] = [
     device_id: "d-active",
     label: "Active",
     server_url: "https://srv",
+    relay_host: "srv",
     status: "Connecting",
     pending: 0,
     is_active: true,
@@ -110,8 +112,8 @@ describe("Popover", () => {
    */
   it("the History icon opens the reader on the selected entry", async () => {
     servedHistory = [
-      { id: 11, user_id: "u-active", preview: "one", created_at: 1, device_id: "d" },
-      { id: 22, user_id: "u-active", preview: "two", created_at: 2, device_id: "d" },
+      { id: 11, user_id: "u-active", preview: "one", plaintext: "one", created_at: 1, device_id: "d", origin_label: "d", undecryptable: false },
+      { id: 22, user_id: "u-active", preview: "two", plaintext: "two", created_at: 2, device_id: "d", origin_label: "d", undecryptable: false },
     ];
     const view = render(<Popover />);
     await waitFor(() => expect(view.getAllByTestId("entry-row")).toHaveLength(2));
@@ -132,7 +134,7 @@ describe("Popover event subscriptions", () => {
     render(<Popover />);
     await waitFor(() => expect(ipc.handlers.get("history-changed")).toHaveLength(1));
 
-    servedHistory = [{ id: 7, user_id: "u-active", preview: "Refetched", created_at: 3, device_id: "d-active" }];
+    servedHistory = [{ id: 7, user_id: "u-active", preview: "Refetched", plaintext: "Refetched", created_at: 3, device_id: "d-active", origin_label: "d-ac", undecryptable: false }];
     act(() => ipc.emit("history-changed", { user_id: "u-active" }));
     await waitFor(() => {
       expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([7]);
@@ -148,20 +150,22 @@ describe("Popover event subscriptions", () => {
     expect(ipc.invoke.mock.calls.filter((c) => c[0] === "list_history")).toHaveLength(before);
   });
 
-  // The banner this replaces named an entry id that appeared nowhere in the UI.
-  // The row is the surface now (plan §0.12), so the popover no longer listens
-  // for the event at all - an emission has to be inert, not merely dismissible.
+  /*
+   * The banner this replaces named an entry id that appeared nowhere in the UI.
+   * The row is the surface now (plan §0.12), and there is no longer an event
+   * either: `CoreEvent::DecryptionError` was deleted because `EntryAdded`
+   * already carries `undecryptable`, so the row is the *only* thing that says
+   * so. What this pins is that one row is enough — no banner, no strip, and
+   * nothing the popover has to be told separately.
+   */
   it("leaves an undecryptable entry to its row and raises no banner", async () => {
-    servedHistory = [{ id: 42, user_id: "u-active", preview: "", created_at: 1, device_id: "d-active" }];
+    servedHistory = [{ id: 42, user_id: "u-active", preview: "", plaintext: null, created_at: 1, device_id: "d-active", origin_label: "d-ac", undecryptable: true }];
     const { findAllByTestId, queryByTestId } = render(<Popover />);
     await waitFor(() => expect(ipc.handlers.get("contact")).toHaveLength(1));
 
     expect(await findAllByTestId("entry-row")).toHaveLength(1);
-    expect(ipc.handlers.has("decryption-error")).toBe(false);
-
-    act(() => ipc.emit("decryption-error", { user_id: "u-active", entry_id: 42 }));
-    expect(queryByTestId("decryption-error")).toBeNull();
-    expect(queryByTestId("entry-row")).not.toBeNull();
+    expect(queryByTestId("entry-row")).toHaveTextContent("UNDECRYPTABLE");
+    expect(queryByTestId("toast")).toBeNull();
   });
 
   it("unsubscribes every listener on unmount", async () => {
@@ -354,8 +358,11 @@ describe("Popover keyboard and row surfaces", () => {
     id: 7,
     user_id: "u-active",
     preview: "npm run dev",
+    plaintext: "npm run dev",
     created_at: Date.now(),
     device_id: "d-active",
+    origin_label: "d-ac",
+    undecryptable: false,
     ...over,
   });
 
@@ -386,7 +393,7 @@ describe("Popover keyboard and row surfaces", () => {
   });
 
   it("explains an Undecryptable entry in a strip instead of copying it", async () => {
-    servedHistory = [entry({ preview: "" })];
+    servedHistory = [entry({ preview: "", plaintext: null, undecryptable: true })];
     const view = render(<Popover />);
     const row = await view.findByTestId("entry-row");
 

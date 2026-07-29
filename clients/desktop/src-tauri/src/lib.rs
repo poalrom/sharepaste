@@ -1,34 +1,27 @@
-pub(crate) mod config;
-pub mod errors;
-pub(crate) mod logging;
-pub(crate) mod state;
-pub(crate) mod events;
+pub(crate) mod capture;
 pub(crate) mod commands;
-pub mod core;
+pub(crate) mod config;
+pub(crate) mod events;
+pub(crate) mod logging;
 mod popover;
+pub(crate) mod state;
 pub(crate) mod update;
 
-use crate::config::Paths;
-use crate::core::pairing::registry::PairingRegistry;
-use crate::core::keychain::SystemKeychain;
-use crate::core::storage::open as open_storage;
-use crate::events::ACTIVE_PAIRING_CHANGED;
+use crate::config::{desktop_data_dir, Paths};
+use crate::events::TauriEventSink;
 use crate::popover::{build_popover_window, toggle_popover};
-use crate::state::AppState;
+use crate::state::{AppState, SystemClipboard};
+use sharepaste_core::facade::{Sharepaste, SharepasteConfig};
+use sharepaste_core::keychain::SystemKeychain;
 use std::sync::Arc;
 use tauri::menu::{ContextMenu, MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 pub fn launch() {
-    let paths = Paths::resolve();
+    let paths = Paths::for_data_dir(desktop_data_dir());
     paths.ensure_dirs().expect("create app dirs");
     let _log_guard = logging::init(&paths.log_dir);
-    let conn = open_storage(&paths.db_path).expect("open sqlite");
-    let conn = Arc::new(tokio::sync::Mutex::new(conn));
-    let keychain: Arc<dyn core::keychain::Keychain> = Arc::new(SystemKeychain::default());
-    let registry = Arc::new(PairingRegistry::new(conn.clone(), keychain.clone()));
-    let app_state = Arc::new(AppState::new(conn, keychain, registry));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
@@ -37,13 +30,30 @@ pub fn launch() {
         ))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(app_state.clone())
         .setup(move |app| {
+            // The core is built here rather than before the builder because its
+            // event sink needs an `AppHandle`, and that only exists once Tauri
+            // has started. Nothing runs before `setup`, so no event is missed.
+            let core = Sharepaste::open(SharepasteConfig {
+                db_path: paths.db_path.clone(),
+                keychain: Arc::new(SystemKeychain::default()),
+                clipboard: Arc::new(SystemClipboard),
+                events: Arc::new(TauriEventSink::new(app.handle().clone())),
+                // Not an oversight and not a thing to tidy to `true`: a desktop
+                // already paired to a cleartext relay has to keep working, so
+                // the scheme rule belongs to whichever shell can afford it. The
+                // mobile shells pass `true`; flipping this one would strand an
+                // existing installation with no way to recover its pairing.
+                require_https: false,
+            })?;
+            let app_state = Arc::new(AppState::new(core));
+            app.manage(app_state.clone());
+
             build_tray(app, app_state.clone())?;
             build_popover_window(app)?;
-            spawn_sync_for_existing_pairings(app.handle().clone(), app_state.clone());
+            spawn_sync_for_existing_pairings(app_state.clone());
             #[cfg(any(target_os = "macos", target_os = "windows"))]
-            spawn_clipboard_capture(app.handle().clone(), app_state.clone());
+            spawn_clipboard_capture(app_state.clone());
             register_initial_hotkey(app.handle().clone(), app_state.clone());
             reconcile_autostart(app.handle().clone(), app_state.clone());
             update::spawn_launch_check(app.handle().clone(), app_state.clone());
@@ -262,58 +272,54 @@ mod section_tests {
     }
 }
 
-fn spawn_sync_for_existing_pairings(app: tauri::AppHandle, state: Arc<AppState>) {
+/// Pick the Active Pairing back up at launch and open its session.
+///
+/// Two calls, because the core deliberately does not decide for itself that now
+/// is a good time to open a socket: `resume_active_pairing` settles which pairing
+/// and announces it, and this shell — being in the foreground by definition —
+/// asks for the session.
+fn spawn_sync_for_existing_pairings(state: Arc<AppState>) {
     tauri::async_runtime::spawn(async move {
-        let persisted = match state.registry.load_persisted_active().await {
-            Ok(p) => p,
+        let resumed = match state.core.resume_active_pairing().await {
+            Ok(r) => r,
             Err(e) => {
-                tracing::warn!(err = %e, "load persisted active failed");
-                None
+                tracing::warn!(err = %e, "resuming the Active Pairing failed");
+                return;
             }
         };
-        let chosen = if let Some(uid) = persisted {
-            Some(uid)
-        } else {
-            state
-                .registry
-                .list()
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .next()
-                .map(|a| a.user_id)
-        };
-        let Some(user_id) = chosen else { return };
-        if let Err(e) = state
-            .registry
-            .set_active_persisted(Some(user_id.clone()))
-            .await
-        {
-            tracing::warn!(err = %e, "persist active on startup failed");
+        let Some(user_id) = resumed else { return };
+        if let Err(e) = state.core.start_session(&user_id).await {
+            tracing::warn!(err = %e, %user_id, "starting the session on launch failed");
         }
-        let _ = app.emit(
-            ACTIVE_PAIRING_CHANGED,
-            crate::events::ActivePairingChanged {
-                user_id: Some(user_id.clone()),
-            },
-        );
-        crate::core::sync::session::run_session(app.clone(), state.clone(), user_id).await;
     });
 }
 
+/// Watched Capture's platform half.
+///
+/// The shell keeps the three things only it can do — the clipboard-change
+/// watcher, the platform pasteboard sniffer, and the frontmost-application
+/// lookup — and hands them to the core. The filter, the encryption, the queue and
+/// the `pending-count` event are all `capture_watched`'s, so there is exactly one
+/// implementation of what may be captured and it is the one a phone's Offered
+/// Capture shares.
+///
+/// The sniffer crosses as a `&dyn PasteboardSniff` rather than a snapshot on
+/// purpose: it reads the pasteboard's *types* first and its text only if none of
+/// them is transient or concealed, so a concealed password's plaintext is never
+/// pulled into memory for the filter to then reject.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn spawn_clipboard_capture(app: tauri::AppHandle, state: Arc<AppState>) {
-    use crate::core::capture::filter::{evaluate, CaptureContext, FilterDecision, PasteboardSniff};
+fn spawn_clipboard_capture(state: Arc<AppState>) {
+    use sharepaste_core::capture::filter::PasteboardSniff;
+    use sharepaste_core::facade::OfferOutcome;
     #[cfg(target_os = "macos")]
-    use crate::core::capture::macos::{frontmost_bundle_id, NSPasteboardSniffer};
-    use crate::core::capture::watcher;
+    use crate::capture::macos::{frontmost_bundle_id, NSPasteboardSniffer};
+    use crate::capture::watcher;
     #[cfg(target_os = "windows")]
-    use crate::core::capture::windows::{frontmost_process_name, WindowsClipboardSniffer};
-    use crate::events::{PendingCount, PENDING_COUNT};
+    use crate::capture::windows::{frontmost_process_name, WindowsClipboardSniffer};
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
-    let (tx, mut rx) = mpsc::channel::<crate::core::capture::watcher::ClipboardEvent>(32);
+    let (tx, mut rx) = mpsc::channel::<crate::capture::watcher::ClipboardEvent>(32);
     let watcher_cancel = CancellationToken::new();
     if let Err(e) = watcher::spawn(tx, watcher_cancel.clone()) {
         tracing::error!(err = %e, "clipboard watcher failed to start");
@@ -326,98 +332,28 @@ fn spawn_clipboard_capture(app: tauri::AppHandle, state: Arc<AppState>) {
         let sniffer = WindowsClipboardSniffer::new();
 
         while let Some(_ev) = rx.recv().await {
-            let Some(user_id) = state.registry.active_user_id() else {
+            let Some(user_id) = state.core.active_pairing() else {
                 continue;
-            };
-            let settings = {
-                let conn = state.conn.lock().await;
-                match crate::core::storage::settings::load(&conn) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::warn!(err = %e, "load settings");
-                        continue;
-                    }
-                }
             };
             #[cfg(target_os = "macos")]
             let frontmost = frontmost_bundle_id();
             #[cfg(target_os = "windows")]
             let frontmost = frontmost_process_name();
 
-            let last_self = state.last_self_write.lock().clone();
-            let last_self_ref = last_self.as_ref().map(|(t, s)| (*t, s.as_str()));
-            let last_capture = state.last_capture.lock().clone();
-            let ctx = CaptureContext {
-                capture_enabled: settings.capture_enabled,
-                deny_list: &settings.deny_list,
-                frontmost_bundle_id: frontmost.as_deref(),
-                last_self_write: last_self_ref,
-                last_capture: last_capture.as_deref(),
-            };
-            let decision =
-                evaluate(&ctx, &sniffer as &dyn PasteboardSniff, std::time::Instant::now());
-            let text = match decision {
-                FilterDecision::Capture(t) => t,
-                FilterDecision::Skip(reason) => {
-                    tracing::debug!(?reason, "clipboard skip");
-                    continue;
-                }
-            };
-            let m = match state.registry.load_active_membership(&user_id).await {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::warn!(err = %e, "no active membership for capture");
-                    continue;
-                }
-            };
-            let ciphertext =
-                match crate::core::crypto::encrypt(&m.user_key, &user_id, text.as_bytes()) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::warn!(err = %e, "encrypt failed");
-                        continue;
-                    }
-                };
-            {
-                let conn = state.conn.lock().await;
-                match crate::core::storage::pending::enqueue(
-                    &conn,
+            match state
+                .core
+                .capture_watched(
                     &user_id,
-                    &ciphertext,
-                    now_ms(),
-                ) {
-                    Err(e) => {
-                        tracing::warn!(err = %e, "enqueue failed");
-                        continue;
-                    }
-                    Ok(res) if res.dropped_oldest > 0 => {
-                        // The queue is at MAX_PER_USER, so the oldest entries the
-                        // user copied while offline have just been discarded
-                        // un-uploaded. Nothing else surfaces this.
-                        tracing::warn!(
-                            %user_id,
-                            dropped = res.dropped_oldest,
-                            "pending upload queue full; evicted oldest un-uploaded entries"
-                        );
-                    }
-                    Ok(_) => {}
+                    &sniffer as &dyn PasteboardSniff,
+                    frontmost.as_deref(),
+                )
+                .await
+            {
+                Ok(OfferOutcome::Queued { .. }) => {}
+                Ok(OfferOutcome::Rejected(reason)) => {
+                    tracing::debug!(?reason, "clipboard skip");
                 }
-                let count = crate::core::storage::pending::count(&conn, &user_id).unwrap_or(0);
-                let _ = app.emit(
-                    PENDING_COUNT,
-                    PendingCount {
-                        user_id: user_id.clone(),
-                        count,
-                    },
-                );
-            }
-            // Only remembered once the entry is durably queued, so a failed
-            // enqueue does not suppress the user's next copy of the same text.
-            *state.last_capture.lock() = Some(text);
-            if let Some(trigger) = state.upload_triggers.lock().get(&user_id).cloned() {
-                trigger.notify_one();
-            } else {
-                tracing::warn!(%user_id, "no uploader trigger registered");
+                Err(e) => tracing::warn!(err = %e, "capturing the clipboard failed"),
             }
         }
         let _ = watcher_cancel;
@@ -449,14 +385,11 @@ pub(crate) fn set_autostart(
 /// longer has.
 fn reconcile_autostart(app: tauri::AppHandle, state: Arc<AppState>) {
     tauri::async_runtime::spawn(async move {
-        let desired = {
-            let conn = state.conn.lock().await;
-            match crate::core::storage::settings::load(&conn) {
-                Ok(s) => s.autostart,
-                Err(e) => {
-                    tracing::warn!(err = %e, "load settings for autostart reconcile");
-                    return;
-                }
+        let desired = match state.core.get_settings().await {
+            Ok(s) => s.autostart,
+            Err(e) => {
+                tracing::warn!(err = %e, "load settings for autostart reconcile");
+                return;
             }
         };
         let actual = {
@@ -481,12 +414,12 @@ fn reconcile_autostart(app: tauri::AppHandle, state: Arc<AppState>) {
 
 fn register_initial_hotkey(app: tauri::AppHandle, state: Arc<AppState>) {
     tauri::async_runtime::spawn(async move {
-        let hotkey = {
-            let conn = state.conn.lock().await;
-            crate::core::storage::settings::load(&conn)
-                .map(|s| s.hotkey)
-                .unwrap_or(None)
-        };
+        let hotkey = state
+            .core
+            .get_settings()
+            .await
+            .map(|s| s.hotkey)
+            .unwrap_or(None);
         if let Some(h) = hotkey {
             if let Err(e) = apply_hotkey(&app, Some(&h)) {
                 tracing::warn!(err = %e, hotkey = %h, "register global shortcut failed");
@@ -522,14 +455,6 @@ pub(crate) fn apply_hotkey(app: &tauri::AppHandle, hotkey: Option<&str>) -> taur
         ))
     })?;
     Ok(())
-}
-
-pub(crate) fn now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 /// Guards the invariant behind S1: the capability file must name every window the

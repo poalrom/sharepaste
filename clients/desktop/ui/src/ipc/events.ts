@@ -11,7 +11,6 @@ export const events = {
   onHistoryChanged:  (cb: (p: { user_id: string }) => void) => tauri.listen("history-changed", cb),
   onPendingCount:    (cb: (p: { user_id: string; count: number }) => void) => tauri.listen("pending-count", cb),
   onContact:       (cb: (p: Contact) => void) => tauri.listen("contact", cb),
-  onDecryptionError: (cb: (p: { user_id: string; entry_id: number }) => void) => tauri.listen("decryption-error", cb),
   onPairShortcode:   (cb: (p: { code: string; expires_at: number }) => void) => tauri.listen("pair-shortcode", cb),
   onPairClaimed:     (cb: (p: { user_id: string; device_label?: string | null }) => void) => tauri.listen("pair-claimed", cb),
   onPairExpired:     (cb: () => void) => tauri.listen("pair-expired", () => cb()),

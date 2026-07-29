@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 2,
+  "exportedAt": null,
+  "appVersion": null,
+  "apps": [
+    {
+      "id": "com.sharepaste.android",
+      "url": "https://github.com/poalrom/sharepaste",
+      "author": "poalrom",
+      "name": "Sharepaste",
+      "installedVersion": null,
+      "latestVersion": null,
+      "apkUrls": "[]",
+      "otherAssetUrls": "[]",
+      "preferredApkIndex": 0,
+      "additionalSettings": "{\"apkFilterRegEx\": \"\\\\.apk$\", \"invertAPKFilter\": false, \"autoApkFilterByArch\": false, \"includePrereleases\": false, \"fallbackToOlderReleases\": false, \"versionExtractionRegEx\": \"^v(.*)$\", \"matchGroupToUse\": \"$1\", \"versionDetection\": true, \"trackOnly\": false}",
+      "lastUpdateCheck": null,
+      "pinned": false,
+      "categories": [],
+      "releaseDate": null,
+      "changeLog": null,
+      "overrideSource": null,
+      "allowIdChange": false,
+      "pendingRepoRenameUrl": null
+    }
+  ],
+  "settings": null
+}

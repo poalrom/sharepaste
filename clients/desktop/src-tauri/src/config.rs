@@ -9,15 +9,9 @@ pub(crate) struct Paths {
 }
 
 impl Paths {
-    pub(crate) fn resolve() -> Self {
-        Self::resolve_with_env(std::env::var_os("SHAREPASTE_DATA_DIR"))
-    }
-
-    pub(crate) fn resolve_with_env(override_data_dir: Option<std::ffi::OsString>) -> Self {
-        let data_dir = match override_data_dir {
-            Some(p) => PathBuf::from(p),
-            None => default_data_dir(),
-        };
+    // The data directory arrives as data, never derived here: a sandboxed platform has
+    // one handed to it and must not be able to fall back on a home directory.
+    pub(crate) fn for_data_dir(data_dir: PathBuf) -> Self {
         let log_dir = default_log_dir(&data_dir);
         let cache_dir = default_cache_dir(&data_dir);
         let db_path = data_dir.join("state.sqlite");
@@ -29,6 +23,15 @@ impl Paths {
         std::fs::create_dir_all(&self.log_dir)?;
         std::fs::create_dir_all(&self.cache_dir)?;
         Ok(())
+    }
+}
+
+// The desktop shell's own derivation, deliberately separate from the construction above:
+// `SHAREPASTE_DATA_DIR` wins so a dev build can be pointed at a scratch directory.
+pub(crate) fn desktop_data_dir() -> PathBuf {
+    match std::env::var_os("SHAREPASTE_DATA_DIR") {
+        Some(p) => PathBuf::from(p),
+        None => default_data_dir(),
     }
 }
 
@@ -73,11 +76,10 @@ fn default_cache_dir(data: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsString;
 
     #[test]
-    fn override_data_dir_is_honoured() {
-        let p = Paths::resolve_with_env(Some(OsString::from("/tmp/sp-test-1")));
+    fn db_path_sits_inside_the_given_data_dir() {
+        let p = Paths::for_data_dir(PathBuf::from("/tmp/sp-test-1"));
         assert_eq!(p.data_dir, PathBuf::from("/tmp/sp-test-1"));
         assert_eq!(p.db_path, PathBuf::from("/tmp/sp-test-1/state.sqlite"));
     }
@@ -85,7 +87,7 @@ mod tests {
     #[test]
     fn ensure_dirs_creates_all_three() {
         let tmp = tempfile::tempdir().unwrap();
-        let p = Paths::resolve_with_env(Some(tmp.path().join("data").into_os_string()));
+        let p = Paths::for_data_dir(tmp.path().join("data"));
         p.ensure_dirs().unwrap();
         assert!(p.data_dir.is_dir());
         assert!(p.log_dir.is_dir());

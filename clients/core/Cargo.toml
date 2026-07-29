@@ -1,0 +1,65 @@
+[package]
+name = "sharepaste-core"
+# Pinned to the desktop's version: `http/client.rs` builds the Relay User-Agent
+# from CARGO_PKG_VERSION, and `.github/scripts/check-versions.mjs` refuses a
+# release where the two disagree.
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.78"
+publish = false
+description = "The sharepaste protocol: crypto, relay HTTP, local storage, sync, pairing. No shell, no Tauri."
+
+[features]
+# Exposes `storage::open_in_memory` and the `testing` fakes to dependents' test
+# builds, so a shell can drive the core with no relay, no keychain and no
+# window system attached.
+testing = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# `rt-multi-thread`: the facade owns a private multi-thread runtime and every
+# background task it spawns goes there, which is what lets a shell with no
+# async runtime of its own hold a live session.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
+tokio-util = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+eventsource-stream = "0.2"
+futures = "0.3"
+rusqlite = { version = "0.32", features = ["bundled"] }
+chacha20poly1305 = "0.10"
+rand = "0.8"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+data-encoding = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "1"
+tracing = "0.1"
+parking_lot = "0.12"
+async-trait = "0.1"
+sha2 = "0.10"
+# Already in the tree under `reqwest`; declared here so `render::relay_host`
+# parses a Relay address with the same rules the HTTP client does, rather than
+# with a hand-rolled slice that disagrees about userinfo.
+url = "2"
+
+# `keyring` is the only platform-bound dependency the core keeps, and it is
+# declared for exactly the two targets that have a system keychain to talk to.
+# Everywhere else `keychain.rs` offers only the trait and `InMemoryKeychain`,
+# and the shell supplies its own implementation.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+
+[dev-dependencies]
+# A dev-dependency on itself, which is how a crate turns one of its own optional
+# features on for its own test build without shipping it: `cargo test` unifies
+# the two and the integration tests in `tests/` link a lib with `testing`
+# enabled, while `cargo build` — which never resolves dev-dependencies — does
+# not. The flow tests drive the facade, and the facade needs all three platform
+# fakes.
+sharepaste-core = { path = ".", features = ["testing"] }
+tokio = { version = "1", features = ["full", "test-util"] }
+hex-literal = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }

@@ -8,7 +8,7 @@ import SettingsSection from "../views/sections/SettingsSection";
 let ipc: MockIpc;
 
 const pairing: Pairing = {
-  user_id: "u-active", device_id: "d1", label: "Laptop", server_url: "https://srv",
+  user_id: "u-active", device_id: "d1", label: "Laptop", server_url: "https://srv", relay_host: "srv",
   status: "Online", pending: 0, is_active: true,
 };
 

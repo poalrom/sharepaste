@@ -1,5 +1,21 @@
 # Tray popover redesign — plan
 
+> Completed plan, kept as a record. Two things it names have moved since.
+>
+> Its Rust citations predate the extraction of `sharepaste-core`: paths of the form `core/…`
+> and `commands.rs` were relative to `clients/desktop/src-tauri/src/` and now live under
+> `clients/core/src/`. See the note at the top of
+> [ADR 0006](adr/0006-one-protocol-three-shells.md).
+>
+> And §6's `normalizePreview()` no longer exists in the UI, nor do `originLabel` and
+> `relayHost`: the core owns those three renderings in `clients/core/src/render.rs`, as
+> `preview`, `origin_label` and `relay_host`, so a phone and a desktop cannot cap a Preview
+> at two different limits. `relativeAge` stayed in `clients/desktop/ui/src/lib/format.ts`.
+> The cap moved with the rule — 80 characters in the core, not the 200/400 this plan
+> prescribes — and `Entry` now carries a rendered `preview` beside the full `plaintext`
+> rather than one field meaning both. Read §6, the P1 list and the verification list with
+> that substitution.
+
 Target: bring the `clients/desktop` popover to the FUI/HUD language of the
 design mock, with readability corrections where the mock trades legibility for
 style, and with every element it draws either implemented for real or

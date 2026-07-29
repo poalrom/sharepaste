@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { cmd } from "../../ipc/commands";
-import { agePhrase, normalizePreview, originLabel, relativeAge, relayHost } from "../../lib/format";
+import { agePhrase, relativeAge } from "../../lib/format";
 import {
   useContactStore,
   useFilteredEntries,
@@ -181,9 +181,8 @@ export default function HistorySection({ now }: { now: number }) {
       <ul>
         {filtered.map((entry, i) => {
           const selected = i === selectedIndex;
-          // Nothing on the wire flags it: a NULL plaintext arrives as an empty
-          // preview. The row still counts, so the index stays continuous.
-          const undecryptable = entry.preview === "";
+          // An undecryptable row still counts, so the index stays continuous.
+          const { undecryptable } = entry;
           const elsewhere = entry.device_id !== pairing?.device_id;
           return (
             <li
@@ -212,7 +211,7 @@ export default function HistorySection({ now }: { now: number }) {
                 </span>
               ) : (
                 <span className="min-w-0 flex-1 truncate font-mono text-data text-text-body">
-                  {normalizePreview(entry.preview)}
+                  {entry.preview}
                 </span>
               )}
 
@@ -228,14 +227,14 @@ export default function HistorySection({ now }: { now: number }) {
                         The tooltip is the untruncated counterpart of what is
                         shown, not a second fallback: a label reads in full, an
                         unlabelled legacy membership reads its full device id
-                        behind the 4-char slice. Routing it through originLabel
-                        would hide the id.
+                        behind the 4-char slice. Routing it through
+                        `origin_label` would hide the id.
                       */}
                       <span
                         className="uppercase"
                         title={entry.device_label?.trim() || entry.device_id}
                       >
-                        {originLabel(entry.device_label, entry.device_id).slice(0, 12)}
+                        {entry.origin_label.slice(0, 12)}
                       </span>
                       {" · "}
                     </>
@@ -312,7 +311,7 @@ export default function HistorySection({ now }: { now: number }) {
           >
             {pairings.map((p) => (
               <option key={p.user_id} value={p.user_id}>
-                {`${p.username ?? p.user_id} @ ${relayHost(p.server_url)}`}
+                {`${p.username ?? p.user_id} @ ${p.relay_host}`}
               </option>
             ))}
           </select>

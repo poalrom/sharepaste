@@ -14,11 +14,11 @@ describe("HistoryList", () => {
     ipc = mockIpc();
     useUiStore.setState({ search: "", selectedIndex: 0, mainSection: "history" });
     useHistoryStore.setState({ entries: [
-      { id: 1, user_id: "u", preview: "Hello", created_at: 1, device_id: "d" },
-      { id: 2, user_id: "u", preview: "World", created_at: 2, device_id: "d" },
+      { id: 1, user_id: "u", preview: "Hello", plaintext: "Hello", created_at: 1, device_id: "d", origin_label: "d", undecryptable: false },
+      { id: 2, user_id: "u", preview: "World", plaintext: "World", created_at: 2, device_id: "d", origin_label: "d", undecryptable: false },
     ]});
     usePairingsStore.setState({
-      pairings: [{ user_id: "u", device_id: "d", label: "mac", server_url: "https://s", status: "Online", pending: 0, is_active: true }],
+      pairings: [{ user_id: "u", device_id: "d", label: "mac", server_url: "https://s", relay_host: "s", status: "Online", pending: 0, is_active: true }],
       active: "u",
     });
   });

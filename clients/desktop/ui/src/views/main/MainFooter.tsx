@@ -1,4 +1,4 @@
-import { agePhrase, relayHost } from "../../lib/format";
+import { agePhrase } from "../../lib/format";
 import { useContactStore, useStatusStore } from "../../store";
 import { useActivePairing } from "../../store/pairings";
 import { CONNECTION } from "../connection";
@@ -37,7 +37,7 @@ export default function MainFooter({ now }: { now: number }) {
         {pending > 0 && <span className="shrink-0 text-amber-400">{pending} PENDING</span>}
         {active && (
           <span className="min-w-0 truncate font-mono" data-testid="footer-identity">
-            {`${active.username ?? active.user_id}@${relayHost(active.server_url)}`.toUpperCase()}
+            {`${active.username ?? active.user_id}@${active.relay_host}`.toUpperCase()}
           </span>
         )}
       </span>

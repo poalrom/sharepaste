@@ -7,15 +7,18 @@
 // $GITHUB_OUTPUT when running under Actions. Exits 1 on any disagreement, or
 // when the changelog has no section for the version.
 //
-// This is not cosmetic. `core/http/client.rs` builds the Relay User-Agent from
-// CARGO_PKG_VERSION, so a Cargo.toml left behind by a version change puts a lie
-// on the wire for every request the device makes.
+// This is not cosmetic. `clients/core/src/http/client.rs` builds the Relay
+// User-Agent from CARGO_PKG_VERSION, so a Cargo.toml left behind by a version
+// change puts a lie on the wire for every request the device makes.
 
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractSection } from "./changelog.mjs";
 
 const DESKTOP = ["clients", "desktop"];
+const CORE = ["clients", "core"];
+const FFI = ["clients", "mobile", "ffi"];
+const ANDROID = ["clients", "mobile", "android", "app", "build.gradle.kts"];
 
 /**
  * The `version` of the `[package]` table.
@@ -39,12 +42,62 @@ function cargoPackageVersion(toml) {
   return null;
 }
 
+/**
+ * The Android `versionName`, read out of the Gradle build file.
+ *
+ * One line carries it — `versionName = "0.2.0"` inside `defaultConfig` — and
+ * `versionCode` is derived from that string by the build file itself, so this is
+ * the whole of the Android version. Two matches means somebody added a second
+ * declaration (a flavour, a variant override) and the one this gate checks would
+ * be a coin toss, so two is as fatal as none.
+ */
+function gradleVersionName(kts) {
+  const matches = [...kts.matchAll(/^\s*versionName\s*=\s*"([^"]+)"/gm)];
+  if (matches.length !== 1) return null;
+  return matches[0][1];
+}
+
+/**
+ * Every file that carries the version, keyed by its repo-relative path.
+ *
+ * The keys are the labels the failure report prints, and they are full paths so
+ * that several same-named files — two `Cargo.toml`s and a Gradle script — can
+ * sit here with no ambiguity about which is meant.
+ *
+ * **Deliberately not here**, so that the omissions read as decisions:
+ *
+ * - `clients/desktop/ui/package.json` (0.1.0, and has been since the 0.2.0
+ *   release). Nothing reads it. Vite bundles the frontend into `dist/` and no
+ *   version string from that manifest reaches an artifact, a wire header or a
+ *   screen. Adding it would mean every release edits a fifth file whose number
+ *   means nothing, and a gate that fails for cosmetic reasons is a gate people
+ *   learn to re-run rather than read. Left drifted on purpose.
+ * - `clients/desktop/acl-tests/Cargo.toml` (0.1.0). A test-only crate with its
+ *   own lockfile that is never built into anything shipped.
+ * - `server/package.json`. The Relay is a different deliverable on its own
+ *   cadence — operators build it from `docker compose`, it is never attached to
+ *   a Release — so tying its version to a client release would be wrong, not
+ *   merely noisy.
+ *
+ * What *is* here is every version that rides inside a shipped artifact or goes
+ * out on the wire.
+ */
 function collectVersions(root) {
   const read = (...parts) => readFileSync(join(root, ...parts), "utf8");
   return {
-    "tauri.conf.json": JSON.parse(read(...DESKTOP, "src-tauri", "tauri.conf.json")).version,
-    "package.json": JSON.parse(read(...DESKTOP, "package.json")).version,
-    "Cargo.toml": cargoPackageVersion(read(...DESKTOP, "src-tauri", "Cargo.toml")),
+    "clients/desktop/src-tauri/tauri.conf.json":
+      JSON.parse(read(...DESKTOP, "src-tauri", "tauri.conf.json")).version,
+    "clients/desktop/package.json": JSON.parse(read(...DESKTOP, "package.json")).version,
+    "clients/desktop/src-tauri/Cargo.toml":
+      cargoPackageVersion(read(...DESKTOP, "src-tauri", "Cargo.toml")),
+    "clients/core/Cargo.toml": cargoPackageVersion(read(...CORE, "Cargo.toml")),
+    // The crate compiled into `libsharepaste_ffi.so` and packaged in the APK.
+    // Its own manifest already claims this script enforces the agreement; until
+    // now that comment was a lie.
+    "clients/mobile/ffi/Cargo.toml": cargoPackageVersion(read(...FFI, "Cargo.toml")),
+    // The Android artifact's own version, and the one a phone shows in Settings
+    // and Obtainium compares against a release tag.
+    "clients/mobile/android/app/build.gradle.kts": gradleVersionName(read(...ANDROID)),
   };
 }
 
@@ -52,14 +105,18 @@ if (import.meta.filename === process.argv[1]) {
   const root = process.argv[2] ?? ".";
   const versions = collectVersions(root);
 
-  // tauri.conf.json is the one the pipeline reads; the other two have to agree
+  // tauri.conf.json is the one the pipeline reads; the others have to agree
   // with it, not merely with each other.
-  const version = versions["tauri.conf.json"];
+  const AUTHORITY = "clients/desktop/src-tauri/tauri.conf.json";
+  const version = versions[AUTHORITY];
   const drifted = Object.entries(versions).filter(([, v]) => v !== version);
   if (!version || drifted.length > 0) {
     console.error("Version numbers disagree; refusing to publish.");
+    // Widest key, not the authority's: the Gradle path is longer than it, and a
+    // ragged column is how a reader misses which line is the odd one.
+    const column = Math.max(...Object.keys(versions).map((file) => file.length));
     for (const [file, v] of Object.entries(versions)) {
-      console.error(`  ${file.padEnd(17)} ${v ?? "(unreadable)"}`);
+      console.error(`  ${file.padEnd(column)} ${v ?? "(unreadable)"}`);
     }
     process.exit(1);
   }

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  No cleartext, for any domain, ever.
+
+  HTTPS with a publicly trusted certificate is enforced here and never in the
+  core, which must keep working for desktops already paired to a cleartext
+  relay. A scanned or typed `http://` address therefore fails at the transport
+  layer, and the core turns that into `AppError.InsecureRelay` — a failure that
+  can be explained rather than guessed at.
+
+  Do not add a `domain-config` exception to make a test pass. Put a TLS
+  terminator in front of the test relay instead.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

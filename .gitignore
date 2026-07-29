@@ -9,15 +9,27 @@ coverage/
 db/
 server/node_modules/
 server/dist/
-clients/desktop/src-tauri/target/
+clients/target/
 clients/desktop/src-tauri/gen/
 clients/desktop/ui/dist/
 clients/desktop/ui/node_modules/
 clients/desktop/node_modules/
 
+# Android client build outputs. The cross-compiled `.so` per ABI and the
+# generated UniFFI Kotlin bindings are both produced per variant into `build/`
+# by the `buildRustLibraries*`/`generateUniffiBindings*` tasks, and neither is
+# ever edited by hand. Nothing lands in a source set any more: a `.so` under
+# `src/main/jniLibs/` would be packaged into *every* variant, which is exactly
+# how a release APK would come to carry the debug build's `testing` library.
+# `local.properties` names this machine's SDK.
+clients/mobile/android/**/build/
+clients/mobile/android/.gradle/
+clients/mobile/android/local.properties
+# The Kotlin compiler's own scratch dir, created by the Compose build.
+clients/mobile/android/.kotlin/
+
 # Stray cargo target dirs (agents may set CARGO_TARGET_DIR from the repo root)
 /target/
-clients/desktop/acl-tests/target/
 
 # Manual-test profiles (see clients/desktop/README.md two-instance recipe)
 tmp-*/

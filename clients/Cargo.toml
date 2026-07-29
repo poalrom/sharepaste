@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["core", "desktop/src-tauri", "desktop/acl-tests", "mobile/ffi"]
+# `acl-tests` is a member so there is one lockfile, but never a *default* member.
+#
+# Cargo unifies features across a single build invocation: a bare `cargo test` at
+# this root that included `acl-tests` would hand `tauri` both `wry` (the app's
+# runtime) and `test` (the mock runtime), and on Windows the resulting binary dies
+# at load with STATUS_ENTRYPOINT_NOT_FOUND before a single test runs. See
+# `desktop/acl-tests/Cargo.toml`. The separation therefore comes from the
+# invocation — `cargo test -p sharepaste-acl-tests` — while membership still
+# collapses the two lockfiles that had already drifted apart.
+default-members = ["core", "desktop/src-tauri"]
+#
+# `mobile/ffi` is a member on the same footing and for a related reason: it is a
+# cdylib that only makes sense cross-compiled to an Android ABI, so a bare
+# `cargo test` here must not try to build it for the host.

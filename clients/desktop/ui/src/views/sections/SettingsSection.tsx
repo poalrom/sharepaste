@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import type { Settings, UpdateAvailable } from "../../types";
 import { cmd } from "../../ipc/commands";
 import { events } from "../../ipc/events";
-import { relayHost } from "../../lib/format";
 import { usePairingsStore } from "../../store";
 import { useActivePairing } from "../../store/pairings";
 import { PanelMessage, Strip } from "../fui";
@@ -284,7 +283,7 @@ export default function SettingsSection() {
             <div className="font-display text-sm font-medium tracking-phrase text-text-body">Clear history</div>
             <div className="text-data text-text-muted">
               {activePairing
-                ? `Deletes every stored entry for ${activePairing.username ?? activePairing.user_id} @ ${relayHost(activePairing.server_url)}, on the relay and on every paired device.`
+                ? `Deletes every stored entry for ${activePairing.username ?? activePairing.user_id} @ ${activePairing.relay_host}, on the relay and on every paired device.`
                 : "No active pairing."}
             </div>
           </div>

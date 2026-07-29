@@ -24,8 +24,9 @@ export const useHistoryStore = create<HistoryState>((set) => ({
  *
  * Both the list and the search field's count suffix have to agree on this, and
  * a second copy of the predicate is how they would stop agreeing. Matching runs
- * against the raw plaintext rather than the normalised preview, so a query can
- * still find a word that only appears on an entry's third line.
+ * against `plaintext` rather than the one-line `preview`, so a query still
+ * finds a word that only appears on an entry's third line. An Undecryptable
+ * entry has no plaintext and matches nothing, which is the truth about it.
  */
 export function useFilteredEntries(): EntryView[] {
   const entries = useHistoryStore((s) => s.entries);
@@ -33,7 +34,7 @@ export function useFilteredEntries(): EntryView[] {
   return useMemo(() => {
     const needle = search.trim().toLowerCase();
     if (!needle) return entries;
-    return entries.filter((e) => e.preview.toLowerCase().includes(needle));
+    return entries.filter((e) => e.plaintext?.toLowerCase().includes(needle) ?? false);
   }, [entries, search]);
 }
 
