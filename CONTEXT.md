@@ -110,14 +110,35 @@ _Avoid_: tray menu, panel, quick view
 
 **Main Window**:
 The full surface: history, pairings, devices, capture rules. The only place an
-entry can be read in full rather than merely picked. A phone presents its
-functions without a window.
+entry can be read in full rather than merely picked. A phone has no window and
+splits the same surface in two: the History Screen and the Settings Screen.
 _Avoid_: preferences, dashboard, console
+
+**History Screen**:
+The phone's first surface: the viewed pairing's history, with offer and recall
+as on-screen verbs.
+_Avoid_: main screen, home, feed
+
+**Settings Screen**:
+The phone's second surface: this phone's pairings, and what is true of the phone
+itself rather than of any one pairing. Reached only from the History Screen.
+_Avoid_: settings menu, preferences, pairings screen, about
 
 **Standing Actions**:
 The verbs a device exposes without being opened: offer the clipboard, recall the
 latest entry. Unlike the popover they show nothing and pick nothing.
 _Avoid_: quick actions, shortcuts, widget, tile
+
+**Receipt**:
+Confirmation that a verb did what was asked, needing nothing back. Transient,
+and the same whether the app was open or closed when the verb ran.
+_Avoid_: toast, snackbar, confirmation, success message
+
+**Notice**:
+A statement that something needs doing or knowing — a refusal, a warning, a
+consequence. Unlike a receipt it persists until dismissed, because it exists to
+be acted on.
+_Avoid_: alert, banner, error, message
 
 ### Distribution
 

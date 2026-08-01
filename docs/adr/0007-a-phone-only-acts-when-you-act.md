@@ -81,6 +81,13 @@ correct: `android:allowBackup` defaults to `true` and the iOS app container is
 included in iCloud backups by default, so an unexcluded cache would sync a plaintext
 clipboard history to Google Drive or iCloud.
 
+A later decision widens that last hole deliberately: the Android client stops redacting its
+own clipboard writes and draws a **Receipt** carrying the recalled Entry's Preview, so that
+a person can tell whether they got the right one. See
+[ADR 0009](0009-the-phone-shows-what-it-recalled.md). The rule opening this paragraph is
+untouched — the notification still previews nothing and is still secret. What moved is what
+is visible after the action fires, on a phone that is by construction already unlocked.
+
 ## Considered Options
 
 **An Android IME.** The default keyboard is the one app Android still lets watch the
