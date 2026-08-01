@@ -67,26 +67,29 @@ jobs:
             file "$lib"
             lipo -info "$lib"
             # The platform a slice was built for is not in `lipo -info`, and it
-            # is the thing that decides whether a simulator will load it.
-            otool -l "$(ar t "$lib" | head -1 >/dev/null; echo "$lib")" 2>/dev/null \
-              | grep -A4 LC_BUILD_VERSION | head -20 || true
+            # is what decides whether a simulator will load it: 2 is iOS, 7 is
+            # the iOS simulator.
+            otool -l "$lib" | grep -A3 LC_BUILD_VERSION | head -8
           done
 
       # Link 2. From the *built library*, never from the sources, which is what
       # makes a bindings/library mismatch impossible. Same rule the Android
       # build already follows.
       - name: Link 2 — Swift bindings from the built library
+        # `cargo metadata` runs in the working directory, and the workspace is
+        # `clients/`, not the repository root. The Android build resolves the
+        # same thing with `workingDir = rustWorkspace`.
+        working-directory: clients
         run: |
           set -euo pipefail
-          mkdir -p spike/generated
+          mkdir -p ../spike/generated
           cargo run \
-            --manifest-path clients/Cargo.toml \
             --quiet \
             -p sharepaste-ffi --features cli --bin uniffi-bindgen \
             -- generate --language swift --no-format \
-            --out-dir spike/generated \
-            clients/target/aarch64-apple-ios-sim/release/libsharepaste_ffi.a
-          ls -l spike/generated
+            --out-dir ../spike/generated \
+            target/aarch64-apple-ios-sim/release/libsharepaste_ffi.a
+          ls -l ../spike/generated
 
       - name: Link 3 — a minimal SwiftPM package, no xcframework and no xcodebuild
         run: |
