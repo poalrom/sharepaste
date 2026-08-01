@@ -7,6 +7,20 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.4.2
+
+**Desktop only.** One fix to the pairing screen. Nothing on Android changes.
+
+- **A pair code that runs out now hands you a new one.** The code stayed on screen after
+  its two minutes were up — square, digits and a clock reading 0:00 — under a red line
+  saying to generate a new one, with nothing on the panel that would. Closing the panel
+  and opening it again was the only way, and the line did not say so. The dead code is
+  now replaced by the news that it expired, naming the code so there is no doubt which
+  one, and a **New code** button that puts a live one up in its place.
+- **The two pairing panels no longer open on top of each other.** Opening *Add a pairing*
+  while a card's *+ Device* panel was up left both on screen showing the same code, the
+  second time under a heading naming no pairing.
+
 ## 0.4.1
 
 **Android only.** A freshly installed phone could not use its camera until the app was
