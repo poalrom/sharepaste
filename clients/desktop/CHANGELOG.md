@@ -7,6 +7,27 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.4.1
+
+**Android only.** A freshly installed phone could not use its camera until the app was
+closed and reopened, and the viewfinder was drawn over the rest of the pairing screen.
+Nothing on this machine changes.
+
+- **Granting camera access now works the moment you grant it.** The pairing screen asks
+  for the camera on first sight, and the answer used to arrive after the screen had
+  already written the refusal: "Sharepaste cannot use the camera" stayed there until the
+  app was closed and reopened. It now notices straight away, and it keeps noticing — turn
+  camera access on in Settings, come back, and the viewfinder is waiting. There is a
+  **Check again** button beside the refusal too, for anyone who would rather press
+  something than trust that.
+- **Scanning the code no longer needs the phone named first.** The square is the first
+  thing anyone points a phone at, so a scan used to fail on the empty name and spend a
+  code that is only good for two minutes on a message asking for it. A scan now fills the
+  pairing code in and puts the camera away; type the name and press Pair. Clear the code
+  field to scan a different one.
+- **The viewfinder stays inside its own frame.** It was painted over the step above it and
+  the code field below, hiding the two things you had to read.
+
 ## 0.4.0
 
 **Android only.** Nothing on this machine changes — no new desktop feature, no fix, no
