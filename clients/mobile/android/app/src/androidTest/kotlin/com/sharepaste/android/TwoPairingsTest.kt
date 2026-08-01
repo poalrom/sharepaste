@@ -10,6 +10,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.sharepaste.android.platform.AndroidKeychain
 import com.sharepaste.android.ui.Confirmation
 import com.sharepaste.android.ui.Notice
+import com.sharepaste.android.ui.Receipt
 import com.sharepaste.android.ui.Screen
 import com.sharepaste.android.ui.SessionPhase
 import com.sharepaste.android.ui.TAG_BACK_TO_HISTORY
@@ -141,12 +142,12 @@ class TwoPairingsTest {
         val offered = "offered-while-looking-elsewhere-${System.currentTimeMillis()}"
         phone.clip.putText(offered)
         compose.onNodeWithTag(TAG_OFFER).performClick()
-        phone.await("the Offer must be taken") { it.notice is Notice.Offered }
+        phone.awaitReceipt("the Offer must be taken") { it is Receipt.Offered }
 
-        // Polled, not read once. An Offer is *queued* when the notice appears;
-        // it reaches this cache only after the uploader has sent it and the
-        // session's own stream has brought it back. The list on screen cannot be
-        // the assertion either, because it belongs to the Pairing being viewed.
+        // Polled, not read once. An Offer is *queued* the moment its Receipt is
+        // shown; it reaches this cache only after the uploader has sent it and
+        // the session's own stream has brought it back. The list on screen cannot
+        // be the assertion either, because it belongs to the Pairing being viewed.
         awaitCached(synced, offered)
         val onTheViewedOne = runBlocking { phone.repo.listHistory(held) }
         assertTrue(
@@ -334,7 +335,7 @@ class TwoPairingsTest {
      * The state holder cannot answer this: `UiState.entries` belongs to the
      * Viewed Pairing, and the whole point of these tests is that the Pairing
      * being written to is not the one on screen. So the cache is asked directly,
-     * and asked repeatedly — an Offer is queued the moment the notice appears and
+     * and asked repeatedly — an Offer is queued the moment its Receipt is shown and
      * lands here only after the uploader and the session's own stream have been
      * round the loop.
      */

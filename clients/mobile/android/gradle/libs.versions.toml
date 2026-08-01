@@ -41,6 +41,12 @@ composeBom = "2026.06.01"
 activityCompose = "1.10.1"
 lifecycle = "2.10.0"
 camerax = "1.5.3"
+# The phone's own UI preferences — two booleans, in their own DataStore file.
+# Newest release whose `aar-metadata.properties` says `minCompileSdk=34`, so it
+# clears the `compileSdk 35` ceiling above with a version to spare. Its
+# transitive floors (kotlin-stdlib 2.0.21, kotlinx-coroutines 1.9.0) are both
+# below what this build already resolves, so it moves nothing else.
+datastore = "1.2.1"
 # Pure Java, one test-scoped dependency, zero `android.*` classes and no network
 # of its own. That last property is why it is here and ML Kit is not: ML Kit's
 # unbundled variant fetches models from Google, and ticket 13 has to prove this
@@ -82,6 +88,7 @@ androidx-camera-core = { module = "androidx.camera:camera-core", version.ref = "
 androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "camerax" }
 androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camerax" }
 androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
+datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 
 [plugins]

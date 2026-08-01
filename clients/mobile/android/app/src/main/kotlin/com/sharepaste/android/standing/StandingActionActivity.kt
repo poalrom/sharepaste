@@ -4,14 +4,16 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
-import android.widget.Toast
 import com.sharepaste.android.OfferAttempt
 import com.sharepaste.android.R
 import com.sharepaste.android.RecallAttempt
 import com.sharepaste.android.SharepasteApplication
 import com.sharepaste.android.SharepasteRepository
+import com.sharepaste.android.ui.Receipt
 import com.sharepaste.android.ui.offerRefusalLabel
 import com.sharepaste.android.ui.offerRefusalMessage
+import com.sharepaste.android.ui.receiptLogged
+import com.sharepaste.android.ui.showReceipt
 import com.sharepaste.core.AppException
 import com.sharepaste.core.OfferOutcome
 import kotlinx.coroutines.MainScope
@@ -125,10 +127,10 @@ class StandingActionActivity : Activity() {
             try {
                 when (action) {
                     StandingActions.ACTION_OFFER -> {
-                        val (said, queuedOn) = offer()
+                        val (receipt, queuedOn) = offer()
                         // Reported first: the person pressed a control and is
                         // owed an answer now, not when the network has finished.
-                        report(action, said)
+                        report(action, receipt)
                         // And then actually sent. `offer` only enqueues — the
                         // uploader lives on a session, which a phone with no
                         // screen open does not have, so without this "Offer
@@ -177,59 +179,62 @@ class StandingActionActivity : Activity() {
     /**
      * Offered Capture of whatever is on the clipboard now.
      *
-     * Answers the sentence to show, and — when there is one — the Pairing whose
+     * Answers the Receipt to show, and — when there is one — the Pairing whose
      * queue now has something in it. See [SharepasteRepository.sendPending] for
      * why that second half exists.
      */
-    private suspend fun offer(): Pair<Said, String?> = try {
+    private suspend fun offer(): Pair<Receipt, String?> = try {
         when (val attempt = repository.offerClipboard()) {
             OfferAttempt.Unpaired ->
-                Said(R.string.notice_not_paired, getString(R.string.action_unpaired)) to null
+                Receipt.Aloud(R.string.notice_not_paired, R.string.action_unpaired) to null
 
             is OfferAttempt.Settled -> when (val outcome = attempt.outcome) {
-                is OfferOutcome.Queued ->
-                    Said(R.string.notice_offered, getString(R.string.offer_queued)) to attempt.userId
+                is OfferOutcome.Queued -> Receipt.Offered(outcome.pending) to attempt.userId
                 // The same three sentences the screen uses, under the same three
                 // labels, from the same two functions. A refusal a person cannot
                 // act on is a control that did nothing.
-                is OfferOutcome.Rejected -> Said(
+                is OfferOutcome.Rejected -> Receipt.Aloud(
                     offerRefusalLabel(outcome.reason),
-                    getString(offerRefusalMessage(outcome.reason)),
+                    offerRefusalMessage(outcome.reason),
                 ) to null
             }
         }
     } catch (e: AppException) {
-        Said(R.string.notice_failed, getString(R.string.offer_failed)) to null
+        Receipt.Aloud(R.string.notice_failed, R.string.offer_failed) to null
     }
 
     /**
-     * The newest Entry onto this device's clipboard — and the cache fallback
-     * said out loud.
+     * The newest Entry onto this device's clipboard — what it was, and the cache
+     * fallback said out loud.
      *
      * Recall Latest always attempts the round trip. When the fetch fails, the
      * newest Entry this phone already had is still the best answer available,
-     * but it may be yesterday's link and only the person can tell. There is no
-     * screen here to put a band on, so the Toast is the surface that has to
-     * carry it — and it carries the same sentence the in-app band does, because
-     * it is the same fact.
+     * but it may be yesterday's link and only the person can tell. That one is
+     * [Notice.RecalledFromCache] on an open screen and reaches this surface as a
+     * [Receipt.Aloud] — a warning said out loud, never a confirmation, which is
+     * what keeps ADR 0007's "may never be silent" true of the switch below.
+     *
+     * The confirmation names the Entry's Preview, read back through the same
+     * [SharepasteRepository.previewOf] the state holder uses, so a Recall from
+     * here and a Recall from a row are one Receipt rather than two that resemble
+     * each other. A missing Preview is still a [Receipt.Recalled]: the outcome
+     * is the same and so is what silences it.
      */
-    private suspend fun recallLatest(): Said = try {
+    private suspend fun recallLatest(): Receipt = try {
         when (val attempt = repository.recallLatestOnActivePairing()) {
-            RecallAttempt.Unpaired -> Said(
-                R.string.notice_not_paired,
-                getString(R.string.action_unpaired),
-            )
+            RecallAttempt.Unpaired ->
+                Receipt.Aloud(R.string.notice_not_paired, R.string.action_unpaired)
 
             is RecallAttempt.Done -> if (attempt.fromCache) {
-                Said(R.string.recall_from_cache_badge, getString(R.string.recall_from_cache))
+                Receipt.Aloud(R.string.recall_from_cache_badge, R.string.recall_from_cache)
             } else {
-                Said(R.string.notice_recalled, getString(R.string.recall_done))
+                Receipt.Recalled(repository.previewOf(attempt.userId, attempt.entryId))
             }
         }
     } catch (e: AppException.NotFound) {
-        Said(R.string.notice_nothing_to_recall, getString(R.string.recall_nothing_to_recall))
+        Receipt.Aloud(R.string.notice_nothing_to_recall, R.string.recall_nothing_to_recall)
     } catch (e: AppException) {
-        Said(R.string.notice_failed, getString(R.string.recall_failed))
+        Receipt.Aloud(R.string.notice_failed, R.string.recall_failed)
     }
 
     /**
@@ -242,29 +247,27 @@ class StandingActionActivity : Activity() {
      * cache-fallback warning that is silently swallowed turns a correct
      * operation into a wrong one.
      *
-     * The Toast is the label and then the sentence, which is the same shape the
-     * History's own band draws — see [Said]. The **log line is the sentence
-     * alone**, and deliberately so: it is a contract with the acceptance
-     * sequence and with `StandingActionsNotificationTest`, which asserts that
-     * whatever this logs is one of the app's own sentences and nothing derived
-     * from an Entry.
+     * **The log line is never the Toast.** It is [receiptLogged], which for a
+     * Recall is the fixed sentence that names no Entry — see ADR 0009 for what
+     * the Toast is allowed to say and why a durable log is not allowed to say
+     * it. `StandingActionsNotificationTest` and the acceptance sequence both
+     * read this line expecting one of the app's own fixed sentences.
      *
      * The verb is passed in rather than read back off [getIntent], because
      * [intent] answers with whatever was delivered *most recently* — a second
      * press arriving while this one is still working would otherwise relabel
      * this line as the other verb.
-     *
-     * It names what happened and never what was in the Entry: neither verb has
-     * the plaintext to leak — `RecallAttempt` deliberately carries none — and
-     * this must stay true of anything added here.
      */
-    private fun report(action: String?, said: Said) {
-        Toast.makeText(
-            applicationContext,
-            "${getString(said.label)}\n${said.sentence}",
-            Toast.LENGTH_LONG,
-        ).show()
-        Log.i(StandingActions.TAG, "$action: ${said.sentence}")
+    private suspend fun report(action: String?, receipt: Receipt) {
+        // Suppressed whole, not merely stripped of its Preview: `SHOW WHAT WAS
+        // RECALLED` off means Sharepaste says nothing about a Recall on either
+        // path. The log line still goes, because it is a diagnostic rather than
+        // something the person is being told, and because the acceptance
+        // sequence reads it with the app force-stopped.
+        val silenced = receipt is Receipt.Recalled &&
+            !(application as SharepasteApplication).uiPreferences.showRecalledNow()
+        if (!silenced) showReceipt(this, receipt)
+        Log.i(StandingActions.TAG, "$action: ${getString(receiptLogged(receipt))}")
     }
 }
 

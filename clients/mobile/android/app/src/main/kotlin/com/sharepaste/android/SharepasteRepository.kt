@@ -363,6 +363,27 @@ class SharepasteRepository private constructor(
     }
 
     /**
+     * The Preview of one Entry, for a Recall that has to say what it handed over.
+     *
+     * [RecallAttempt.Done] carries no plaintext and must not start: the core has
+     * already put the text on the clipboard, and a secret nothing needs is a
+     * secret something logs. A Preview is a different thing — the facade's own
+     * one-line rendering, already normalised and capped, and the same string a
+     * History row shows — so a Recall Receipt reads it back by id instead.
+     *
+     * **Answers `null` rather than throwing, and that is the contract.** The
+     * Entry is on the clipboard by the time anyone asks; a failed read is a
+     * Receipt with less to say, never a Recall reported as a failure. Both
+     * callers used to make that judgement separately, which is one judgement
+     * more than there is.
+     */
+    suspend fun previewOf(userId: String, entryId: Long): String? = try {
+        listHistory(userId).firstOrNull { it.id == entryId }?.preview
+    } catch (e: AppException) {
+        null
+    }
+
+    /**
      * Release the facade and its runtime.
      *
      * The shipped app never calls this: the process dying *is* the teardown, and

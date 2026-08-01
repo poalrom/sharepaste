@@ -30,6 +30,27 @@ verb, named the way the reader's own keyboard is labelled (`CTRL+BKSP` on
 Windows, `⌘⌫` on a mac). `DEL` is gone in particular because it reads as the
 Delete key, which is not the binding.
 
+It reached the deferred disclosure too, in the end. The Android pairing flow
+carried `XCHACHA20-POLY1305` in a 34dp footer, put there on the strength of the
+sentence above — beside pairing, at the moment a Relay is
+being trusted. That footer is gone (`docs/android-redesign.md` §2). It went
+because `RELAY MUST BE HTTPS` shared the band and is inert on a phone, which
+never chooses a scheme: the scheme arrives inside the pairing code. A two-line
+band with one inert line is a band that reads as decoration, which is this
+record's own objection applied one step further than this record went.
+
+The residue has to be stated exactly, because it is not a clean win. The cipher
+is still disclosed — on each Pairing card, on the phone's Settings Screen and in
+the desktop's Pairings section, held there by `PairingsScreenTest`,
+`SettingsThatDoNotExistTest` and `PairingsSection.test.tsx`. What is gone is the
+**placement** this record asked for. A Pairing card describes a Relay already
+trusted; the footer stood at the moment of trusting one, which is the only
+moment the fact could inform a decision. So the disclosure survives in a weaker
+position than the sentence above specified. That is a consequence of the
+argument, not a reversal of it — but it is a cost, and anyone reinstating a
+footer should answer the inert second line first. The cipher was never the part
+of that band that failed.
+
 The rejections are the point of this record. The mock itself is not in the
 repository — it was reviewed from a local artifact — so nothing here can be
 recovered by looking at it later. Anyone who sees that mock, or its

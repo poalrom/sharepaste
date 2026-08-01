@@ -1,7 +1,9 @@
 # The phone shows what it recalled
 
-**Decided 2026-08-01, not yet built.** The decision is settled and the reasoning below
-holds; the Android client still sets the flag this record removes.
+**Decided 2026-08-01 and built on `fix-android-ux`.** The flag is gone:
+`AndroidClipboard.writeText` marks nothing, a Recall draws its own **Receipt** carrying the
+**Preview**, and `SHOW WHAT WAS RECALLED` on the Settings Screen silences it. The reasoning
+below is written against the state that prompted the decision and stands unchanged.
 
 `AndroidClipboard.writeText` marks every Recall with `ClipDescription.EXTRA_IS_SENSITIVE`,
 which is what Android tells all apps to do with sensitive content regardless of target SDK.

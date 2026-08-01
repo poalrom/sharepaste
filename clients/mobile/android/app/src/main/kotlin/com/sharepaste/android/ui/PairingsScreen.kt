@@ -1,29 +1,43 @@
 package com.sharepaste.android.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sharepaste.android.R
 import com.sharepaste.core.PairingSummary
 
 /**
- * Every Pairing this phone holds, and the settings a phone actually has.
+ * The phone's Settings: every Pairing it holds, and the little it can be told.
+ *
+ * **Titled `SETTINGS`, with the Pairings as a section of it.** `PAIRINGS` was
+ * honest while a Pairing was the only thing here; the moment the screen grew a
+ * preference of its own, a title naming one of its four sections sent anyone
+ * looking for a switch to a screen that does not exist. `Screen.Pairings` stays
+ * the enum case — this is an information-architecture change, not a routing one,
+ * and renaming the case would touch every call site to say nothing new.
  *
  * **Two distinctions, taken from the desktop rather than reinvented.** Exactly
  * one Pairing is the Active one: it is what this device syncs and captures to,
@@ -33,13 +47,11 @@ import com.sharepaste.core.PairingSummary
  * the History shows one Pairing while the device syncs another and nothing on
  * screen admits it.
  *
- * **The settings are thinner than the desktop's, and the screen says why.** A
- * phone never performs Watched Capture, so `capture_enabled` governs nothing
- * here; a phone has no frontmost-application identity, so a deny-list has nothing
- * to match. Both are inert rather than missing, and [PhoneSettings] states that
- * in the product's voice rather than leaving it to look like an omission. What
- * remains is on the cards: the Device Label this phone chose, clearing a History,
- * forgetting a Pairing, and the cipher disclosure ADR 0002 puts beside pairing.
+ * **The order is the cards, adding one, [ThisPhoneSection], [PhoneSettings].**
+ * The one live switch sits under a heading of its own rather than among the
+ * inert `N/A` chips, because a switch three lines above `WATCHED CAPTURE · N/A`
+ * makes the chips read as switches somebody stopped wiring up — which is the
+ * exact misreading the chips exist to prevent.
  */
 @Composable
 fun PairingsScreen(state: UiState, actions: AppActions, modifier: Modifier = Modifier) {
@@ -80,6 +92,8 @@ fun PairingsScreen(state: UiState, actions: AppActions, modifier: Modifier = Mod
             }
             item { AddPairingSection(actions.openAddPairing) }
             item { Hairline() }
+            item { ThisPhoneSection(state, actions) }
+            item { Hairline() }
             item { PhoneSettings() }
         }
     }
@@ -93,6 +107,13 @@ fun PairingsScreen(state: UiState, actions: AppActions, modifier: Modifier = Mod
  * Pairing on the desktop look like an account named after the computer. The
  * Device Label is a line *inside* the card, where it reads as what it is — what
  * this phone told the Relay to call itself.
+ *
+ * That address is the Relay's host and nothing else. The `user_id` used to lead
+ * it, and the argument for putting it back is that it is the only truly unique
+ * thing here — two Pairings can share a username. It stays out anyway: the
+ * subtitle is not the disambiguator, [ConfirmStrip] is, and that is where a
+ * choice with no way back gets spelled out. On the card the uuid bought nothing
+ * and cost the host, which ellipsised away behind it.
  *
  * A card that is not the Active one is *resting*, not faulty — see
  * [pairingPhase]. That is the whole reason [PairingStatus] exists rather than a
@@ -109,7 +130,7 @@ private fun PairingCard(
     val phase = pairingPhase(pairing, foreground)
     FuiPanel(
         title = pairing.username ?: pairing.userId,
-        code = "${pairing.userId} @ ${pairing.relayHost}",
+        code = pairing.relayHost,
         accent = if (toneOf(phase) == Tone.Fault) Accent.Alert else Accent.Emitter,
         modifier = Modifier.testTag(pairCardTag(pairing.userId)),
     ) {
@@ -139,7 +160,9 @@ private fun PairingCard(
             // The Device Label, shown and not editable. The Relay sets it once
             // at `POST /devices` and serves it from `GET /me`; there is no
             // rename route, so a local-only rename would show this phone one
-            // name and every other device another. See `settings_label_note`.
+            // name and every other device another. The rule itself is stated
+            // where a name is still being chosen — `pair_label_explainer`, on
+            // the pairing flow — not here, where only the result is on show.
             Text(
                 text = stringResource(R.string.pairings_this_phone, pairing.label),
                 style = Fui.Data,
@@ -306,7 +329,100 @@ private fun AddPairingSection(onAdd: () -> Unit) {
 }
 
 /**
- * The settings a phone has, and the reason the rest are not here.
+ * The one thing this phone can actually be told.
+ *
+ * A Recall reaches the clipboard whichever way the switch is set; all it decides
+ * is whether the Receipt names what arrived. That earns a control because the
+ * Receipt is the only part of a Recall legible to whoever is standing next to
+ * you — and it earns *only* this control. Silencing the Recall Receipt while the
+ * Offer's still speaks is the whole feature, so this is not a quiet mode and is
+ * not worded as one.
+ *
+ * Its own section rather than a row inside [PhoneSettings] — see this file's
+ * header for why a live switch may not stand next to the inert chips.
+ */
+@Composable
+private fun ThisPhoneSection(state: UiState, actions: AppActions) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.testTag(TAG_THIS_PHONE),
+    ) {
+        SectionHeading(stringResource(R.string.settings_this_phone_heading))
+        SettingSwitch(
+            label = stringResource(R.string.settings_show_recalled),
+            checked = state.showRecalled,
+            onCheckedChange = actions.setShowRecalled,
+            modifier = Modifier.testTag(TAG_SHOW_RECALLED),
+        )
+        // Not a [QuotedNote]: the rule down its left edge would cut the sentence
+        // away from the switch it explains, and two short sentences do not need
+        // an idiom built for prose a box would make look like an alert.
+        // `ADD ANOTHER PAIRING` states its own body exactly this way.
+        Text(
+            text = stringResource(R.string.settings_show_recalled_note),
+            style = Fui.Prose,
+            color = Fui.TextBody,
+            modifier = Modifier.testTag(TAG_SHOW_RECALLED_NOTE),
+        )
+    }
+}
+
+/**
+ * A preference, as a row: the word on the left, its state on the right.
+ *
+ * There is no Material `Switch` here and there is not going to be one. This
+ * screen's vocabulary is [FuiButton], [FuiBadge] and [FuiTag] — square-cornered
+ * borders over the void — and a filled pill with a circular thumb is the one
+ * shape in the palette that would announce it came from somewhere else. The
+ * thumb is a square for the same reason [StatusLight]'s lamp is: a HUD does not
+ * draw circles, and a small square survives a low-density screen that eats a
+ * small circle's edges.
+ *
+ * The whole row is the target, never the track. A 40dp track is under the 48dp
+ * floor on its own, and the label is what a thumb aims at anyway. `Role.Switch`
+ * is what makes a screen reader say "on" instead of describing a rectangle, and
+ * it is why this is `toggleable` rather than a [FuiButton] that flips a flag.
+ *
+ * Off drops the label to prose ink and never to [Fui.TextDim], which on this
+ * screen means inert: a preference that is switched off is still a preference,
+ * and the three chips below are the only thing here entitled to look disabled.
+ */
+@Composable
+private fun SettingSwitch(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = Fui.Target)
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = Fui.Label,
+            color = if (checked) Fui.TextEmitter else Fui.TextBody,
+            modifier = Modifier.weight(1f),
+        )
+        Box(
+            modifier = Modifier
+                .size(width = 40.dp, height = 22.dp)
+                .then(if (checked) Modifier.background(Fui.CyanA12) else Modifier)
+                .border(1.dp, if (checked) Fui.Frame else Fui.Inert)
+                .padding(3.dp),
+            contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart,
+        ) {
+            Box(Modifier.size(14.dp).background(if (checked) Fui.Cyan400 else Fui.Inert))
+        }
+    }
+}
+
+/**
+ * What this phone is, and why the computer's two switches are not here.
  *
  * Stated rather than left as a gap. Someone who knows the desktop will come
  * looking for the capture switch and the deny-list, and finding nothing is
@@ -319,10 +435,19 @@ private fun AddPairingSection(onAdd: () -> Unit) {
  * code at all (ADR 0008), so unlike a desktop it never asks an update source
  * anything and the Relay is the only counterparty it has.
  *
- * The Device Label rule belongs here for the same reason. It is display-only
- * because the Relay sets it once at `POST /devices` and has no rename route, so a
- * local rename would desync from what every other device sees: worse than not
- * offering one.
+ * **The foreground-only rule is stated here at full length, and permanently.**
+ * The History's band says the same thing, but `▴ CLOSE` retires it for good, and
+ * a fact that can be dismissed for good needs somewhere it cannot be — which has
+ * to be the section describing what this phone *is*. It reads above
+ * `settings_absent_note` because that note is the caption for the chips directly
+ * under it, and anything wedged between the two leaves three chips heading
+ * nothing.
+ *
+ * The Device Label note is deliberately gone. Its one load-bearing fact — that
+ * the Relay names a device once and has no rename route — now sits in
+ * `pair_label_explainer`, beside the field where a name is still being chosen. A
+ * rule stated where it can be acted on beats the same rule stated on the screen
+ * that only displays the result.
  */
 @Composable
 private fun PhoneSettings() {
@@ -332,8 +457,8 @@ private fun PhoneSettings() {
     ) {
         SectionHeading(stringResource(R.string.settings_heading))
         QuotedNote(
-            text = stringResource(R.string.settings_label_note),
-            modifier = Modifier.testTag(TAG_SETTINGS_LABEL_NOTE),
+            text = stringResource(R.string.foreground_only_note),
+            modifier = Modifier.testTag(TAG_SETTINGS_FOREGROUND_NOTE),
         )
         QuotedNote(
             text = stringResource(R.string.settings_absent_note),
@@ -355,8 +480,11 @@ const val TAG_PAIRINGS_SCREEN = "pairings-screen"
 const val TAG_PAIRINGS_LIST = "pairings-list"
 const val TAG_BACK_TO_HISTORY = "pairings-back"
 const val TAG_ADD_PAIRING = "pairings-add"
+const val TAG_THIS_PHONE = "this-phone"
+const val TAG_SHOW_RECALLED = "settings-show-recalled"
+const val TAG_SHOW_RECALLED_NOTE = "settings-show-recalled-note"
 const val TAG_PHONE_SETTINGS = "phone-settings"
-const val TAG_SETTINGS_LABEL_NOTE = "settings-label-note"
+const val TAG_SETTINGS_FOREGROUND_NOTE = "settings-foreground-note"
 const val TAG_SETTINGS_ABSENT_NOTE = "settings-absent-note"
 
 fun pairCardTag(userId: String) = "pair-$userId"

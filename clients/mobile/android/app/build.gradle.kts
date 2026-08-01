@@ -465,6 +465,10 @@ androidComponents {
 dependencies {
     implementation(libs.androidx.security.crypto)
     implementation(libs.kotlinx.coroutines.android)
+    // The phone's two UI preferences. Its own file, and deliberately not
+    // `AndroidKeychain`'s `EncryptedSharedPreferences`: that one is for the
+    // core's key material, and these two booleans reveal nothing.
+    implementation(libs.datastore.preferences)
     // `@aar`, not the plain jar: the jar carries no Android native payload and
     // fails at the first FFI call with an UnsatisfiedLinkError.
     implementation(variantOf(libs.jna) { artifactType("aar") })

@@ -86,10 +86,6 @@ import java.util.concurrent.Executors
  * a machine's guess at what someone calls their own phone is not a default, it is
  * a thing they have to notice and correct in a list they read later.
  *
- * The footer states the two facts a phone cannot discover for itself: the cipher
- * — ADR 0002 puts disclosure beside pairing, where the choice to trust a Relay
- * is being made — and this build's refusal of a cleartext Relay.
- *
  * The camera arrives through [scanner] rather than being reached for here, and the
  * permission it needs is watched further out still — see [rememberCameraAccess].
  * The screen's job is layout and wording, and it must be renderable from a
@@ -227,20 +223,6 @@ fun PairingScreen(
                 Failure(failed, onDismissFailure)
             }
         }
-
-        Hairline()
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(34.dp)
-                .background(Fui.Recess)
-                .padding(horizontal = Fui.Gutter),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(stringResource(R.string.cipher_disclosure), style = Fui.Micro, color = Fui.TextMuted)
-            Text(stringResource(R.string.relay_must_be_https), style = Fui.Micro, color = Fui.Amber400)
-        }
     }
 }
 
@@ -320,10 +302,11 @@ private fun Step(
 /**
  * The camera, framed and captioned.
  *
- * The caption says what to point it at, and the strip underneath states the
- * Relay's 120-second pairing slot as a rule rather than as a countdown — nothing
- * on this phone knows when the computer printed the code, so a running clock
- * here would be invented.
+ * The caption sits inside the frame, over the preview it describes, so the panel
+ * is the viewfinder and nothing else. How long a code lives is not stated here:
+ * this phone is the claimer and reads a shortcode carrying no timestamp, so it
+ * could only assert the rule, never count it down — and [PairAttempt.Failed]
+ * already says it in the one place it is actionable.
  */
 @Composable
 private fun Viewfinder(scanner: @Composable () -> Unit) {
@@ -352,15 +335,6 @@ private fun Viewfinder(scanner: @Composable () -> Unit) {
                 textAlign = TextAlign.Center,
                 modifier = Modifier.align(Alignment.Center).padding(horizontal = 24.dp),
             )
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Fui.Recess)
-                .padding(vertical = 6.dp),
-            horizontalArrangement = Arrangement.Center,
-        ) {
-            Text(stringResource(R.string.pair_code_ttl), style = Fui.Micro, color = Fui.Amber400)
         }
     }
 }

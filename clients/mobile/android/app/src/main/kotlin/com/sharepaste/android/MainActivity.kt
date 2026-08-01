@@ -11,11 +11,16 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.sharepaste.android.standing.StandingActions
 import com.sharepaste.android.ui.SharepasteApp
 import com.sharepaste.android.ui.SharepasteViewModel
 import com.sharepaste.android.ui.appActions
+import com.sharepaste.android.ui.showReceipt
+import kotlinx.coroutines.launch
 
 /**
  * The one activity, and the two edges that are the entire sync model.
@@ -72,6 +77,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val actions = appActions(model, enableStandingActions = ::enableStandingActions)
+        // A Receipt is a Toast rather than something in the Compose tree, so it
+        // is collected here and not composed. `STARTED` is the window: a
+        // confirmation for a verb pressed on this screen belongs on this screen,
+        // and one that arrived while the app was away has been superseded by
+        // whatever the person did since.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                model.receipts.collect { showReceipt(this@MainActivity, it) }
+            }
+        }
         setContent {
             val state by model.state.collectAsStateWithLifecycle()
             SharepasteApp(state, actions)

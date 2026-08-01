@@ -1,6 +1,7 @@
 package com.sharepaste.android.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,13 +14,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -27,6 +34,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,6 +56,8 @@ import com.sharepaste.core.Entry
  * so the two facts a puzzled person most needs were the first two to leave the
  * screen. Now the identity, Contact and the background policy are three fixed
  * bands — 112dp of them — and the eleventh row peeks under the verb bar instead.
+ * The third of them is the only one a person can be rid of, and only by
+ * acknowledging it: see [ForegroundOnlyNote].
  *
  * Contact is permanent rather than degraded-only, inverting the desktop's rule
  * (ADR 0002) rather than copying it: a phone is out of contact almost always, so
@@ -60,6 +71,8 @@ import com.sharepaste.core.Entry
  */
 @Composable
 fun HistoryScreen(state: UiState, actions: AppActions, modifier: Modifier = Modifier) {
+    val rows = rememberLazyListState()
+    NewestEntryStaysInView(entries = state.entries, rows = rows)
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -71,7 +84,11 @@ fun HistoryScreen(state: UiState, actions: AppActions, modifier: Modifier = Modi
         // Permanent, in every phase. A revoked token is the one that grows a
         // sentence and a way out of it.
         ContactReadout(state.session, onPairAgain = actions.openAddPairing)
-        ForegroundOnlyNote()
+        // The one band here a person can be rid of, and only by acknowledging
+        // it. Gone entirely rather than drawn empty, and nothing is lost with
+        // it: the sentence keeps its full length on the Settings Screen, so
+        // what leaves this screen is the reminder and not the disclosure.
+        if (!state.foregroundNoteDismissed) ForegroundOnlyNote(actions.dismissForegroundNote)
         // Beside the background policy, because they are the same kind of fact:
         // what this app will and will not do while you are not looking at it.
         // Only when the platform is actually refusing — a phone whose
@@ -94,7 +111,10 @@ fun HistoryScreen(state: UiState, actions: AppActions, modifier: Modifier = Modi
         }
         if (state.pending > 0) PendingReadout(state.pending)
 
-        LazyColumn(modifier = Modifier.weight(1f).testTag(TAG_HISTORY_LIST)) {
+        LazyColumn(
+            state = rows,
+            modifier = Modifier.weight(1f).testTag(TAG_HISTORY_LIST),
+        ) {
             if (state.entries.isEmpty()) {
                 item { EmptyHistory() }
             } else {
@@ -106,6 +126,49 @@ fun HistoryScreen(state: UiState, actions: AppActions, modifier: Modifier = Modi
 }
 
 /**
+ * The newest Entry is where it can be seen, the moment it arrives.
+ *
+ * Entries are prepended, so the newest is index 0 and the destination never
+ * changes — but the distance to it does. Everything above the list is chrome
+ * and four of those bands come and go: a pending queue, a divergence, a blocked
+ * notification and a notice can each be there or not, and each one pushes the
+ * row `RECALL LATEST` will hand over further under the top of the viewport.
+ * Retiring the two confirmation banners recovered most of that height and none
+ * of the guarantee, which is why this exists as well and not instead.
+ *
+ * **An arrival is a new head with the old head still under it**, which is a
+ * narrower question than either "the head changed" or "the list grew" and is the
+ * only one that means what this is for. Deleting the newest row changes the head
+ * too, and so does switching the Viewed Pairing; scrolling somebody to the top
+ * because they removed a row, or because they are now looking at a list they
+ * have not read a word of, is not a courtesy. Both of those lose the old head,
+ * and a prepend is exactly the case that keeps it.
+ *
+ * [seen] is what makes the comparison possible across recompositions. It is
+ * `rememberSaveable`, so a rotation restores it beside the [LazyListState]'s own
+ * restored offset, and the effect that necessarily re-runs against the new
+ * composition finds the head already accounted for and leaves the person where
+ * they were reading. The first population jumps rather than animates: an empty
+ * list is already at index 0, and an animation from nowhere to nowhere is a
+ * movement nobody asked for.
+ */
+@Composable
+private fun NewestEntryStaysInView(entries: List<Entry>, rows: LazyListState) {
+    val newest = entries.firstOrNull()?.id
+    var seen by rememberSaveable { mutableStateOf<Long?>(null) }
+    LaunchedEffect(newest) {
+        if (newest != null && newest != seen) {
+            if (seen == null) {
+                rows.scrollToItem(0)
+            } else if (entries.any { it.id == seen }) {
+                rows.animateScrollToItem(0)
+            }
+        }
+        seen = newest
+    }
+}
+
+/**
  * Who this phone is, and the only door off this screen.
  *
  * The identity is the **Viewed** Pairing rather than the Active one, because it
@@ -113,6 +176,15 @@ fun HistoryScreen(state: UiState, actions: AppActions, modifier: Modifier = Modi
  * differ the badge says so here as well as in [DivergenceBand] — the band
  * explains, this states, and a person who has scrolled the band out of a long
  * History still has the fact in front of them.
+ *
+ * The User slot holds the **username or nothing at all**, never the `user_id`.
+ * Until the Relay's `/me` mirror answers there is no name, and the id is a
+ * 36-character uuid: it fills the line, pushes the Relay host off the end of it
+ * and tells the person nothing they could act on or recognise. An ellipsis is
+ * one glyph wide and says the true thing, which is that the name is not known
+ * yet. [UiState.nameOf] still falls back to the id and that is not an
+ * inconsistency — it names a Pairing inside a sentence, where an ellipsis would
+ * name nothing.
  */
 @Composable
 private fun IdentityBand(state: UiState, actions: AppActions) {
@@ -137,7 +209,7 @@ private fun IdentityBand(state: UiState, actions: AppActions) {
                     Text(
                         text = stringResource(
                             R.string.history_identity,
-                            viewed.username ?: viewed.userId,
+                            viewed.username ?: stringResource(R.string.history_identity_unknown),
                             viewed.relayHost,
                         ),
                         style = Fui.Data,
@@ -263,7 +335,22 @@ private fun EntryRow(
         state = swipe,
         enableDismissFromStartToEnd = false,
         onDismiss = { onDelete(entry) },
-        backgroundContent = { DeleteBehindTheRow(entry) },
+        backgroundContent = {
+            DeleteBehindTheRow(
+                entry = entry,
+                // A control exactly while it is uncovered, and the reason is
+                // hit-testing rather than taste. `SwipeToDismissBox` composes
+                // this panel under the row on every frame, and an opaque
+                // background is not a pointer target: a tap landing where the
+                // row holds no button falls straight through to whatever is
+                // behind it. A panel that were clickable at rest would put an
+                // undoable Delete under most of every row — the two targets a
+                // thumb apart that the swipe was introduced to remove, only now
+                // one of them is invisible.
+                uncovered = swipe.dismissDirection == SwipeToDismissBoxValue.EndToStart,
+                onDelete = onDelete,
+            )
+        },
         modifier = Modifier.testTag(entryRowTag(entry.id)),
     ) {
         // Two layers, not one: the emitter's tint is 12% alpha and the delete
@@ -337,9 +424,24 @@ private fun EntryRow(
     }
 }
 
-/** What the swipe uncovers. */
+/**
+ * What the swipe uncovers, and what it arms.
+ *
+ * The panel *is* the delete rather than a picture of one: the drag exposes it
+ * and a press on it fires. That second half was missing, and its absence was
+ * the worst version of the guard — a `✕ DELETE` shown to somebody who has just
+ * discovered the gesture, which then answers a press with nothing. A control
+ * that appears and does not work does not teach the gesture, it teaches that
+ * the row is broken.
+ *
+ * A completed swipe still deletes on its own, through the box's `onDismiss`,
+ * and both routes call the same [onDelete]. So dragging all the way and
+ * dragging then tapping are one outcome rather than two behaviours to learn —
+ * and [uncovered] is what keeps the guard, because a Delete that is only a
+ * control while a finger is holding it open cannot be reached by accident.
+ */
 @Composable
-private fun DeleteBehindTheRow(entry: Entry) {
+private fun DeleteBehindTheRow(entry: Entry, uncovered: Boolean, onDelete: (Entry) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -351,11 +453,20 @@ private fun DeleteBehindTheRow(entry: Entry) {
             modifier = Modifier
                 .width(96.dp)
                 .fillMaxHeight()
+                .clickable(enabled = uncovered, role = Role.Button) { onDelete(entry) }
                 .testTag(entryDeleteTag(entry.id)),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Text("✕", style = Fui.Glyph, color = Fui.OnEmitter)
+            // The glyph is a picture of the verb and the word under it is the
+            // verb's name, so only one of the two is worth reading out. Same
+            // correction, same reason, as [GlyphButton].
+            Text(
+                text = "✕",
+                style = Fui.Glyph,
+                color = Fui.OnEmitter,
+                modifier = Modifier.clearAndSetSemantics {},
+            )
             Text(stringResource(R.string.entry_delete), style = Fui.Micro, color = Fui.OnEmitter)
         }
     }

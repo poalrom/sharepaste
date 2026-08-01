@@ -31,10 +31,10 @@ Vocabulary is fixed by [`CONTEXT.md`](../CONTEXT.md): **User**, **Device**,
 | 3 | **Contact is permanent chrome**, inverting ADR 0002 rather than copying it | "Not in contact" is the nominal reading on a phone (ADR 0007) |
 | 4 | **The foreground-only fact is pinned chrome**, clipped to one line with `WHY ▸` | It was the list's first item, so it was the first thing to scroll away |
 | 5 | **Recall Latest outranks Offer**: solid, first, `1.6f` against `1f` | It is the verb that must never hand over something stale |
-| 6 | **One target per Entry row; Delete is a swipe** | Two word-buttons was 20 targets a screen, destructive beside safe |
+| 6 | **One target per Entry row at rest; the swipe arms a real Delete** | Two word-buttons was 20 targets a screen, destructive beside safe. "At rest" is enforced rather than assumed — §3 |
 | 7 | **An Undecryptable row keeps both controls inline** | Recall disabled-not-hidden; Delete is the only thing left to do with it |
 | 8 | **Erasures are confirmed inside the card**, never in a dialog | The scope stays on screen while the choice is made |
-| 9 | **Three N/A chips** for the settings a phone does not have | A missing switch and an unbuilt screen look identical without them |
+| 9 | **Three N/A chips** for the settings a phone does not have | A missing switch and an unbuilt screen look identical without them. The phone's one live switch sits under its own `THIS PHONE` heading so the chips are not read as switches nobody finished wiring |
 | 10 | **Insets are applied once, at the app root** | Android 15 draws edge to edge whether or not the app asked |
 | 11 | **No vendored fonts** | Same call as the desktop: Share Tech Mono's `0/O` and `1/l` are wrong for `ss://` URLs |
 | 12 | **No light scheme** | A HUD is emitted light on a void; a light rendering is a different design and a second audit |
@@ -67,24 +67,41 @@ different arrow on a good device and to a tofu box on a thin one, so the row use
 
 ```
 ┌ 52dp  identity ── SHAREPASTE / user @ relay host ──── [SHOWING] ── ◎ ─┐
+│       (the User is … until the Relay’s /me mirror answers)           │
 ├ 30dp  Contact ─── ▪ IN CONTACT WITH THE RELAY ── scanlines ──────────┤
 ├ 30dp  policy ──── ⌾ NOTHING ARRIVES WHILE THIS IS CLOSED ── [WHY ▸] ─┤
-│       (open: the verbatim sentence + four NO-… chips)                │
+│       (open: the sentence + four NO-… chips + ▴ CLOSE)               │
+│       (▴ CLOSE: gone for good; the 30dp goes to the list)            │
 ├─ conditional bands, each its own colour rule ────────────────────────┤
-│  standing actions unreachable · notice · divergence · pending        │
-├─ LazyColumn, 68dp rows ──────────────────────────────────────────────┤
+│  standing actions off · notice · divergence · pending                │
+├─ LazyColumn, 68dp rows, scrolled to index 0 on a new Entry ──────────┤
 │  preview (mono 14sp, one line)                              [ ↓ ]    │
 │  FROM MBP-14  (only when the Origin is another Device)               │
-│  ← swipe reveals a 96dp alert panel: ✕ DELETE                        │
+│  ← swipe arms a 96dp alert panel: ✕ DELETE — a press fires it        │
 │  Undecryptable: alert tint, left rule, ⊘ marker, [↓ off] [✕]         │
 ├ 48dp  verbs ───── [ RECALL LATEST solid 1.6f ] [ OFFER 1f ] ─────────┤
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-112dp of chrome, fixed. The pairing flow and the Pairings screen share the
-52dp `TitleBand`; the pairing flow adds a 34dp footer carrying
-`XCHACHA20-POLY1305` and `RELAY MUST BE HTTPS` — the two facts a phone cannot
-discover for itself, beside the moment a Relay is being trusted (ADR 0002).
+112dp of chrome at first run, and 82dp once the policy band has been
+acknowledged. That band is the only piece of the fixed chrome a person can
+retire, and it retires permanently rather than per session — which is only
+defensible because the sentence itself is not lost with it (§3, §4).
+
+The pairing flow and the Settings Screen share the 52dp `TitleBand`, and that is
+now all they share. The pairing flow's 34dp footer is gone whole.
+`RELAY MUST BE HTTPS` was inert on a phone: the scheme arrives inside the
+pairing code and is never chosen here, so the line stated a rule about a choice
+the reader does not make. `XCHACHA20-POLY1305` went with the band that carried
+it.
+
+**The cipher half of that is a real loss and is recorded as one.** ADR 0002 cut
+the popover's cipher badge as decoration that resembles information, and held
+that if the cipher is ever disclosed it belongs beside pairing — at the one
+moment a Relay is being trusted. It is no longer disclosed there. On the phone
+it survives only on the Settings Screen's Pairing card, where it describes a
+Relay already trusted rather than one being trusted. That is a weaker placement
+than ADR 0002 asked for, and it is what deleting the band cost.
 
 ---
 
@@ -99,8 +116,17 @@ whenever nothing was wrong would be grey almost always and read as a warning.
 **The foreground-only note.** Was the list's second item, and therefore the
 second thing to leave the screen. Now one clipped amber line in chrome with the
 verbatim sentence and four `NO …` chips one tap behind `WHY ▸`. The open/closed
-choice is `rememberSaveable`, not a field on `UiState`: it changes nothing about
-the phone.
+choice is `rememberSaveable`, not a field on `UiState`: expanding is exploration
+and changes nothing about the phone.
+
+Dismissal is the opposite kind of act, so it is owned in the opposite place.
+`▴ CLOSE` is an acknowledgement — it goes out to the preference store and the
+band does not come back, across a force-stop. That is only allowable because
+nothing is lost with it: the sentence reads at full length on the Settings
+Screen, under the heading that says what this phone *is*. And expanding
+deliberately does not dismiss, because §6 made the whole 30dp band the tap
+target: one tap fewer is not worth a stray tap silently retiring the app's most
+important disclosure.
 
 **The verb bar.** Two equal outlines were truthful about their symmetry in the
 code and mute about which one a person reaches for — and left the screen without
@@ -109,9 +135,26 @@ a single emitter. Recall Latest is now the solid one and comes first.
 **The Entry row.** Preview, and an Origin line only when the Entry came from
 another Device. One 48dp Recall target. Delete is a left swipe onto a 96dp alert
 panel, which is the guard the desktop's unguarded `✕` never had: a delete fans
-out over SSE to every paired device and cannot be undone. The swipe **asks** and
-springs back — the list is the source of truth, so a delete the Relay refuses
-does not hide a row that is still there.
+out over SSE to every paired device and cannot be undone.
+
+**The swipe asks, and springs back — and the panel it uncovers now answers.**
+The panel is the delete rather than a picture of one: a press on it fires the
+same `onDelete` a completed drag fires, so dragging all the way and dragging
+then tapping are one outcome instead of two behaviours to learn. Drawing a
+control that did nothing was the worst available reading of the gesture — it
+taught the swipe and then refused the obvious next move, to somebody who had
+that instant discovered it. The row still springs back either way, because the
+list is the source of truth: a delete the Relay refuses must not hide a row that
+is still there.
+
+"One target at rest" survives that, and it is enforced rather than assumed.
+`SwipeToDismissBox` composes the background under the row on **every** frame,
+and an opaque colour is not a pointer target — a press where the row holds no
+button falls straight through to the panel behind it. So the panel is a control
+exactly while `swipe.dismissDirection == EndToStart`. Without that condition
+every row would carry an undoable Delete under most of its width: the two
+targets a thumb apart that decision 6 exists to remove, only now one of them
+invisible. The arming *is* the guard.
 
 **The newest row is drawn as the emitter's**: a 2dp cyan rule, the emitter's own
 tint, a brighter Preview and a filled 96dp `RECALL` in place of the glyph. That
@@ -119,33 +162,86 @@ is the row `RECALL LATEST` will hand over, and the bar's whole argument — that
 Recall is the verb that must never hand over something stale — needs the list to
 say which row it means.
 
-**The Pairing card.** Headed by the **User** and `user_id @ relay host`, never by
-this machine's Device Label — the desktop's mistake, and the card is where it was
-made. The Device Label is a line inside it. Exactly one card carries `SYNCING`;
+**The Pairing card.** Headed by the **User**, never by this machine's Device
+Label — the desktop's mistake, and the card is where it was made. The subtitle
+under that heading is the relay host alone. The `user_id` used to lead it, and
+the argument for keeping it is that it is the only strictly unique thing here:
+two Pairings can share a username. It goes anyway, because the subtitle is not
+the disambiguator — the `ConfirmStrip` is, and a choice with no way back is
+where naming the User *and* the Relay earns its space. On the card the uuid
+bought nothing and cost the host, which ellipsised away behind it. The Device
+Label is a line inside the card. Exactly one card carries `SYNCING`;
 `SHOWING` moves independently. An erase is armed inside the card with a
 `CANNOT BE UNDONE` badge, the sentence naming the User *and* the Relay, and
 `KEEP IT` / the destructive verb — the destructive one solid, because the person
 already asked for it and the strip exists to make them read what it costs.
 
-**Settings.** Two quoted notes at full length plus `WATCHED CAPTURE · N/A`,
-`DENY-LIST · N/A` and `UPDATE CHECK · NONE`. The third is the one the desktop
-cannot show: a phone carries no update code at all (ADR 0008), so the Relay is
-its only counterparty.
+**Settings.** The screen is titled `SETTINGS`, and the Pairings are a section of
+it. `PAIRINGS` was honest while a Pairing was the only thing here; the moment
+the screen grew a preference of its own, a title naming one of its four sections
+sent anyone looking for a switch to a screen that does not exist. `Screen.Pairings`
+and the `pairings_` string keys stay as they are: this is an information
+architecture change, not a routing one, and renaming a symbol nobody reads so it
+agrees with a title is churn dressed as tidiness.
 
-**Notices.** Each now carries a label naming the outcome — `OFFERED`,
-`RECALLED`, `NOT PAIRED`, `MAY BE STALE`, and one per reachable refusal
-(`NOTHING TO SEND`, `TOO BIG · 64 KB CAP`, `ALREADY HERE`). They are the same
-labels the invisible activity and the share target now put above the same
-sentences in their Toasts, because a Standing Action and an in-app press are the
-same operation and reporting it in two idioms would make them look like two.
-**The log line those two write is still the bare sentence**, which is a contract
-with `StandingActionsNotificationTest` and with the acceptance sequence.
+Four sections, in order: the Pairing cards, `ADD ANOTHER PAIRING`, `THIS PHONE`,
+`ABOUT THIS PHONE`. `THIS PHONE` holds the only thing this phone can be told —
+*show what was recalled* (ADR 0009) — and holds it alone. That separation is
+decision 9 still doing its work: a live switch three lines above
+`WATCHED CAPTURE · N/A` makes the chips read as switches somebody stopped wiring
+up, which is the exact misreading the chips exist to prevent. Kept apart, under
+a heading about what the phone *is* rather than about what it can do,
+`WATCHED CAPTURE · N/A`, `DENY-LIST · N/A` and `UPDATE CHECK · NONE` still read
+as absences with reasons. The third is the one the desktop cannot show: a phone
+carries no update code at all (ADR 0008), so the Relay is its only counterparty.
 
-Only the stale Recall tints its whole band: it is the only notice about *what is
-now on the clipboard* rather than about what the app just did. A refusal is ruled
-down its left edge instead, in the colour of what to do about it — amber for the
-two that need something done, inert for `ALREADY HERE`, which is the app working
-correctly and costs the person nothing.
+`ABOUT THIS PHONE` still carries two quoted notes at full length, but not the
+same two. The Device Label note is gone and the foreground-only sentence has its
+place — a fact the History Screen lets a person retire for good needs exactly
+one surface where they cannot (§4).
+
+**Receipts and Notices.** What the app says after a verb is split by **outcome
+kind**, and the two idioms are the distinction rather than an inconsistency.
+
+A **Receipt** confirms that a verb did what was asked and needs nothing back, so
+it does not wait: a Toast, the label over the sentence, `LENGTH_LONG` because a
+Preview is a line of text somebody has to read rather than a tick to glance at.
+A **Notice** says something needs doing or knowing, so it takes the band and
+stays until it is dismissed. `Offered` and `Recalled` are Receipts. Six outcomes
+keep the band — `OfferRefused`, `RecalledFromCache`, `Unpaired`,
+`HistoryCleared`, `PairingForgotten`, `Failed` — and each still carries a label
+naming the outcome: `NOT PAIRED`, `MAY BE STALE`, `CLEARED`, `FORGOTTEN`,
+`DID NOT WORK`, and one per reachable refusal (`NOTHING TO SEND`,
+`TOO BIG · 64 KB CAP`, `ALREADY HERE`).
+
+The argument that used to sit here was about the **invocation path**: a Standing
+Action and an in-app press are the same operation, and reporting it in two
+idioms would make it look like two. That is still true, and it is now enforced
+by the shape instead of by matching labels. `standing/Said.kt` is deleted; both
+paths build one `Receipt` through one function, so "a Recall from the
+notification and a Recall from the row produce an identical Receipt" is a fact
+about one function rather than a claim about two. What the two idioms
+distinguish is no longer *who called* but *what kind of thing happened*.
+
+`RecalledFromCache` is the variant that proves the line is real. It looks
+exactly like a confirmation — a Recall, done — and it is not one, because
+ADR 0007 says it may never be silent. One outcome type rendered two ways would
+have permitted it into something that vanishes while unread; two types make that
+unrepresentable. It also stays the one Notice that tints its whole band: it is
+the only one about *what is now on the clipboard* rather than about what the app
+just did. A refusal is ruled down its left edge instead, in the colour of what
+to do about it — amber for the two that need something done, inert for
+`ALREADY HERE`, which is the app working correctly and costs the person nothing.
+
+**Only the Recall Receipt names an Entry**, and only while the `THIS PHONE`
+switch allows it. The Offer Receipt does not: the person supplied that content a
+second ago, and only Recall hands back something they did not choose (ADR 0009).
+**The log line names none**, on either path. `receiptLogged` is a separate,
+preview-free sentence from the one the Toast draws, because a Toast is transient
+and aimed at the person who just pressed the control, while a log is durable and
+readable by anything holding `READ_LOGS` or a cable. That asymmetry is a
+contract with `StandingActionsNotificationTest` and with the acceptance
+sequence.
 
 ---
 
@@ -158,9 +254,26 @@ greppable and no locale's casing rules are in the loop.
 * **Capitals** for chrome, controls and telemetry.
 * **Sentence case, at full length**, for anything the app has to explain. The
   load-bearing ones are unchanged: `foreground_only_note`, `recall_from_cache`,
-  `standing_actions_blocked`, `pairings_forget_confirm`, `pairings_clear_confirm`,
-  `settings_label_note`, `settings_absent_note`, the three offer refusals and the
-  two camera failures.
+  `pairings_forget_confirm`, `pairings_clear_confirm`, `settings_absent_note`,
+  the three offer refusals and the two camera failures.
+
+Two strings left that list, and neither for the sake of being shorter.
+
+`standing_actions_blocked` was rewritten to lead with what is gained rather than
+with what is missing, and its heading went from `STANDING ACTIONS · UNREACHABLE`
+to `STANDING ACTIONS · OFF`. The band appears because a person switched
+notifications off, which is a choice they made; naming their choice a fault is
+both wrong and unpersuasive. `OFF` is what is true, and the sentence now says
+what allowing them would buy instead of what refusing them has broken.
+
+`settings_label_note` is gone from the Settings Screen entirely. It carried one
+load-bearing fact — the Relay names a device once at `POST /devices` and has no
+rename route — and it carried it on the screen that only displays the result.
+That fact now sits inside `pair_label_explainer`, beside the field where a name
+is still being chosen and can still be chosen differently. A rule stated where
+it can be acted on beats the same rule stated where it cannot, and the slot it
+vacated went to the foreground-only sentence, which is the one that must never
+become unreachable.
 
 Three splits worth knowing about:
 
@@ -180,7 +293,10 @@ and `REFUSED · FLAGGED SENSITIVE`; the app also has notices for a cleared
 History, a forgotten Pairing and a failure, and leaving those three unlabelled
 beside seven labelled ones would have been the inconsistency the labels exist to
 remove. `CLEARED`, `FORGOTTEN`, `DID NOT WORK`, `DID NOT PAIR` and
-`NOTHING TO RECALL` are that extension, in the same voice.
+`NOTHING TO RECALL` are that extension, in the same voice. The register itself
+survived the Receipt/Notice split intact and now spans both idioms: `OFFERED`
+and `RECALLED` head a Toast, the rest head a band, and a label means the same
+thing either way — the outcome, in a word, over the sentence that explains it.
 
 ---
 
@@ -191,9 +307,18 @@ remove. `CLEARED`, `FORGOTTEN`, `DID NOT WORK`, `DID NOT PAIR` and
   facade exposes only a count — so drawing rows for them would mean widening the
   facade to make a design read. The band and its readout say the same thing
   truthfully.
-* **A running `02:00` countdown** under the viewfinder. Nothing on this phone
-  knows when the computer printed the code, so the strip states the Relay's
-  120-second slot as a rule: `CODES EXPIRE AFTER 02:00`.
+* **A running `02:00` countdown** under the viewfinder — and, in the end, the
+  strip that replaced it. The reasoning was right the first time and simply had
+  further to go. This phone is the claimer: it reads a shortcode carrying no
+  timestamp, and nothing in the protocol tells it when the computer printed one,
+  so a clock here would be invented. What went up instead was
+  `CODES EXPIRE AFTER 02:00` — a rule rather than a countdown. But a rule is
+  precisely what a person cannot act on while pointing a camera at a square, and
+  the fact is already delivered where they can act on it, in the `DID NOT PAIR`
+  sentence at the moment a code has actually gone stale. So the strip is cut
+  too. Restoring either means widening the QR payload or the wire protocol to
+  carry `expires_at` to the claimer, and would still leave a typed code without
+  one.
 * **The animated scan sweep** in the viewfinder. That rectangle holds a live
   camera preview in the real app; the mock's sweep is a stand-in for it.
 * **The pulse** the mock puts on two status lights (`RELAY REFUSED THIS PHONE`
@@ -219,9 +344,13 @@ Every tag survived. What changed:
 * `ContactReadoutTest` — the note is clipped until asked, so the test now asserts
   the pinned line, presses `TAG_FOREGROUND_WHY`, and asserts the verbatim
   sentence. Stronger than before: the fact is reachable from any scroll position.
-* `HistoryListTest` — asserts the pending sentence *and* its readout, and gains
-  `a_readable_entry_is_deleted_by_a_swipe_and_not_by_a_tap`, which presses where
-  the delete panel sits (nothing happens) and then swipes (it is asked for).
+* `HistoryListTest` — asserts the pending sentence *and* its readout, and covers
+  the swipe in two cases rather than one, because there are now two routes to
+  one delete. `the_delete_panel_is_a_control_only_while_the_swipe_holds_it_open`
+  presses where the panel sits on an un-swiped row (nothing happens), then holds
+  the drag open and presses again (the delete is asked for);
+  `a_completed_swipe_still_deletes_the_entry_on_its_own` keeps the drag-all-the-way
+  route honest. Two routes, one `onDelete`, and the guard is the arming.
 * `PairingsScreenTest`, `PendingOnANonActivePairingTest` — the card's queue reads
   `pairings_pending`.
 * `PairingMessagesTest` — the failure sits under the button that failed, at the
@@ -230,7 +359,7 @@ Every tag survived. What changed:
   and `assertTextEquals` gets a sentence instead of a list of children.
 
 Two accessibility changes came out of review rather than out of the mock, and
-neither has a test yet. Every glyph control — Recall on a row, the Pairings
+neither has a test yet. Every glyph control — Recall on a row, the Settings
 door, the Undecryptable `✕`, the back arrow — now carries a real
 `contentDescription` and `Role.Button`, with the glyph's own semantics cleared,
 so a screen reader reads "Recall" rather than "↓". And the background-policy
@@ -241,6 +370,11 @@ landing.
 ---
 
 ## 7. Verification
+
+> §7 records the redesign's own verification pass, on the build §§1–6 describe.
+> The `fix-android-ux` branch changed the History Screen, the Settings Screen
+> and the pairing flow afterwards and is verified on its own terms; the counts
+> and the screen names below are the ones that were true then.
 
 1. `:app:compileDebugKotlin`, `:app:testDebugUnitTest` — clean, no warnings.
 2. `:app:connectedDebugAndroidTest` on `spike35` against the `docker compose`
@@ -261,13 +395,22 @@ landing.
 
 ## 8. Risks
 
-* **The swipe is undiscoverable.** Nothing on a row says a Delete exists. That is
-  the trade the guard buys, and an Undecryptable row — the one a person most
-  wants gone — keeps its `✕` inline for exactly that reason.
-* **The chrome can crowd the list.** With a notice, a divergence band, a pending
-  band and the blocked-notification note all up at once, the `LazyColumn` gets
-  the remainder of the screen. Every one of those is transient except the last,
-  which appears only when notifications are switched off.
+* **The swipe is undiscoverable.** Nothing on a row says a Delete exists. **This
+  risk survives unchanged.** Making the revealed panel a real button made the
+  gesture's reward honest; it did nothing to make the gesture findable, and no
+  work since has been aimed at that. It is still the trade the guard buys, and
+  an Undecryptable row — the one a person most wants gone — still keeps its `✕`
+  inline for exactly that reason.
+* **The chrome can crowd the list.** Partly retired, and it is worth being
+  precise about which part. Two of the things that could stack up there no
+  longer can: a plain Offer and a plain Recall are Receipts and never occupy
+  chrome at all, and the foreground-only band can be dismissed for good. A
+  Notice, a divergence band, a pending band and the notifications-off note can
+  still take the top of the screen together. What changed is that height is no
+  longer the only mitigation — the `LazyColumn` scrolls to index 0 when an Entry
+  arrives, so the row `RECALL LATEST` will hand over is visible however much
+  chrome is above it. What is left of the risk is the rest of the list, not its
+  head.
 * **`Fui.kt` and `styles.css` are two copies of one palette.** Nothing checks
   that they agree. The ratios are in comments on both sides; a token changed on
   one client and not the other is a silent divergence.

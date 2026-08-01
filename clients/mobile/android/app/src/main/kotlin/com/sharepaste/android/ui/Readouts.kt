@@ -225,11 +225,18 @@ fun DivergenceBand(
  * What the last thing the person asked for did.
  *
  * One `when` over [Notice], so an outcome added without words for it does not
- * compile. Each carries a label naming the outcome and then the sentence —
- * **the same four labels the invisible activity shows** over whatever a person
- * was already doing, because a Standing Action and a press on this screen are
- * the same operation and reporting it in two idioms would make them look like
- * two.
+ * compile. Each carries a label naming the outcome and then the sentence, which
+ * is the shape a [Receipt]'s Toast draws too: a Standing Action and a press on
+ * this screen are the same operation, and reporting one of them in two idioms
+ * would make them look like two.
+ *
+ * **Six outcomes reach this band, and the two that no longer do are the point.**
+ * A plain Offer and a plain Recall confirm and need nothing back, so they are
+ * [Receipt]s and go past as a Toast. What is left here all needs something done
+ * or known, which is what earns a container that waits to be dismissed — and it
+ * is why this band is never the report of a verb that simply worked. Chrome
+ * that only ever appears with something in it is chrome nobody has to learn to
+ * ignore.
  *
  * [Notice.RecalledFromCache] is the only one that tints its whole band, and that
  * is not decoration: every other notice is a statement about something the
@@ -247,9 +254,7 @@ fun DivergenceBand(
 fun NoticeBanner(notice: Notice, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
     val stale = notice is Notice.RecalledFromCache
     val label = when (notice) {
-        is Notice.Offered -> R.string.notice_offered
         is Notice.OfferRefused -> offerRefusalLabel(notice.reason)
-        Notice.Recalled -> R.string.notice_recalled
         Notice.RecalledFromCache -> R.string.recall_from_cache_badge
         Notice.Unpaired -> R.string.notice_not_paired
         is Notice.HistoryCleared -> R.string.notice_cleared
@@ -261,17 +266,13 @@ fun NoticeBanner(notice: Notice, onDismiss: () -> Unit, modifier: Modifier = Mod
         is Notice.OfferRefused -> offerRefusalAccent(notice.reason)
         is Notice.Failed -> Accent.Caution
 
-        is Notice.Offered,
-        Notice.Recalled,
         Notice.Unpaired,
         is Notice.HistoryCleared,
         is Notice.PairingForgotten,
         -> Accent.Emitter
     }
     val text = when (notice) {
-        is Notice.Offered -> stringResource(R.string.offer_queued)
         is Notice.OfferRefused -> stringResource(offerRefusalMessage(notice.reason))
-        Notice.Recalled -> stringResource(R.string.recall_done)
         Notice.RecalledFromCache -> stringResource(R.string.recall_from_cache)
         Notice.Unpaired -> stringResource(R.string.action_unpaired)
         is Notice.HistoryCleared -> stringResource(R.string.history_cleared, notice.pairing)
@@ -329,18 +330,30 @@ fun NoticeBanner(notice: Notice, onDismiss: () -> Unit, modifier: Modifier = Mod
  * copies a link, picks up their phone, and the History is empty.
  *
  * **It used to be the first item in the list, which meant it was the first thing
- * to leave.** Now it is chrome: one clipped line above the Entries, always
- * there, with the verbatim sentence and the four things that are *not* happening
- * one tap behind [TAG_FOREGROUND_WHY]. A band that is always present says
- * nothing by appearing, which is what lets it be permanent without becoming a
- * warning.
+ * to leave.** Now it is chrome: one clipped line above the Entries, with the
+ * verbatim sentence and the four things that are *not* happening one tap behind
+ * [TAG_FOREGROUND_WHY]. A band that is simply there says nothing by appearing,
+ * which is what lets it be permanent without becoming a warning. It stays until
+ * it is acknowledged, and never merely until it is scrolled past.
  *
- * The open/closed choice is `rememberSaveable` rather than a field on [UiState]:
- * it changes nothing about the phone, survives a rotation, and putting it in the
- * snapshot would mean the state holder owned a fact about a disclosure triangle.
+ * **This band has two states and they are owned in two different places, which
+ * is the argument rather than an accident.** Open/closed is `rememberSaveable`:
+ * it changes nothing about the phone, survives a rotation, and putting it in
+ * the snapshot would mean the state holder owned a fact about a disclosure
+ * triangle. Dismissed goes out through [onDismiss] to the preference store,
+ * because it is a decision about what this phone shows from now on, and the
+ * caller stops composing the band at all.
+ *
+ * Which is why only `▴ CLOSE` dismisses. The whole band is the tap target and
+ * not the chip in it, so the first tap can do nothing but open: a thumb that
+ * brushes chrome it has not read must not thereby delete the app's most
+ * important disclosure. The second tap is on a control that says what it does,
+ * taken by somebody with the sentence in front of them — and it does not lose
+ * the note either, which is what makes a permanent dismissal an honest offer
+ * rather than a trap.
  */
 @Composable
-fun ForegroundOnlyNote(modifier: Modifier = Modifier) {
+fun ForegroundOnlyNote(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
     var open by rememberSaveable { mutableStateOf(false) }
 
     Column(modifier.fillMaxWidth().testTag(TAG_FOREGROUND_NOTE)) {
@@ -354,9 +367,20 @@ fun ForegroundOnlyNote(modifier: Modifier = Modifier) {
             background = Fui.Recess,
             modifier = Modifier
                 .clickable(
-                    onClickLabel = stringResource(R.string.foreground_only_why_action),
+                    // Named only while it is shut. `foreground_only_why_action`
+                    // is a sentence about opening the band, and reading it out
+                    // over a tap that now closes the band for good would promise
+                    // the wrong thing. There is no key for the second action, so
+                    // the open band leaves the naming to the `▴ CLOSE` its own
+                    // content already reads out.
+                    onClickLabel = if (open) null else stringResource(R.string.foreground_only_why_action),
                     role = Role.Button,
-                    onClick = { open = !open },
+                    // Expanding is exploration; closing is acknowledgement. Only
+                    // the second of the two is remembered.
+                    onClick = {
+                        if (open) onDismiss()
+                        open = !open
+                    },
                 )
                 .testTag(TAG_FOREGROUND_WHY),
         ) {

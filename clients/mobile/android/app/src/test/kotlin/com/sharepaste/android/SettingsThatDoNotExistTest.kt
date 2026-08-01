@@ -1,5 +1,6 @@
 package com.sharepaste.android
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -20,8 +21,10 @@ import java.io.File
  * artefacts: the words the app is capable of saying, and what the merged manifest
  * asks the platform for. A device sees neither as text.
  * `PairingsScreenTest.no_plaintext_toggle_and_no_biometric_gate_were_added` covers
- * the runtime half — no switch on the settings surface, no biometric API on the
- * classpath.
+ * the runtime half. It is a census rather than a count of zero: the Settings
+ * Screen now has exactly one switch, `SHOW WHAT WAS RECALLED`, which decides
+ * whether a Recall says what it handed over and touches no stored byte. Any
+ * other switch, and any biometric API on the classpath, is a failure there.
  */
 class SettingsThatDoNotExistTest {
 
@@ -88,12 +91,51 @@ class SettingsThatDoNotExistTest {
     }
 
     /**
+     * The Device Label rule is stated once, where it can still be acted on.
+     *
+     * It used to be a quoted note on the settings surface, which is the one
+     * place a person can do nothing about it: the phone is already paired and
+     * the name is already fixed. It is now the second sentence of
+     * `pair_label_explainer`, beside the field where a name is being chosen.
+     *
+     * Asserted here rather than on the screen, because the screen can only prove
+     * the note is not drawn. This proves the app **cannot say it** — the string
+     * is gone, so no composable can be wired back to it by accident.
+     *
+     * Matched against the file with its runs of whitespace collapsed, because a
+     * sentence in `strings.xml` wraps across source lines and the resource
+     * loader joins it back up. Matching the raw text would make this a test of
+     * where somebody put a line break.
+     */
+    @Test
+    fun the_device_label_rule_is_stated_beside_the_field_and_nowhere_else() {
+        val said = strings.replace(Regex("\\s+"), " ")
+        assertTrue(
+            "strings.xml still carries the settings-screen Device Label note. Its one fact " +
+                "belongs in pair_label_explainer, where a name is still being chosen.",
+            !said.contains("This phone told the Relay its name"),
+        )
+        assertEquals(
+            "the rule that a Device Label cannot be changed after pairing is stated in " +
+                "pair_label_explainer, and exactly once in the whole file",
+            1,
+            Regex("It cannot be changed later").findAll(said).count(),
+        )
+    }
+
+    /**
      * One cipher is named in this product, and it is the one it uses.
      *
-     * ADR 0002 puts the disclosure beside pairing. `core/crypto.rs` seals with
-     * XChaCha20-Poly1305; the mock this product was drawn from carried an
-     * `AES-256-GCM` badge, and the desktop's own test asserts `AES` appears
-     * nowhere for exactly this reason.
+     * `core/crypto.rs` seals with XChaCha20-Poly1305; the mock this product was
+     * drawn from carried an `AES-256-GCM` badge, and the desktop's own test
+     * asserts `AES` appears nowhere for exactly this reason.
+     *
+     * ADR 0002 wanted the disclosure beside pairing. On this phone it is no
+     * longer there — the pairing flow's footer band went with the rest of its
+     * inert facts — so what this pins is that the word survives *somewhere*, on
+     * the Settings Screen's Pairing card. That is the weaker placement ADR 0002
+     * now records, and it is still the difference between disclosing the cipher
+     * and disclosing nothing.
      */
     @Test
     fun the_only_cipher_named_anywhere_is_the_one_this_product_seals_with() {

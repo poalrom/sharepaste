@@ -10,6 +10,7 @@ import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.sharepaste.android.ui.Notice
+import com.sharepaste.android.ui.Receipt
 import com.sharepaste.android.ui.SessionPhase
 import com.sharepaste.android.ui.TAG_NOTICE_STALE
 import com.sharepaste.android.ui.TAG_OFFER
@@ -17,6 +18,7 @@ import com.sharepaste.android.ui.TAG_PENDING
 import com.sharepaste.android.ui.TAG_RECALL_LATEST
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -84,11 +86,15 @@ class OfflineOfferAndRecallTest {
         val cached = "the-newest-thing-this-phone-had-${System.currentTimeMillis()}"
         phone.clip.putText(cached)
         compose.onNodeWithTag(TAG_OFFER).performClick()
-        phone.await("the seed Offer must be taken") { it.notice is Notice.Offered }
+        phone.awaitReceipt("the seed Offer must be taken") { it is Receipt.Offered }
         phone.awaitEntry("the seed Offer must come back from the Relay and be cached") {
             it.preview == cached
         }
-        phone.model.dismissNotice()
+        // Asserted rather than dismissed. A taken Offer is a Receipt now, so it
+        // leaves the band empty on its own — and that is exactly what makes the
+        // wait below mean anything: the only Notice this test can produce is the
+        // fallback it is here to catch.
+        assertNull("a taken Offer must leave the band empty", phone.state.notice)
 
         proxy.close()
         proxy.assertUnreachable()
@@ -136,7 +142,7 @@ class OfflineOfferAndRecallTest {
         val queued = "offered-with-no-connection-${System.currentTimeMillis()}"
         phone.clip.putText(queued)
         compose.onNodeWithTag(TAG_OFFER).performClick()
-        phone.await("an Offer made offline must still be taken") { it.notice is Notice.Offered }
+        phone.awaitReceipt("an Offer made offline must still be taken") { it is Receipt.Offered }
         phone.await("the pending count must reach the screen") { it.pending == 1L }
 
         val one = resources.getQuantityString(R.plurals.pending_count, 1)

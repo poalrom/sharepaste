@@ -9,8 +9,10 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.test.platform.app.InstrumentationRegistry
+import com.sharepaste.android.platform.UiPreferences
 import com.sharepaste.android.ui.HistoryScreen
 import com.sharepaste.android.ui.PairingsScreen
+import com.sharepaste.android.ui.Receipt
 import com.sharepaste.android.ui.Screen
 import com.sharepaste.android.ui.SharepasteTheme
 import com.sharepaste.android.ui.SharepasteViewModel
@@ -21,6 +23,7 @@ import com.sharepaste.android.ui.appActions
 import com.sharepaste.core.Entry
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.File
 
@@ -58,6 +61,20 @@ class PhoneUnderTest private constructor(
     val userId: String? get() = pairedUserIds.lastOrNull()
 
     val state: UiState get() = model.state.value
+
+    /**
+     * Every Receipt this phone has shown, oldest first.
+     *
+     * Receipts are one-shot events rather than part of [UiState] — they are
+     * Toasts, and the activity collects them — so a test cannot read the last
+     * one off a snapshot the way it reads a [com.sharepaste.android.ui.Notice].
+     * The collector is attached in [open], before anything can press a verb, and
+     * it keeps them all: a test that asserted only on the latest could not tell
+     * "the Offer said nothing" from "the Offer was overtaken".
+     */
+    val receipts: List<Receipt> get() = synchronized(seen) { seen.toList() }
+
+    private val seen = mutableListOf<Receipt>()
 
     /** Pair with a short code the other device minted, exactly as a scan does. */
     fun pairWithCode(inviter: Inviter, label: String): String {
@@ -147,6 +164,30 @@ class PhoneUnderTest private constructor(
     }
 
     /**
+     * Wait for a Receipt matching [predicate] and hand it back.
+     *
+     * The Receipt half of [await]. A verb that reports a Receipt writes nothing
+     * to [UiState], so `await { it.notice is ... }` on one of those waits for
+     * something that will never arrive.
+     */
+    fun awaitReceipt(
+        what: String,
+        timeoutSeconds: Long = TIMEOUT_SECONDS,
+        predicate: (Receipt) -> Boolean,
+    ): Receipt {
+        try {
+            compose.waitUntil(timeoutSeconds * 1_000) { receipts.any(predicate) }
+        } catch (e: Throwable) {
+            throw AssertionError(
+                "$what: never happened in ${timeoutSeconds}s. Receipts: ${receipts}. " +
+                    "State: $state",
+                e,
+            )
+        }
+        return receipts.first(predicate)
+    }
+
+    /**
      * Bring a row into view.
      *
      * A `LazyColumn` composes only what is on screen, and the Contact readout plus
@@ -225,9 +266,26 @@ class PhoneUnderTest private constructor(
             )
             // A `ViewModel` wants a main looper for `viewModelScope`, so it is
             // built on the main thread exactly as the activity builds it.
+            //
+            // The preference store is the process's real one. Both its values
+            // default to what a fresh install has, and no test here changes
+            // either, so sharing it costs nothing and keeps this the production
+            // object it claims to be.
             lateinit var model: SharepasteViewModel
             InstrumentationRegistry.getInstrumentation().runOnMainSync {
-                model = SharepasteViewModel(repo)
+                model = SharepasteViewModel(repo, UiPreferences(context))
+            }
+            val phone = PhoneUnderTest(compose, repo, model)
+            // `receipts` replays nothing, so the collector has to be running
+            // before a verb is pressed. This only *schedules* it — the launch
+            // dispatches onto the main looper rather than subscribing here — but
+            // every verb is pressed through the composition below, and Compose
+            // and this collector share that looper. The subscription is queued
+            // ahead of anything a test can do, which is the guarantee; a
+            // `first()` awaited from this thread would deadlock the looper it
+            // needs.
+            model.viewModelScope.launch {
+                model.receipts.collect { synchronized(phone.seen) { phone.seen += it } }
             }
             compose.setContent {
                 SharepasteTheme {
@@ -241,7 +299,7 @@ class PhoneUnderTest private constructor(
                     }
                 }
             }
-            return PhoneUnderTest(compose, repo, model)
+            return phone
         }
     }
 }

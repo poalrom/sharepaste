@@ -32,6 +32,8 @@ fun noActions(
     confirm: (Confirmation?) -> Unit = {},
     clearHistory: (String) -> Unit = {},
     forgetPairing: (String) -> Unit = {},
+    setShowRecalled: (Boolean) -> Unit = {},
+    dismissForegroundNote: () -> Unit = {},
     enableStandingActions: () -> Unit = {},
 ) = AppActions(
     setDeviceLabel = {},
@@ -53,6 +55,8 @@ fun noActions(
     confirm = confirm,
     clearHistory = clearHistory,
     forgetPairing = forgetPairing,
+    setShowRecalled = setShowRecalled,
+    dismissForegroundNote = dismissForegroundNote,
     enableStandingActions = enableStandingActions,
 )
 

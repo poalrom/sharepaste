@@ -1,6 +1,8 @@
 package com.sharepaste.android
 
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -77,7 +79,7 @@ class ContactReadoutTest {
         // One `setContent` and a state that moves, because a rule hosts exactly
         // one composition: calling `setContent` again is an
         // `IllegalStateException`, not a second render.
-        val phase = androidx.compose.runtime.mutableStateOf<SessionPhase>(SessionPhase.Looking)
+        val phase = mutableStateOf<SessionPhase>(SessionPhase.Looking)
         compose.setContent { SharepasteTheme { ContactReadout(phase.value) } }
         nominalPhases.forEach { next ->
             compose.runOnIdle { phase.value = next }
@@ -140,5 +142,74 @@ class ContactReadoutTest {
         compose.onNodeWithTag(TAG_FOREGROUND_WHY).performClick()
         compose.onNodeWithText(note, substring = true).assertIsDisplayed()
         Evidence.log("empty history = no fault; pinned \"$pinned\"; WHY opens: $note")
+    }
+
+    /**
+     * `▴ CLOSE` takes the band away for good; opening it does not.
+     *
+     * The whole 30dp band is one tap target — redesign §6, and the reason the
+     * pinned line is reachable from any screenful of Entries — which is exactly
+     * what makes a dismissal dangerous here. If the first tap closed it, a thumb
+     * that brushed the chrome would delete the app's most important disclosure
+     * without ever having shown it. So the first tap can only open, and only the
+     * second, on a control reading `▴ CLOSE` with the sentence already in front
+     * of the person, is taken as acknowledgement.
+     *
+     * The dismissal is a fact about the phone rather than about this
+     * composition, so it arrives on [UiState] and the band is not composed at
+     * all. [StateRestorationTester] is what proves that is where it lives: the
+     * band's own open/closed flag is `rememberSaveable` and *is* restored along
+     * with everything else, and a recreated composition still has to draw
+     * nothing.
+     *
+     * **The real preference store is deliberately not written here.**
+     * `UiPreferences` can set this dismissal and has no way to unset it, and its
+     * DataStore is one process-wide object that keeps what it read — so a test
+     * that dismissed for real would hide this band from every test that ran
+     * after it, with no `@After` able to put it back. The flag is held here the
+     * way the state holder holds it, and the write it stands for is the one
+     * `UiPreferences.dismissForegroundNote` call behind `AppActions`.
+     */
+    @Test
+    fun closing_the_foreground_band_takes_it_away_for_good_and_opening_it_does_not() {
+        val restoration = StateRestorationTester(compose)
+        val dismissed = mutableStateOf(false)
+        var dismissals = 0
+        restoration.setContent {
+            SharepasteTheme {
+                HistoryScreen(
+                    state = UiState(
+                        session = SessionPhase.OutOfContact("u"),
+                        foregroundNoteDismissed = dismissed.value,
+                    ),
+                    actions = noActions(
+                        dismissForegroundNote = {
+                            dismissals++
+                            dismissed.value = true
+                        },
+                    ),
+                )
+            }
+        }
+
+        // Exploration: the sentence arrives and the band stays.
+        val note = resources.getString(R.string.foreground_only_note)
+        compose.onNodeWithTag(TAG_FOREGROUND_WHY).performClick()
+        compose.onNodeWithText(note, substring = true).assertIsDisplayed()
+        compose.onNodeWithTag(TAG_FOREGROUND_NOTE).assertIsDisplayed()
+        assertEquals("expanding the band must not dismiss it", 0, dismissals)
+
+        // Acknowledgement: the whole band goes, sentence and all.
+        compose.onNodeWithTag(TAG_FOREGROUND_WHY).performClick()
+        assertEquals("`▴ CLOSE` must dismiss, and once", 1, dismissals)
+        compose.onNodeWithTag(TAG_FOREGROUND_NOTE).assertDoesNotExist()
+        compose.onNodeWithText(note, substring = true).assertDoesNotExist()
+
+        // And a recreate restores the band's saved open/closed flag into a
+        // composition that has no band to restore it into.
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithTag(TAG_FOREGROUND_NOTE).assertDoesNotExist()
+        compose.onNodeWithTag(TAG_HISTORY_EMPTY).assertIsDisplayed()
+        Evidence.log("foreground    = WHY opens without dismissing; CLOSE removes it, a recreate keeps it gone")
     }
 }

@@ -1,5 +1,6 @@
 package com.sharepaste.android.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawing
@@ -60,6 +61,11 @@ class AppActions(
     val confirm: (Confirmation?) -> Unit,
     val clearHistory: (String) -> Unit,
     val forgetPairing: (String) -> Unit,
+    // -- what this phone remembers about its own chrome ---------------------
+    /** Whether a Recall says what it put on the clipboard. See ADR 0009. */
+    val setShowRecalled: (Boolean) -> Unit,
+    /** Close the foreground-only band for good. Only `▴ CLOSE` may call it. */
+    val dismissForegroundNote: () -> Unit,
     // -- the Standing Actions -----------------------------------------------
     /**
      * Ask the platform for the notification back.
@@ -104,6 +110,8 @@ fun appActions(
     confirm = model::confirm,
     clearHistory = model::clearHistory,
     forgetPairing = model::forgetPairing,
+    setShowRecalled = model::setShowRecalled,
+    dismissForegroundNote = model::dismissForegroundNote,
     // The one member the state holder cannot supply. `MainActivity` passes a
     // permission request; every other caller leaves it doing nothing, which is
     // the right answer for a screen with no activity result behind it.
@@ -118,6 +126,13 @@ fun appActions(
  * That is a `when`, not a navigation graph — and it stays a `when` at three, so
  * adding a `Screen` is a compile error here rather than a route nobody registered.
  *
+ * System back is answered here too, per branch, and it is still not a back
+ * stack: each destination replies to the gesture with the action its own `◂`
+ * fires, so the two ways out of a screen cannot drift apart. `enabled = false`
+ * is where that reads best — History is the root, and the pairing flow on a
+ * phone that has never paired has an empty History behind it, which is not
+ * somewhere to be sent. Back belongs to the platform in both.
+ *
  * The system-bar inset is applied here, once, and not by the three screens.
  * Android 15 draws every app edge to edge whether it asked to or not, and each
  * of these screens is a stack of fixed chrome bands with a list between them —
@@ -131,6 +146,14 @@ fun SharepasteApp(state: UiState, actions: AppActions, modifier: Modifier = Modi
         Surface(modifier = modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             when (state.screen) {
                 Screen.Pairing -> {
+                    // Derived, not remembered, and asked once: a flow reached
+                    // from the Pairings has a screen to go back to, and the
+                    // launch screen of a phone that has never paired has nothing
+                    // behind it at all. The gesture and the `◂` read the same
+                    // value, because two predicates one screen apart is how they
+                    // start answering differently.
+                    val somewhereBack = state.pairings.isNotEmpty()
+                    BackHandler(enabled = somewhereBack, onBack = actions.openPairings)
                     // Owned here, outside the branch that renders the refusal.
                     // A holder that lived inside the viewfinder was torn down by
                     // its own first report, so the grant it had just asked for
@@ -146,15 +169,23 @@ fun SharepasteApp(state: UiState, actions: AppActions, modifier: Modifier = Modi
                         // install this screen is the whole app, and a back control
                         // that led to an empty History would be a dead end wearing
                         // a door's clothes.
-                        onBack = if (state.activeUserId == null) null else actions.openPairings,
+                        onBack = if (somewhereBack) actions.openPairings else null,
                         onRecheckCamera = recheckCamera,
                         scanner = { CameraPreview(onCode = actions.codeScanned) },
                     )
                 }
 
-                Screen.History -> HistoryScreen(state = state, actions = actions)
+                Screen.History -> {
+                    // The root. Back exits, and that is the platform's answer.
+                    BackHandler(enabled = false) {}
+                    HistoryScreen(state = state, actions = actions)
+                }
 
-                Screen.Pairings -> PairingsScreen(state = state, actions = actions)
+                Screen.Pairings -> {
+                    // The same action as the `◂` in this screen's own band.
+                    BackHandler(onBack = actions.openHistory)
+                    PairingsScreen(state = state, actions = actions)
+                }
             }
         }
     }

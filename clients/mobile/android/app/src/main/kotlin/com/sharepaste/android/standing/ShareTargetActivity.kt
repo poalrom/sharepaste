@@ -5,13 +5,15 @@ import android.content.ClipDescription
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
-import android.widget.Toast
 import com.sharepaste.android.OfferAttempt
 import com.sharepaste.android.R
 import com.sharepaste.android.SharepasteApplication
 import com.sharepaste.android.SharepasteRepository
+import com.sharepaste.android.ui.Receipt
 import com.sharepaste.android.ui.offerRefusalLabel
 import com.sharepaste.android.ui.offerRefusalMessage
+import com.sharepaste.android.ui.receiptLogged
+import com.sharepaste.android.ui.showReceipt
 import com.sharepaste.core.AppException
 import com.sharepaste.core.OfferOutcome
 import kotlinx.coroutines.MainScope
@@ -86,12 +88,12 @@ class ShareTargetActivity : Activity() {
         working.began()
         scope.launch {
             try {
-                val (said, queuedOn) = offerFrom(shared)
+                val (receipt, queuedOn) = offerFrom(shared)
                 // Reported first, sent second — see `StandingActionActivity`. A
                 // share is an Offer made by somebody who is standing in another
                 // app waiting to get on with something, so the answer comes now
                 // and the upload happens behind it.
-                report(said)
+                report(receipt)
                 queuedOn?.let { repository.sendPending(it) }
             } finally {
                 if (working.finished() && !isFinishing) finish()
@@ -108,53 +110,54 @@ class ShareTargetActivity : Activity() {
         get() = (application as SharepasteApplication).repository
 
     /**
-     * The sentence to show, and — when there is one — the Pairing whose queue
-     * now has something in it.
+     * The Receipt to show, and — when there is one — the Pairing whose queue now
+     * has something in it.
      */
-    private suspend fun offerFrom(intent: Intent?): Pair<Said, String?> =
+    private suspend fun offerFrom(intent: Intent?): Pair<Receipt, String?> =
         when (val shared = sharedFrom(intent)) {
             // Refused before the text is read out of the intent at all, so
             // nothing the sender called sensitive is ever in a local of ours.
-            Shared.Sensitive -> Said(
+            Shared.Sensitive -> Receipt.Aloud(
                 R.string.notice_refused_sensitive,
-                getString(R.string.share_refused_sensitive),
+                R.string.share_refused_sensitive,
             ) to null
 
-            Shared.NotText -> Said(
+            Shared.NotText -> Receipt.Aloud(
                 R.string.notice_nothing_to_send,
-                getString(R.string.share_refused_not_text),
+                R.string.share_refused_not_text,
             ) to null
 
             is Shared.Text -> offer(shared.text)
         }
 
-    private suspend fun offer(text: String): Pair<Said, String?> = try {
+    private suspend fun offer(text: String): Pair<Receipt, String?> = try {
         when (val attempt = repository.offerText(text)) {
             OfferAttempt.Unpaired ->
-                Said(R.string.notice_not_paired, getString(R.string.action_unpaired)) to null
+                Receipt.Aloud(R.string.notice_not_paired, R.string.action_unpaired) to null
 
             is OfferAttempt.Settled -> when (val outcome = attempt.outcome) {
-                is OfferOutcome.Queued ->
-                    Said(R.string.notice_offered, getString(R.string.offer_queued)) to attempt.userId
+                is OfferOutcome.Queued -> Receipt.Offered(outcome.pending) to attempt.userId
 
-                is OfferOutcome.Rejected -> Said(
+                is OfferOutcome.Rejected -> Receipt.Aloud(
                     offerRefusalLabel(outcome.reason),
-                    getString(offerRefusalMessage(outcome.reason)),
+                    offerRefusalMessage(outcome.reason),
                 ) to null
             }
         }
     } catch (e: AppException) {
-        Said(R.string.notice_failed, getString(R.string.offer_failed)) to null
+        Receipt.Aloud(R.string.notice_failed, R.string.offer_failed) to null
     }
 
-    /** See [StandingActionActivity.report] — same surface, same rules. */
-    private fun report(said: Said) {
-        Toast.makeText(
-            applicationContext,
-            "${getString(said.label)}\n${said.sentence}",
-            Toast.LENGTH_LONG,
-        ).show()
-        Log.i(StandingActions.TAG, "share: ${said.sentence}")
+    /**
+     * See [StandingActionActivity.report] — same surface, same rules.
+     *
+     * No share can produce a [Receipt.Recalled], so there is nothing here for
+     * `SHOW WHAT WAS RECALLED` to silence and nothing that could put an Entry's
+     * text in the log.
+     */
+    private fun report(receipt: Receipt) {
+        showReceipt(this, receipt)
+        Log.i(StandingActions.TAG, "share: ${getString(receiptLogged(receipt))}")
     }
 }
 

@@ -9,14 +9,19 @@ import com.sharepaste.android.R
 import com.sharepaste.android.RecallAttempt
 import com.sharepaste.android.SharepasteApplication
 import com.sharepaste.android.SharepasteRepository
+import com.sharepaste.android.platform.UiPreferences
 import com.sharepaste.android.scan.CameraProblem
 import com.sharepaste.core.AppException
 import com.sharepaste.core.ConnectionState
 import com.sharepaste.core.CoreEvent
 import com.sharepaste.core.Entry
 import com.sharepaste.core.OfferOutcome
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -39,15 +44,46 @@ import kotlinx.coroutines.launch
  * A [ViewModel] rather than something the activity owns, so a rotation does not
  * tear a live session down and stand a new one up.
  */
-class SharepasteViewModel(private val repo: SharepasteRepository) : ViewModel() {
+class SharepasteViewModel(
+    private val repo: SharepasteRepository,
+    private val preferences: UiPreferences,
+) : ViewModel() {
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
+    /**
+     * The Receipts, as they happen, and deliberately not part of [state].
+     *
+     * A Receipt is a Toast rather than something in the Compose tree, so it is
+     * an event and not a value: put in the snapshot it would be re-shown by
+     * every recomposition that followed and would need a second action to clear
+     * itself again, which is the shape [Notice] has precisely because a Notice
+     * *is* something on screen.
+     *
+     * Buffered by one and `DROP_OLDEST`, so a verb pressed while nothing is
+     * collecting — the activity is stopping, say — neither suspends the caller
+     * nor keeps a stale confirmation around for the next one.
+     */
+    private val _receipts = MutableSharedFlow<Receipt>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val receipts: SharedFlow<Receipt> = _receipts.asSharedFlow()
 
     init {
         viewModelScope.launch {
             repo.events.collect(::onCoreEvent)
+        }
+        viewModelScope.launch {
+            preferences.values.collect { values ->
+                _state.update {
+                    it.copy(
+                        showRecalled = values.showRecalled,
+                        foregroundNoteDismissed = values.foregroundNoteDismissed,
+                    )
+                }
+            }
         }
     }
 
@@ -216,8 +252,20 @@ class SharepasteViewModel(private val repo: SharepasteRepository) : ViewModel() 
         }
     }
 
+    /**
+     * Take the failure back, and the code with it.
+     *
+     * The whole of [PairingState.restarted] rather than the attempt alone, and
+     * that is the fix rather than a tidy-up: clearing the attempt on its own
+     * left the spent code in the field, so [PairingState.canPair] went true
+     * again and PAIR resent a code the Relay had already expired — and it left
+     * [PairingState.scanned] latched, so the viewfinder stayed stood down and
+     * there was no way to read a fresh one. The Device Label survives, because
+     * it names the phone rather than the attempt. It is the same call
+     * [openAddPairing] makes, for the same reason.
+     */
     fun dismissPairFailure() {
-        _state.update { it.copy(pairing = it.pairing.copy(attempt = PairAttempt.Idle)) }
+        _state.update { it.copy(pairing = it.pairing.restarted()) }
     }
 
     /**
@@ -294,22 +342,24 @@ class SharepasteViewModel(private val repo: SharepasteRepository) : ViewModel() 
      */
     fun offerClipboard() {
         viewModelScope.launch {
-            val notice = try {
+            try {
                 when (val attempt = repo.offerClipboard()) {
-                    OfferAttempt.Unpaired -> Notice.Unpaired
-                    is OfferAttempt.Settled -> when (val outcome = attempt.outcome) {
-                        is OfferOutcome.Queued -> Notice.Offered(outcome.pending)
-                        is OfferOutcome.Rejected -> Notice.OfferRefused(outcome.reason)
+                    OfferAttempt.Unpaired -> raise(Notice.Unpaired)
+                    is OfferAttempt.Settled -> when (val settled = attempt.outcome) {
+                        // The Offer's own count is more current than any event:
+                        // the enqueue has already happened by the time it is
+                        // returned, and `PendingCount` is on its way through the
+                        // sink behind it.
+                        is OfferOutcome.Queued -> {
+                            _state.update { it.copy(notice = null, pending = settled.pending) }
+                            _receipts.emit(Receipt.Offered(settled.pending))
+                        }
+
+                        is OfferOutcome.Rejected -> raise(Notice.OfferRefused(settled.reason))
                     }
                 }
             } catch (e: AppException) {
-                Notice.Failed(R.string.offer_failed, e.explain())
-            }
-            _state.update {
-                // The Offer's own count is more current than any event: the
-                // enqueue has already happened by the time it is returned, and
-                // `PendingCount` is on its way through the sink behind it.
-                it.copy(notice = notice, pending = (notice as? Notice.Offered)?.pending ?: it.pending)
+                raise(Notice.Failed(R.string.offer_failed, e.explain()))
             }
         }
     }
@@ -318,21 +368,25 @@ class SharepasteViewModel(private val repo: SharepasteRepository) : ViewModel() 
      * Recall Latest: the newest Entry onto this device's clipboard.
      *
      * It always fetches, and when the fetch fails the newest **cached** Entry is
-     * handed over instead with [Notice.RecalledFromCache] to say so. That notice
-     * is not decoration — a silent fallback hands over yesterday's link.
+     * handed over instead with [Notice.RecalledFromCache] to say so. That one
+     * stays a Notice and not a Receipt: it is the outcome ADR 0007 says may
+     * never be silent, and a band that waits to be dismissed is what "never
+     * silent" costs.
      */
     fun recallLatest() {
         viewModelScope.launch {
-            val notice = try {
+            try {
                 when (val attempt = repo.recallLatestOnActivePairing()) {
-                    RecallAttempt.Unpaired -> Notice.Unpaired
-                    is RecallAttempt.Done ->
-                        if (attempt.fromCache) Notice.RecalledFromCache else Notice.Recalled
+                    RecallAttempt.Unpaired -> raise(Notice.Unpaired)
+                    is RecallAttempt.Done -> if (attempt.fromCache) {
+                        raise(Notice.RecalledFromCache)
+                    } else {
+                        confirmRecall(previewOf(attempt.userId, attempt.entryId))
+                    }
                 }
             } catch (e: AppException) {
-                recallFailureFor(e)
+                raise(recallFailureFor(e))
             }
-            _state.update { it.copy(notice = notice) }
         }
     }
 
@@ -345,15 +399,52 @@ class SharepasteViewModel(private val repo: SharepasteRepository) : ViewModel() 
      */
     fun recall(entry: Entry) {
         viewModelScope.launch {
-            val notice = try {
+            try {
                 repo.recall(entry.userId, entry.id)
-                Notice.Recalled
             } catch (e: AppException) {
-                recallFailureFor(e)
+                raise(recallFailureFor(e))
+                return@launch
             }
-            _state.update { it.copy(notice = notice) }
+            confirmRecall(entry.preview)
         }
     }
+
+    /** Put one Notice in the band, replacing whatever was there. */
+    private fun raise(notice: Notice) {
+        _state.update { it.copy(notice = notice) }
+    }
+
+    /**
+     * Say what was recalled, unless the person has asked not to be told.
+     *
+     * The Receipt is suppressed **whole**, not merely stripped of its Preview:
+     * `SHOW WHAT WAS RECALLED` off means the Entry reaches the clipboard and
+     * Sharepaste says nothing, which is the switch's own sentence. Only this
+     * confirmation goes quiet — a stale Recall, a refusal and a failure are
+     * Notices and are not the switch's to silence.
+     *
+     * The band is cleared either way. Without that, a `MAY BE STALE` from the
+     * Recall before this one would still be on screen describing what is no
+     * longer on the clipboard.
+     */
+    private suspend fun confirmRecall(preview: String?) {
+        _state.update { it.copy(notice = null) }
+        if (_state.value.showRecalled) _receipts.emit(Receipt.Recalled(preview))
+    }
+
+    /**
+     * The Preview of the Entry a Recall Latest just handed over.
+     *
+     * In memory first, because the recalled Entry is the newest one and the
+     * newest one is at the head of a list already in hand. The read is the
+     * fallback for the case the list is not: a Recall Latest acts on the
+     * **Active** Pairing, and the list belongs to the Viewed one — and it is
+     * [SharepasteRepository.previewOf], the same call the Standing Action makes,
+     * so the two paths cannot disagree about what a Recall Receipt names.
+     */
+    private suspend fun previewOf(userId: String, entryId: Long): String? =
+        _state.value.entries.firstOrNull { it.id == entryId }?.preview
+            ?: repo.previewOf(userId, entryId)
 
     /**
      * Delete one Entry, on the Relay and here.
@@ -367,15 +458,38 @@ class SharepasteViewModel(private val repo: SharepasteRepository) : ViewModel() 
             try {
                 repo.deleteEntry(entry.userId, entry.id)
             } catch (e: AppException) {
-                _state.update {
-                    it.copy(notice = Notice.Failed(R.string.delete_failed, e.explain()))
-                }
+                raise(Notice.Failed(R.string.delete_failed, e.explain()))
             }
         }
     }
 
     fun dismissNotice() {
         _state.update { it.copy(notice = null) }
+    }
+
+    // -- what this phone has been told about its own chrome -------------------
+
+    /**
+     * Whether a Recall says what it put on the clipboard.
+     *
+     * Written straight to the store and never to [UiState]: the collector in
+     * `init` is the only writer of either preference field, so the switch on
+     * screen shows what was persisted rather than what was pressed. On a write
+     * that fails there is nothing to un-say.
+     */
+    fun setShowRecalled(show: Boolean) {
+        viewModelScope.launch { preferences.setShowRecalled(show) }
+    }
+
+    /**
+     * Close the foreground-only band for good.
+     *
+     * Only `▴ CLOSE` reaches this. Expanding the band is exploration and must
+     * not dismiss it — the whole 30dp strip is the tap target, so a stray tap
+     * would otherwise delete the app's most important disclosure.
+     */
+    fun dismissForegroundNote() {
+        viewModelScope.launch { preferences.dismissForegroundNote() }
     }
 
     // -- the Standing Actions -------------------------------------------------
@@ -796,20 +910,20 @@ class SharepasteViewModel(private val repo: SharepasteRepository) : ViewModel() 
 
     companion object {
         /**
-         * Builds the state holder over the process's one facade.
+         * Builds the state holder over the process's one facade, and the one
+         * store for the two things this phone remembers about its own chrome.
          *
-         * The repository is a constructor parameter rather than reached for
-         * inside this class, so a test can drive this exact code against a
-         * facade of its own — which is how the two lifecycle edges get proven
-         * against a real Relay without the shipped app's transport policy
-         * having to bend for a test.
+         * Both are constructor parameters rather than reached for inside this
+         * class, so a test can drive this exact code against a facade of its own
+         * — which is how the two lifecycle edges get proven against a real Relay
+         * without the shipped app's transport policy having to bend for a test.
          */
         val Factory: ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
                 val app = extras[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]
                     as SharepasteApplication
                 @Suppress("UNCHECKED_CAST")
-                return SharepasteViewModel(app.repository) as T
+                return SharepasteViewModel(app.repository, app.uiPreferences) as T
             }
         }
     }

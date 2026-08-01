@@ -2,6 +2,7 @@ package com.sharepaste.android
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.sharepaste.android.platform.UiPreferences
 import com.sharepaste.android.ui.Screen
 import com.sharepaste.android.ui.SessionPhase
 import com.sharepaste.android.ui.SharepasteViewModel
@@ -54,7 +55,9 @@ class SessionLifecycleTest {
         )
         // A `ViewModel` wants a main looper for `viewModelScope`, so it is built
         // and driven from the main thread exactly as the activity builds it.
-        instrumentation.runOnMainSync { model = SharepasteViewModel(repo) }
+        instrumentation.runOnMainSync {
+            model = SharepasteViewModel(repo, UiPreferences(context))
+        }
     }
 
     @After

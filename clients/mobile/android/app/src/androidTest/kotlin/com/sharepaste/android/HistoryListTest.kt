@@ -1,14 +1,19 @@
 package com.sharepaste.android
 
 import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -17,6 +22,7 @@ import com.sharepaste.android.ui.HistoryScreen
 import com.sharepaste.android.ui.Notice
 import com.sharepaste.android.ui.SessionPhase
 import com.sharepaste.android.ui.SharepasteTheme
+import com.sharepaste.android.ui.TAG_HISTORY_LIST
 import com.sharepaste.android.ui.TAG_NOTICE
 import com.sharepaste.android.ui.TAG_NOTICE_STALE
 import com.sharepaste.android.ui.TAG_PENDING
@@ -53,6 +59,14 @@ import org.junit.runner.RunWith
  *    not be marked, and a row with the flag *on* must be — which no amount of
  *    guessing from the Preview can do.
  *  * Origin is shown only for an Entry that came from another Device.
+ *
+ * And **where the list is** when an Entry arrives, which the desktop never had
+ * to answer because its History was a pane beside a detail view rather than the
+ * whole screen. Here it is the screen, the newest row is the one `RECALL
+ * LATEST` hands over, and four bands above the list can each appear and push
+ * that row under the top of the viewport. So the newest Entry has to come to
+ * the person — and nothing else may move the list, because a viewport that
+ * jumps while somebody is reading loses their place for them.
  *
  * No facade behind any of it. A screen takes a [UiState] and an `AppActions`, so
  * every word is assertable without a Relay, a Pairing, or a device in a
@@ -296,11 +310,31 @@ class HistoryListTest {
         Evidence.log("stale recall  = $sentence")
     }
 
+    /**
+     * A Recall that reached the Relay says nothing on this screen, and only the
+     * fallback does.
+     *
+     * The stale tag has to stay distinguishable from an ordinary success,
+     * because it is the only thing between a person and yesterday's link: a
+     * Recall Latest that could not reach the Relay hands over the cache, and the
+     * hand-over itself looks identical either way.
+     *
+     * Since a plain Recall became a [com.sharepaste.android.ui.Receipt] there is
+     * no band at all for a success to wear the wrong tag on, so the assertion is
+     * that the chrome is empty. That is a stronger statement of the same rule
+     * than the one it replaces: "it wore the other tag" allowed a band, and this
+     * allows none — a second notice growing a claim about a Recall would fail
+     * here rather than merely fail to be amber.
+     */
     @Test
-    fun a_successful_recall_does_not_wear_the_stale_tag() {
-        show(UiState(session = SessionPhase.InContact("u"), notice = Notice.Recalled))
+    fun a_successful_recall_draws_no_band_and_only_the_cache_fallback_does() {
+        show(UiState(session = SessionPhase.InContact("u"), notice = null))
+        compose.onNodeWithTag(TAG_NOTICE).assertDoesNotExist()
         compose.onNodeWithTag(TAG_NOTICE_STALE).assertDoesNotExist()
-        compose.onNodeWithText(resources.getString(R.string.recall_done)).assertIsDisplayed()
+
+        show(UiState(session = SessionPhase.OutOfContact("u"), notice = Notice.RecalledFromCache))
+        compose.onNodeWithTag(TAG_NOTICE_STALE).assertIsDisplayed()
+        Evidence.log("plain recall  = no band at all; the cache fallback still wears the stale tag")
     }
 
     /**
@@ -327,8 +361,8 @@ class HistoryListTest {
     }
 
     /**
-     * A readable Entry is deleted by dragging for it, never by a tap next to
-     * Recall.
+     * A readable Entry is deleted by dragging for it, and then by pressing the
+     * thing the drag uncovered.
      *
      * The guard the desktop's unguarded `✕` never had, and the reason the row
      * lost its second word-button: a Delete fans out over SSE to every paired
@@ -336,11 +370,19 @@ class HistoryListTest {
      * happens twenty times a day. So the two are not adjacent targets — one is a
      * 48dp square and the other is a gesture.
      *
-     * The assertion that matters is the *pair*: pressing where the delete panel
-     * sits does nothing at all, and only the swipe reaches the action.
+     * **What changed is the second half of that gesture.** The panel used to
+     * answer a press with nothing, which is the worst moment for a control to be
+     * inert: it has just been revealed to somebody who has this instant
+     * discovered the swipe. It is a button now, and the *arming* is what keeps
+     * the guard — the same node is a control only while the drag is holding it
+     * open.
+     *
+     * The pair is the assertion. At rest the row offers one target and a press
+     * where the panel sits deletes nothing; uncovered, that node is enabled and
+     * fires the same `onDelete` a completed swipe fires.
      */
     @Test
-    fun a_readable_entry_is_deleted_by_a_swipe_and_not_by_a_tap() {
+    fun the_delete_panel_is_a_control_only_while_the_swipe_holds_it_open() {
         show(
             UiState(
                 session = SessionPhase.InContact("u"),
@@ -348,12 +390,213 @@ class HistoryListTest {
             ),
         )
 
+        // At rest. The panel is composed behind the row on every frame, so the
+        // question is not whether it is there but whether it is a control.
+        compose.onNodeWithTag(entryDeleteTag(4)).assertIsNotEnabled()
         compose.onNodeWithTag(entryDeleteTag(4)).performClick()
-        assertTrue("a tap must not delete an Entry", deleted.isEmpty())
+        assertTrue("a tap on an un-swiped row must not delete an Entry", deleted.isEmpty())
+
+        // Held open, with no release, so nothing settles: the box's own
+        // `onDismiss` cannot be what fires here, and the panel is the only thing
+        // that can. Short of half the row's width on purpose, because the state
+        // reports the *nearest* anchor and reaching the far one would trip the
+        // row's own reset while a finger is still down.
+        compose.onNodeWithTag(entryRowTag(4)).performTouchInput {
+            down(centerRight)
+            moveTo(Offset(width * 0.6f, centerY))
+        }
+        compose.onNodeWithTag(entryDeleteTag(4)).assertIsEnabled()
+        compose.onNodeWithTag(entryDeleteTag(4)).performSemanticsAction(SemanticsActions.OnClick)
+        assertEquals("the uncovered panel must ask for exactly this Entry", listOf(4L), deleted)
+
+        // Put the finger back where it started before lifting it, so the row
+        // settles home rather than into a dismissal this test never asked for.
+        compose.onNodeWithTag(entryRowTag(4)).performTouchInput {
+            moveTo(centerRight)
+            up()
+        }
+        Evidence.log("delete panel  = inert at rest, a button once the swipe uncovers it")
+    }
+
+    /**
+     * The gesture on its own still deletes.
+     *
+     * The panel becoming a button adds a way to finish the delete; it does not
+     * replace the one that was already there. Somebody who drags the row all the
+     * way off has said what they want as plainly as anyone can, and must not be
+     * left holding an armed control they now have to find and press.
+     */
+    @Test
+    fun a_completed_swipe_still_deletes_the_entry_on_its_own() {
+        show(
+            UiState(
+                session = SessionPhase.InContact("u"),
+                entries = listOf(entry(id = 4, preview = "caddy reverse_proxy localhost:8787")),
+            ),
+        )
 
         compose.onNodeWithTag(entryRowTag(4)).performTouchInput { swipeLeft() }
         compose.waitUntil(5_000) { deleted.isNotEmpty() }
         assertEquals("the swipe must ask for exactly this Entry", listOf(4L), deleted)
-        Evidence.log("delete        = a tap does nothing; a swipe asks for Entry 4")
+        Evidence.log("delete swipe  = a completed drag asks for Entry 4 with no tap at all")
+    }
+
+    /**
+     * A History of [ids], newest first.
+     *
+     * Forty rows is far past any viewport this runs in, which is what lets the
+     * newest row be scrolled out of the *composition* and not merely out of
+     * sight — so `assertDoesNotExist` on index 0 is a reading of where the list
+     * is rather than a guess about clipping. The rows are keyed by `entry.id`,
+     * so a list that loses or gains a row above the reader keeps the reader on
+     * the row they were on: whatever the viewport does after a state change is
+     * the effect's doing and not the `LazyColumn` finding its place again.
+     */
+    private fun history(ids: Iterable<Long>) = UiState(
+        session = SessionPhase.InContact("u"),
+        entries = ids.map { entry(id = it) },
+    )
+
+    /**
+     * Twenty rows below the newest, which is where every case below starts.
+     *
+     * Far enough down that index 0 is not composed, and far enough from the end
+     * of forty that the list can genuinely put this row at the top rather than
+     * running out of content and stopping short.
+     */
+    private val readingIndex = 20
+
+    private fun scrollTo(index: Int) {
+        compose.onNodeWithTag(TAG_HISTORY_LIST).performScrollToIndex(index)
+        compose.waitForIdle()
+    }
+
+    /**
+     * The row is composed and on screen, once the list has stopped moving.
+     *
+     * `animateScrollToItem` is a suspending animation and not a jump, so an
+     * assertion made on the frame the state changed would be reading the list
+     * mid-flight and would pass or fail on timing rather than on behaviour.
+     */
+    private fun awaitRow(id: Long) {
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag(entryRowTag(id)).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithTag(entryRowTag(id)).assertIsDisplayed()
+    }
+
+    /**
+     * An Entry that arrives while somebody is twenty rows down is not an Entry
+     * they should have to go looking for.
+     *
+     * This is the whole point of the rule. The newest row is the one `RECALL
+     * LATEST` will hand over, and the distance to it is not fixed: the pending
+     * band, the divergence band, the blocked-notifications note and a notice can
+     * each be there or not, and each one pushes index 0 further under the top of
+     * the viewport. Retiring the two confirmation banners bought back the height
+     * and none of the guarantee — an Offer made from this phone has to leave its
+     * own row visible, or the person taps `RECALL LATEST` on something they
+     * cannot see.
+     *
+     * **Without `NewestEntryStaysInView` this fails outright**, and not
+     * marginally: nothing else on the screen holds the `LazyListState`, so a
+     * prepend leaves the list exactly where the scroll to index 20 put it, and
+     * Entry 41 sits at index 0 twenty-one rows above the viewport — where a
+     * `LazyColumn` composes nothing, so `awaitRow` times out with no node to
+     * fetch rather than fetching one that is off screen.
+     */
+    @Test
+    fun a_new_entry_brings_the_top_of_the_list_back_into_view() {
+        show(history(40L downTo 1L))
+        scrollTo(readingIndex)
+        compose.onNodeWithTag(entryRowTag(20)).assertIsDisplayed()
+        compose.onNodeWithTag(entryRowTag(40)).assertDoesNotExist()
+
+        // The Offer lands. Nothing else about the state changes, and nobody
+        // touches the screen between here and the assertion.
+        show(history(41L downTo 1L))
+
+        awaitRow(41)
+        Evidence.log("arrival       = Entry 41 landed 21 rows above the reader and came into view")
+    }
+
+    /**
+     * Deleting the newest row is not an arrival and must not be answered like
+     * one.
+     *
+     * This is the case the effect's keying is subtle about, and the reason it
+     * asks *"a new head with the old head still under it"* rather than the
+     * obvious *"the head changed"*. Removing index 0 changes the head too.
+     * Somebody twenty rows down who has just swiped a row away has said nothing
+     * whatsoever about wanting to be at the top, and hauling them there costs
+     * them the place they were reading — over a row they got rid of on purpose.
+     *
+     * `LazyListState.firstVisibleItemIndex` belongs to a `rememberLazyListState`
+     * inside [com.sharepaste.android.ui.HistoryScreen] and is not reachable from
+     * out here, so the assertion is observational: the row that was under the
+     * reader's eyes is still under them, and the new head is still not composed.
+     *
+     * **The mutant this kills** is `if (newest != seen) animateScrollToItem(0)`:
+     * under it the delete scrolls to Entry 39, and both assertions fail. The
+     * prepend at the end is not decoration — an assertion that the list did not
+     * move is only worth having beside proof that this list still can, or
+     * deleting the effect outright would satisfy the first half.
+     */
+    @Test
+    fun deleting_the_newest_row_does_not_move_the_reader() {
+        show(history(40L downTo 1L))
+        scrollTo(readingIndex)
+        compose.onNodeWithTag(entryRowTag(20)).assertIsDisplayed()
+
+        // The head leaves. Entry 39 is the newest now, and that is not news
+        // anybody asked to be shown.
+        show(history(39L downTo 1L))
+
+        compose.onNodeWithTag(entryRowTag(20)).assertIsDisplayed()
+        compose.onNodeWithTag(entryRowTag(39)).assertDoesNotExist()
+
+        // And the list can still move, so the two assertions above are about
+        // this delete and not about an effect that does nothing.
+        show(history(listOf(41L) + (39L downTo 1L)))
+        awaitRow(41)
+        Evidence.log("deletion      = the head left, Entry 20 stayed; an arrival still scrolls")
+    }
+
+    /**
+     * A list somebody has not read a word of is not somewhere to drag them to
+     * the top of.
+     *
+     * Switching the Viewed Pairing replaces every Entry at once, so the head
+     * changes for a third distinct reason and shares no id with what was there
+     * before. The `LazyColumn` keeps its index because that is all it has to go
+     * on, and the new Pairing therefore opens roughly where the last one was
+     * left. That is not ideal and it is not this effect's business: what matters
+     * is that nothing here adds a *deliberate* jump on top of it. Somebody who
+     * switched Pairings to look for something is about to scroll anyway;
+     * somebody the app has yanked to the top has lost the only reference point
+     * they had for where they already were.
+     *
+     * **Same mutant, third route.** `newest != seen` is true for a switch as
+     * much as for a prepend, and a scroll keyed on that alone would put Entry
+     * 140 on screen — which is exactly what the first assertion refuses. The
+     * only thing that separates this from an arrival is that the old head is
+     * gone, which is the `entries.any { it.id == seen }` guard and nothing else.
+     * The closing prepend is the same control as in the case above.
+     */
+    @Test
+    fun switching_the_viewed_pairing_does_not_drag_the_reader_to_the_top() {
+        show(history(40L downTo 1L))
+        scrollTo(readingIndex)
+        compose.onNodeWithTag(entryRowTag(20)).assertIsDisplayed()
+
+        // A different Pairing's Entries, sharing no id with the ones on screen.
+        show(history(140L downTo 101L))
+
+        compose.onNodeWithTag(entryRowTag(140)).assertDoesNotExist()
+        compose.onNodeWithTag(entryRowTag(120)).assertIsDisplayed()
+
+        show(history(listOf(141L) + (140L downTo 101L)))
+        awaitRow(141)
+        Evidence.log("switch        = a wholly new list did not jump to its own index 0")
     }
 }

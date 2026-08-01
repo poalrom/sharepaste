@@ -1,7 +1,13 @@
 package com.sharepaste.android
 
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -23,7 +29,10 @@ import com.sharepaste.android.ui.TAG_DIVERGED_USE
 import com.sharepaste.android.ui.TAG_FAULT
 import com.sharepaste.android.ui.TAG_PAIRINGS_LIST
 import com.sharepaste.android.ui.TAG_SETTINGS_ABSENT_NOTE
-import com.sharepaste.android.ui.TAG_SETTINGS_LABEL_NOTE
+import com.sharepaste.android.ui.TAG_SETTINGS_FOREGROUND_NOTE
+import com.sharepaste.android.ui.TAG_SHOW_RECALLED
+import com.sharepaste.android.ui.TAG_SHOW_RECALLED_NOTE
+import com.sharepaste.android.ui.TAG_THIS_PHONE
 import com.sharepaste.android.ui.Tone
 import com.sharepaste.android.ui.UiState
 import com.sharepaste.android.ui.pairActiveTag
@@ -45,7 +54,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * What the Pairings screen says, with no facade behind it.
+ * What the Settings screen says, with no facade behind it.
  *
  * The wording and the tone are the whole subject here, so the state is handed in
  * rather than arrived at: a card is a function of one [com.sharepaste.core.PairingSummary],
@@ -54,6 +63,11 @@ import org.junit.runner.RunWith
  * states a live Relay would take several minutes to be talked into.
  * [TwoPairingsTest] and [PendingOnANonActivePairingTest] prove the same rules
  * against a real one; this proves the screen renders them.
+ *
+ * The one control here that is not a verb — the `SHOW WHAT WAS RECALLED` switch —
+ * is asserted the same way, as a snapshot in and a call out. What it *persists*
+ * across process death belongs to a test with a real DataStore behind it, not to
+ * one that hands the screen a `Boolean`.
  */
 @RunWith(AndroidJUnit4::class)
 class PairingsScreenTest {
@@ -92,6 +106,7 @@ class PairingsScreenTest {
         onConfirm: (Confirmation?) -> Unit = {},
         onClear: (String) -> Unit = {},
         onForget: (String) -> Unit = {},
+        onShowRecalled: (Boolean) -> Unit = {},
     ) {
         compose.setContent {
             SharepasteTheme {
@@ -103,6 +118,7 @@ class PairingsScreenTest {
                         confirm = onConfirm,
                         clearHistory = onClear,
                         forgetPairing = onForget,
+                        setShowRecalled = onShowRecalled,
                     ),
                 )
             }
@@ -118,6 +134,60 @@ class PairingsScreenTest {
         activeUserId = syncing.userId,
         foreground = true,
     )
+
+    /**
+     * The screen is called **`SETTINGS`**, and so is the way in.
+     *
+     * Pairings were the whole of this screen once and the title said so. It now
+     * holds four sections and a Pairing is one of them, so a title naming that
+     * one sends anybody looking for a switch to a screen that does not exist.
+     * `Screen.Pairings` and both string keys keep their names on purpose: what
+     * changed is what the screen is *called*, not where it lives, and renaming
+     * the key would edit every call site to say nothing new.
+     *
+     * The `◎` glyph itself is on the History and is asserted there. What belongs
+     * here is that the door and the room agree — the half a retitle breaks, and
+     * the half that decides what a screen reader says before the screen opens.
+     */
+    @Test
+    fun the_screen_and_the_way_into_it_are_both_called_settings() {
+        show(both())
+
+        val title = resources.getString(R.string.pairings_title)
+        assertEquals("SETTINGS", title)
+        assertEquals(
+            "the glyph that opens this screen has to name the screen it opens",
+            "Settings",
+            resources.getString(R.string.pairings_open),
+        )
+        compose.onNodeWithText(title).assertIsDisplayed()
+        Evidence.log("title band    = $title")
+    }
+
+    /**
+     * A card is subtitled by **the relay address alone**.
+     *
+     * The `user_id` led that subtitle and was redundant twice over: the card is
+     * headed by the User and states `This phone here: …` inside it, so the uuid
+     * told nobody anything — and at its length it pushed the one fact the
+     * subtitle exists for, which Relay this Pairing talks to, off the end of a
+     * single ellipsised line.
+     *
+     * Asserted as the exact subtitle *and* the absence of the uuid anywhere on
+     * the screen. A subtitle that merely contains the host would pass with the
+     * uuid still sitting in front of it, which is the state this is fixing.
+     */
+    @Test
+    fun a_card_is_subtitled_by_its_relay_address_alone() {
+        show(both())
+
+        listOf(syncing, resting).forEach {
+            scrollTo(pairCardTag(it.userId))
+            compose.onNodeWithText(it.relayHost).assertIsDisplayed()
+            compose.onAllNodes(hasText(it.userId, substring = true)).assertCountEquals(0)
+        }
+        Evidence.log("card subtitle = ${resting.relayHost} (no user_id anywhere on screen)")
+    }
 
     /**
      * A Pairing that is merely not active and disconnected is **resting, not
@@ -322,24 +392,101 @@ class PairingsScreenTest {
     }
 
     /**
-     * The settings a phone does not have are **stated**, not left as a gap.
+     * `THIS PHONE` carries the phone's one real preference and shows which way it
+     * is set.
      *
-     * Someone who knows the desktop comes looking for the capture switch and the
-     * deny-list. Finding nothing is indistinguishable from finding a half-built
-     * screen, so the screen says why both are inert here — and says the same
-     * about the Device Label, which the Relay owns and has no route to rename.
+     * Both directions, because a switch wedged on is indistinguishable from a
+     * working one for everybody whose preference is the default — and the default
+     * here is on. The assertion is the toggleable semantics rather than a colour:
+     * the row is built out of this screen's own borders, there being no Material
+     * `Switch` anywhere in this app, and a hand-built control that looks right
+     * while announcing nothing to a screen reader is the exact failure worth
+     * pinning. `Role.Switch` is what makes it say "on" instead of describing a
+     * rectangle.
      */
     @Test
-    fun the_settings_say_why_the_computers_two_switches_are_not_here() {
+    fun the_show_what_was_recalled_switch_shows_which_way_it_is_set() {
+        val on = mutableStateOf(true)
+        compose.setContent {
+            SharepasteTheme {
+                PairingsScreen(
+                    state = both().copy(showRecalled = on.value),
+                    actions = noActions(),
+                )
+            }
+        }
+
+        scrollTo(TAG_THIS_PHONE)
+        compose.onNodeWithTag(TAG_SHOW_RECALLED).assertIsOn()
+        compose.onNodeWithTag(TAG_SHOW_RECALLED)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
+        val note = resources.getString(R.string.settings_show_recalled_note)
+        compose.onNodeWithTag(TAG_SHOW_RECALLED_NOTE).assertTextEquals(note)
+
+        on.value = false
+        compose.waitForIdle()
+        compose.onNodeWithTag(TAG_SHOW_RECALLED).assertIsOff()
+        Evidence.log("show-recalled = on, then off, as the row's own switch semantics")
+        Evidence.log("switch note   = $note")
+    }
+
+    /**
+     * Pressing the switch **asks for the change; it does not make it.**
+     *
+     * The preference lives in DataStore and arrives back through `UiState`, so
+     * the row is told what to draw and never holds an opinion of its own.
+     * Asserted as the value handed to `setShowRecalled` while the row is still
+     * showing the old one: a switch that moved itself would look right here and
+     * then disagree with the phone for as long as the write took, or for good if
+     * the write failed.
+     */
+    @Test
+    fun pressing_the_switch_asks_for_the_change_rather_than_making_it() {
+        var asked: Boolean? = null
+        show(both(), onShowRecalled = { asked = it })
+
+        scrollTo(TAG_THIS_PHONE)
+        compose.onNodeWithTag(TAG_SHOW_RECALLED).performClick()
+        compose.waitForIdle()
+
+        assertEquals(
+            "the switch has to ask for the opposite of what it is showing",
+            false,
+            asked,
+        )
+        compose.onNodeWithTag(TAG_SHOW_RECALLED).assertIsOn()
+        Evidence.log("switch press  = setShowRecalled(false), and the row did not move itself")
+    }
+
+    /**
+     * `ABOUT THIS PHONE` states two facts about the phone, and no longer states a
+     * third somewhere it cannot be acted on.
+     *
+     * The two settings a computer has and this does not are stated rather than
+     * left as a gap: finding nothing where the capture switch should be is
+     * indistinguishable from finding a half-built screen. The foreground-only
+     * rule joins them at full length, because the History's band says the same
+     * thing and `▴ CLOSE` retires that one for good — a fact a person can dismiss
+     * permanently needs one surface where they cannot.
+     *
+     * The Device Label note is gone from here, and the assertion for it is not:
+     * it moved to `SettingsThatDoNotExistTest`, which reads `strings.xml` as
+     * text. Keeping it here would have meant keeping the string itself alive
+     * purely so that a test could look it up and find it undrawn. Its one
+     * load-bearing fact is `pair_label_explainer` now, beside the field where a
+     * name is still being chosen.
+     */
+    @Test
+    fun about_this_phone_states_the_absent_switches_and_the_foreground_rule() {
         show(both())
 
         scrollTo(TAG_SETTINGS_ABSENT_NOTE)
         val absent = resources.getString(R.string.settings_absent_note)
-        val label = resources.getString(R.string.settings_label_note)
+        val foreground = resources.getString(R.string.foreground_only_note)
         compose.onNodeWithTag(TAG_SETTINGS_ABSENT_NOTE).assertTextEquals(absent)
-        compose.onNodeWithTag(TAG_SETTINGS_LABEL_NOTE).assertTextEquals(label)
+        compose.onNodeWithTag(TAG_SETTINGS_FOREGROUND_NOTE).assertTextEquals(foreground)
         Evidence.log("absent switches = $absent")
-        Evidence.log("device label  = $label")
+        Evidence.log("foreground    = $foreground")
     }
 
     /**
@@ -351,18 +498,35 @@ class PairingsScreenTest {
      * file-based encryption covers, so a switch would either lie or do nothing.
      * The spec's mention of one is mistaken.
      *
-     * Two observable assertions rather than a reading of the source: **the
-     * settings surface renders no switch at all**, which is the shape either
-     * control would take, and the biometric API is not even on the classpath, so
-     * a gate cannot be written without a dependency change somebody has to
-     * justify. `SettingsThatDoNotExistTest` on the JVM covers the vocabulary and
-     * the manifest.
+     * **A census, not an absence.** This screen has exactly one switch — `SHOW
+     * WHAT WAS RECALLED`, which decides only whether a Receipt names what it put
+     * on the clipboard — so an assertion of *no* switches anywhere would have had
+     * to be deleted the day that arrived, and deleting the guard is how the
+     * guarded thing gets in. Naming the one permitted switch instead fails the
+     * second one whatever it ends up called. The count is taken at every scroll
+     * position in the list rather than once, because a `LazyColumn` composes what
+     * is on screen and a control parked off it would otherwise never be counted.
+     *
+     * The other half is the classpath: the biometric API is not on it, so a gate
+     * cannot be written without a dependency change somebody has to justify.
+     * `SettingsThatDoNotExistTest` on the JVM covers the vocabulary and the
+     * manifest.
      */
     @Test
     fun no_plaintext_toggle_and_no_biometric_gate_were_added() {
         show(both())
-        scrollTo(TAG_SETTINGS_ABSENT_NOTE)
-        compose.onAllNodes(isToggleable()).assertCountEquals(0)
+        listOf(
+            pairCardTag(syncing.userId),
+            pairCardTag(resting.userId),
+            TAG_THIS_PHONE,
+            TAG_SETTINGS_ABSENT_NOTE,
+        ).forEach { tag ->
+            scrollTo(tag)
+            compose.onAllNodes(isToggleable() and !hasTestTag(TAG_SHOW_RECALLED))
+                .assertCountEquals(0)
+        }
+        scrollTo(TAG_THIS_PHONE)
+        compose.onAllNodes(isToggleable()).assertCountEquals(1)
 
         listOf(
             "androidx.biometric.BiometricPrompt",
@@ -378,6 +542,6 @@ class PairingsScreenTest {
                 // As it should be.
             }
         }
-        Evidence.log("no toggles    = 0 switches on the settings surface; no biometric API present")
+        Evidence.log("switch census = 1 on this screen, and it is the Receipt one; no biometric API")
     }
 }

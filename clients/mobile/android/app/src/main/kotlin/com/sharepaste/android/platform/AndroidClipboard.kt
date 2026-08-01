@@ -1,11 +1,8 @@
 package com.sharepaste.android.platform
 
 import android.content.ClipData
-import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
-import android.os.Build
-import android.os.PersistableBundle
 import com.sharepaste.core.AppException
 import com.sharepaste.core.Clipboard
 
@@ -49,15 +46,10 @@ class AndroidClipboard(context: Context) : Clipboard {
     }
 
     override fun writeText(text: String) {
+        // The clipboard write is deliberately not marked sensitive — see ADR
+        // 0009. The app draws its own Receipt instead, because most vendors
+        // show no paste chip and there is no API to ask which do.
         val clip = ClipData.newPlainText(null, text)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Suppresses the system's clipboard preview toast, which would
-            // otherwise put the first line of whatever was recalled on a locked
-            // device's screen.
-            clip.description.extras = PersistableBundle().apply {
-                putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
-            }
-        }
         try {
             manager.setPrimaryClip(clip)
         } catch (e: Exception) {

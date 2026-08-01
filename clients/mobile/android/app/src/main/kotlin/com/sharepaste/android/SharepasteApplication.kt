@@ -2,6 +2,7 @@ package com.sharepaste.android
 
 import android.app.Application
 import android.os.StrictMode
+import com.sharepaste.android.platform.UiPreferences
 import com.sharepaste.android.standing.StandingActions
 
 /**
@@ -43,6 +44,21 @@ class SharepasteApplication : Application() {
      * Java stack and never consulted by the core's Rust HTTP client.
      */
     val repository: SharepasteRepository by lazy { openTheFacade(this) }
+
+    /**
+     * The two things this phone remembers about its own chrome.
+     *
+     * Here for the same reason the facade is: one DataStore file may have one
+     * instance in a process, and a second one over the same file would be two
+     * writers with no lock between them. Both surfaces need it — the state
+     * holder collects it, and a Standing Action reads one value out of it with
+     * no state holder anywhere — so the process is the only place both can
+     * reach.
+     *
+     * `by lazy` and not opened in [onCreate]: it touches disk on first read, and
+     * the process is started for things that never look at a preference.
+     */
+    val uiPreferences: UiPreferences by lazy { UiPreferences(this) }
 
     override fun onCreate() {
         super.onCreate()

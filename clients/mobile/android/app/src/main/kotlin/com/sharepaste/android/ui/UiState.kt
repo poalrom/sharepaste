@@ -118,6 +118,30 @@ data class UiState(
      * by either.
      */
     val standingActionsBlocked: Boolean = false,
+    /**
+     * Whether a Recall says what it put on the clipboard.
+     *
+     * The phone's first real preference, and the only one it has that the
+     * desktop does not. Off means no Recall [Receipt] at all — the Entry still
+     * reaches the clipboard, and the six [Notice]s are untouched, because this
+     * switch is about being told and not about being warned.
+     *
+     * Persisted, so it arrives here from
+     * [com.sharepaste.android.platform.UiPreferences] rather than from a core
+     * event. It is in the snapshot for the ordinary reason everything is: the
+     * Settings Screen draws a switch from it.
+     */
+    val showRecalled: Boolean = true,
+    /**
+     * Whether the History Screen's foreground-only band has been closed for
+     * good.
+     *
+     * Not the band's open/closed state, which is a `rememberSaveable` inside the
+     * band: expanding it is exploration, and only `▴ CLOSE` is acknowledgement.
+     * Dismissing does not lose the disclosure — it is on the Settings Screen at
+     * full length, which is the whole reason a dismissal is allowed to persist.
+     */
+    val foregroundNoteDismissed: Boolean = false,
 ) {
     /**
      * The Pairing whose History is on screen. Defaults to the Active one.
@@ -169,18 +193,23 @@ sealed interface Confirmation {
 }
 
 /**
- * The one sentence the app owes the person after they asked it for something.
+ * The one sentence the app owes the person about something they now have to act
+ * on, or at least know.
  *
  * A value in [UiState] rather than a snackbar raised from a coroutine, for the
  * same reason the rest of this is: what is on screen stays one immutable
  * snapshot, so every sentence can be asserted without a device in a particular
  * mood. The sealed hierarchy is what makes rendering exhaustive — an outcome
  * added without words for it will not compile.
+ *
+ * **Six variants, and the two that left are the point.** A plain Offer and a
+ * plain Recall confirm and need nothing back, so they are [Receipt]s and reach
+ * the person as a Toast; every one of these needs something done or known, and
+ * a band that persists until it is dismissed is what that difference looks like.
+ * [RecalledFromCache] is the variant that keeps the line honest — it is the
+ * plausible seventh Receipt and it may never be silent.
  */
 sealed interface Notice {
-
-    /** An Offered Capture was taken. [pending] is the queue depth after it. */
-    data class Offered(val pending: Long) : Notice
 
     /**
      * An Offered Capture was refused, and the reason has to be readable.
@@ -189,9 +218,6 @@ sealed interface Notice {
      * see [offerRefusalMessage] for the words and for which reasons can arrive.
      */
     data class OfferRefused(val reason: SkipReason) : Notice
-
-    /** An Entry is on this device's clipboard. */
-    data object Recalled : Notice
 
     /**
      * The newest **cached** Entry is on the clipboard, because the Relay could

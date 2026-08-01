@@ -10,7 +10,7 @@ import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.sharepaste.android.standing.StandingActions
-import com.sharepaste.android.ui.Notice
+import com.sharepaste.android.ui.Receipt
 import com.sharepaste.android.ui.SessionPhase
 import com.sharepaste.android.ui.TAG_FAULT
 import com.sharepaste.android.ui.TAG_OFFER
@@ -18,6 +18,7 @@ import com.sharepaste.android.ui.TAG_RECALL_LATEST
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -131,19 +132,25 @@ class NotificationsDeniedTest {
         val text = "offered-with-notifications-denied-${System.currentTimeMillis()}"
         phone.clip.putText(text)
         compose.onNodeWithTag(TAG_OFFER).performClick()
-        phone.await("the in-app Offer must still be taken") { it.notice is Notice.Offered }
+        phone.awaitReceipt("the in-app Offer must still be taken") { it is Receipt.Offered }
         val entry = phone.awaitEntry("the Offer must round-trip through the Relay") {
             it.preview == text
         }
         Evidence.log("denied verbs  = Offer still works: Entry id=${entry.id}")
 
         phone.clip.putText("not the Entry")
-        phone.model.dismissNotice()
         compose.onNodeWithTag(TAG_RECALL_LATEST).performClick()
-        phone.await("the in-app Recall must still settle") { it.notice != null }
+        val recalled = phone.awaitReceipt("the in-app Recall must still report what it handed over") {
+            it is Receipt.Recalled
+        } as Receipt.Recalled
         assertEquals(
-            "Recall Latest must reach the Relay and say so, not fall back",
-            Notice.Recalled,
+            "the Recall must say which Entry it handed over, and that is the one just offered",
+            text,
+            recalled.preview,
+        )
+        assertNull(
+            "the fetch succeeded, so the outcome confirms and vanishes. A band left standing " +
+                "here would be the cache fallback, which is what 'not fall back' rules out",
             phone.state.notice,
         )
         assertEquals(

@@ -579,9 +579,11 @@ fun GlyphButton(
  * A framed panel with a header strip: a Pairing card, the viewfinder.
  *
  * [title] is the thing itself and [code] is its address — for a Pairing that is
- * the **User** and then `user_id @ relay host`, in that order, because heading a
- * Pairing with this machine's own Device Label is the desktop's mistake and the
- * card is where it was made.
+ * the **User** and then the relay host, in that order, because heading a Pairing
+ * with this machine's own Device Label is the desktop's mistake and the card is
+ * where it was made. The User's id is not repeated in the address: the heading
+ * already carries the User, and the repetition is what pushed the host off the
+ * end of the line.
  */
 @Composable
 fun FuiPanel(

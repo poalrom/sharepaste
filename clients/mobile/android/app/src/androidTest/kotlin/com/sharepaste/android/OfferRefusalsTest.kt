@@ -9,6 +9,7 @@ import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.sharepaste.android.ui.Notice
+import com.sharepaste.android.ui.Receipt
 import com.sharepaste.android.ui.SessionPhase
 import com.sharepaste.android.ui.TAG_NOTICE
 import com.sharepaste.android.ui.TAG_OFFER
@@ -68,7 +69,7 @@ class OfferRefusalsTest {
         val text = "the same link twice ${System.currentTimeMillis()}"
         phone.clip.putText(text)
         compose.onNodeWithTag(TAG_OFFER).performClick()
-        phone.await("the first Offer must be taken") { it.notice is Notice.Offered }
+        phone.awaitReceipt("the first Offer must be taken") { it is Receipt.Offered }
 
         compose.onNodeWithTag(TAG_OFFER).performClick()
         assertRefused(SkipReason.DUPLICATE, "duplicate")

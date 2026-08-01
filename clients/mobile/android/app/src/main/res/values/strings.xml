@@ -13,8 +13,9 @@
   greppable and keeps a locale's casing rules out of it. **Whole sentences stay
   sentence case**, at full length, wherever the app has something to explain:
   the foreground-only note, the stale-Recall warning, the blocked-notification
-  note, the two erasures and the two absent settings are the load-bearing ones,
-  and none of them is shortened to fit a band.
+  note, the two erasures, the two absent settings and what the one switch this
+  phone has actually decides are the load-bearing ones, and none of them is
+  shortened to fit a band.
 -->
 <resources>
     <string name="app_name">Sharepaste</string>
@@ -25,18 +26,17 @@
     <string name="pair_step_name" translatable="false">01</string>
     <string name="pair_step_scan" translatable="false">02</string>
     <string name="pair_label_heading">NAME THIS PHONE</string>
-    <string name="pair_label_explainer">Your computer lists this name beside every Entry that
-        comes from here, so pick something you will recognise later.</string>
+    <string name="pair_label_explainer">Shown beside every Entry from this phone. It cannot be
+        changed later.</string>
     <string name="pair_label_field">This phone\u2019s name</string>
     <string name="pair_label_placeholder">Pixel in my pocket</string>
     <string name="pair_scan_heading">SCAN THE CODE ON YOUR COMPUTER</string>
-    <string name="pair_scan_explainer">Open Sharepaste on the computer you are already paired to
-        and choose Pair a device. Point this phone at the square code it shows.</string>
+    <string name="pair_scan_explainer">On your computer, open Sharepaste and choose Pair a
+        device.</string>
     <string name="pair_needs_a_name">Name this phone first — the code is only good for two
         minutes, so we would rather ask now than lose it.</string>
     <string name="pair_typed_heading">OR TYPE THE CODE</string>
-    <string name="pair_typed_explainer">Your computer prints the code underneath the square, in
-        groups of four. Upper or lower case, dashes or not — it does not matter.</string>
+    <string name="pair_typed_explainer">Case and dashes do not matter.</string>
     <string name="pair_typed_field">Pairing code</string>
     <string name="pair_button">PAIR THIS PHONE</string>
     <string name="pair_working">PAIRING\u2026</string>
@@ -52,19 +52,6 @@
     -->
     <string name="pair_code_scanned">Code read. It is in the field below — name this phone, then
         Pair. Clear the field to point the camera at another code.</string>
-    <!--
-      The Relay gives a pairing slot 120 seconds (`serve.ts`), which is a fact
-      about the code and not a countdown this phone could run: nothing here
-      knows when the computer printed it. Worded as the rule rather than as a
-      clock, because a static "02:00" beside a viewfinder reads as one.
-    -->
-    <string name="pair_code_ttl">CODES EXPIRE AFTER 02:00</string>
-    <!--
-      The second fact a phone cannot discover for itself, beside the cipher.
-      Enforced by the shell declining Android's cleartext exception and by
-      `REQUIRE_HTTPS` travelling into the facade — see `build.gradle.kts`.
-    -->
-    <string name="relay_must_be_https">RELAY MUST BE HTTPS</string>
 
     <!-- The three camera and code failures, each said in its own words. -->
     <string name="camera_permission_refused">Sharepaste cannot use the camera, so it cannot read
@@ -106,6 +93,8 @@
     <string name="history_title">SHAREPASTE</string>
     <!-- %1$s is the User, %2$s the Relay host. Which Pairing is on screen. -->
     <string name="history_identity">%1$s @ %2$s</string>
+    <!-- The User slot while the Relay has not yet said who this phone is. -->
+    <string name="history_identity_unknown">\u2026</string>
     <string name="history_empty_heading">NOTHING HERE YET</string>
     <string name="history_empty_body">Anything you copy on a paired computer shows up here as an
         Entry. Nothing has been offered yet.</string>
@@ -187,6 +176,12 @@
 
     <string name="recall_done">On the clipboard. Paste it wherever you were going.</string>
     <!--
+      The same outcome with the Preview named, for when Sharepaste is asked to
+      say what arrived. %1$s is the Preview, which is the facade's and is never
+      re-worded here.
+    -->
+    <string name="receipt_recalled">On the clipboard: %1$s</string>
+    <!--
       The one sentence that may never be missing. Recall Latest always tries the
       Relay; when the try fails, the newest Entry this phone already had is still
       the best answer available — but it may be yesterday's link, and the person
@@ -237,11 +232,10 @@
       on any version. The app is not broken by it and says so: every verb still
       works from this screen.
     -->
-    <string name="standing_actions_blocked_heading">STANDING ACTIONS · UNREACHABLE</string>
-    <string name="standing_actions_blocked">Sharepaste cannot show its notification, so Offer and
-        Recall are not reachable without opening the app. Nothing else is affected — both still
-        work from here. Turn this app\u2019s notifications on to get the Standing Actions
-        back.</string>
+    <string name="standing_actions_blocked_heading">STANDING ACTIONS · OFF</string>
+    <string name="standing_actions_blocked">Allow notifications and you can Offer and Recall
+        without opening Sharepaste. Nothing else is affected — both still work from
+        here.</string>
     <string name="standing_actions_enable">TURN NOTIFICATIONS ON</string>
 
     <!-- The share sheet reads this. It names the verb, not the product. -->
@@ -344,14 +338,21 @@
 
     <!--
       ===================================================================
-      Pairings: the Active one, the Viewed one, and what can be done to a
-      Pairing. Exactly one is Active — that is what this phone syncs, and it
-      survives a restart. Any may be Viewed, which changes nothing and is
-      forgotten when the app is put down (CONTEXT.md).
+      The Settings Screen: the Pairings, what can be done to one, and the
+      one setting a phone has of its own. Exactly one Pairing is Active —
+      that is what this phone syncs, and it survives a restart. Any may be
+      Viewed, which changes nothing and is forgotten when the app is put
+      down (CONTEXT.md).
+
+      The keys still say `pairings_` and the screen now says SETTINGS. That
+      is deliberate and matches `Screen.Pairings`, which also stays: this is
+      an information-architecture change, not a routing one, and renaming
+      the keys would churn every reference to make a screen title agree with
+      a symbol nobody reads.
       ===================================================================
     -->
-    <string name="pairings_title">PAIRINGS</string>
-    <string name="pairings_open">Pairings</string>
+    <string name="pairings_title">SETTINGS</string>
+    <string name="pairings_open">Settings</string>
     <string name="pairings_back">Back</string>
     <string name="pairings_active_badge">SYNCING</string>
     <string name="pairings_viewed_badge">SHOWING</string>
@@ -405,9 +406,14 @@
     <string name="pairings_add_button">PAIR WITH A CODE</string>
 
     <!--
-      ADR 0002 puts cipher disclosure beside pairing, where the choice to trust a
-      Relay is being made. One line per Pairing card, and the only cipher this
-      product names anywhere: `core/crypto.rs` seals with XChaCha20-Poly1305.
+      One line per Pairing card, and the only cipher this product names
+      anywhere: `core/crypto.rs` seals with XChaCha20-Poly1305.
+
+      ADR 0002 asked for the disclosure beside pairing, where the choice to
+      trust a Relay is being made. On this phone it is no longer there — the
+      pairing flow's footer band went with the rest of its inert facts — so
+      what survives is this card, which is read after the fact. A weaker
+      placement than the ADR asked for, and recorded as such in ADR 0002.
     -->
     <string name="cipher_disclosure" translatable="false">XCHACHA20-POLY1305</string>
 
@@ -420,15 +426,16 @@
       ===================================================================
     -->
     <string name="settings_heading">ABOUT THIS PHONE</string>
+    <string name="settings_this_phone_heading">THIS PHONE</string>
     <!--
-      Display-only, and this says why. The Relay sets a Device Label once, when
-      the device is created, and serves it from there; it has no rename route. A
-      local-only rename would show this phone one name and every other device
-      another, which is worse than not offering one.
+      The only switch on this screen. A Recall reaches the clipboard whichever
+      way this is set; all it decides is whether the receipt names what arrived,
+      which is the part a person may not want on screen in company. Capitals for
+      the switch because it is a control, sentence case for what it means.
     -->
-    <string name="settings_label_note">This phone told the Relay its name when it paired, and
-        that is the name every other device sees beside your Entries. It cannot be changed
-        afterwards — pair this phone again to give it a different one.</string>
+    <string name="settings_show_recalled">SHOW WHAT WAS RECALLED</string>
+    <string name="settings_show_recalled_note">A Recall puts the Entry on the clipboard either
+        way. This only decides whether Sharepaste tells you what it was.</string>
     <!--
       The two settings a computer has and a phone does not. Both are inert here
       rather than missing: `capture_enabled` governs Watched Capture, which a

@@ -6,6 +6,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.sharepaste.android.ui.Notice
+import com.sharepaste.android.ui.Receipt
 import com.sharepaste.android.ui.SessionPhase
 import com.sharepaste.android.ui.TAG_NOTICE_STALE
 import com.sharepaste.android.ui.TAG_OFFER
@@ -17,6 +18,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -96,7 +98,14 @@ class RoundTripTest {
         phone.clip.putText("something else entirely")
         phone.scrollTo(entryRecallTag(arrived.id))
         compose.onNodeWithTag(entryRecallTag(arrived.id)).performClick()
-        phone.await("the Recall must report itself") { it.notice == Notice.Recalled }
+        val recalled = phone.awaitReceipt("the Recall must report itself") {
+            it is Receipt.Recalled
+        } as Receipt.Recalled
+        assertEquals(
+            "the Recall must say which Entry it handed over, and the Preview is how it says it",
+            copied,
+            recalled.preview,
+        )
 
         val onClipboard = phone.clip.requireText("after Recalling the backfilled Entry")
         Evidence.log("recalled      = clipboard now holds ${onClipboard.length} chars")
@@ -119,8 +128,8 @@ class RoundTripTest {
         val offered = "offered-from-the-phone-${System.currentTimeMillis()}"
         phone.clip.putText(offered)
         compose.onNodeWithTag(TAG_OFFER).performClick()
-        phone.await("the Offer must be taken") { it.notice is Notice.Offered }
-        Evidence.log("offered       = ${phone.state.notice}")
+        val taken = phone.awaitReceipt("the Offer must be taken") { it is Receipt.Offered }
+        Evidence.log("offered       = $taken")
 
         awaitRelayNewest("the phone's Offer must reach the Relay", offered)
         Evidence.log("other device  = read it back off the Relay: ${offered.take(24)}…")
@@ -132,9 +141,18 @@ class RoundTripTest {
      * Proven the only way it can be: the phone is put down, the other device puts
      * an Entry on the Relay that this phone's cache has *never* held, and Recall
      * Latest is asked with no session running. If it read the cache it would hand
-     * over the older Entry; it hands over the new one, and reports
-     * [Notice.Recalled] rather than [Notice.RecalledFromCache] because the round
-     * trip succeeded.
+     * over the older Entry; it hands over the new one.
+     *
+     * Which leaves the second half, and it is the *kind* of outcome rather than
+     * one enum value over another. A round trip that succeeded is a [Receipt]: it
+     * names what is now on the clipboard and then vanishes, because there is
+     * nothing left for anyone to do about it. A fallback is
+     * [Notice.RecalledFromCache] instead, and it waits in the band to be
+     * dismissed — handing back what may be yesterday's link is the one outcome
+     * ADR 0007 says may never be silent. So an authoritative answer reported in
+     * the band would be an authoritative answer reported as stale, and both
+     * halves are asserted: the Receipt that arrived, naming the Entry only the
+     * Relay had, and the band that never claimed staleness.
      */
     @Test
     fun recall_latest_fetches_an_entry_this_phone_has_never_cached() {
@@ -164,12 +182,20 @@ class RoundTripTest {
         Evidence.log("cache head    = $older (the newer Entry is on the Relay only)")
 
         compose.onNodeWithTag(TAG_RECALL_LATEST).performClick()
-        phone.await("Recall Latest must settle") { it.notice != null }
+        val fetched = phone.awaitReceipt("Recall Latest must report what it handed over") {
+            it is Receipt.Recalled
+        } as Receipt.Recalled
 
         assertEquals(
+            "the Receipt must name the Entry only the Relay had; a cache read would have " +
+                "named the older one",
+            newer,
+            fetched.preview,
+        )
+        assertNotEquals(
             "the round trip succeeded, so the answer is authoritative and must not be " +
                 "reported as stale",
-            Notice.Recalled,
+            Notice.RecalledFromCache,
             phone.state.notice,
         )
         compose.onNodeWithTag(TAG_NOTICE_STALE).assertDoesNotExist()
@@ -204,8 +230,10 @@ class RoundTripTest {
         val offered = "offered-with-capture-disabled-${System.currentTimeMillis()}"
         phone.clip.putText(offered)
         compose.onNodeWithTag(TAG_OFFER).performClick()
-        phone.await("the Offer must be taken with capture disabled") { it.notice is Notice.Offered }
-        Evidence.log("capture off   = ${phone.state.notice} (capture_enabled=false)")
+        val taken = phone.awaitReceipt("the Offer must be taken with capture disabled") {
+            it is Receipt.Offered
+        }
+        Evidence.log("capture off   = $taken (capture_enabled=false)")
 
         awaitRelayNewest("an Offer made with capture disabled must still reach the Relay", offered)
     }
