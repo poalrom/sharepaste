@@ -12,7 +12,10 @@ description = "The sharepaste facade across a foreign-function boundary. UniFFI 
 [lib]
 # `cdylib` is what Android loads out of `jniLibs/<abi>/`. `lib` is what the
 # `uniffi-bindgen` binary below links against, and what `cargo test` builds.
-crate-type = ["cdylib", "lib"]
+# `staticlib` is what iOS links: an app on a free Personal Team may embed no
+# dynamic library of its own, so the archive goes into the binary whole. It
+# costs the Android build one extra link per ABI and nothing else.
+crate-type = ["cdylib", "lib", "staticlib"]
 name = "sharepaste_ffi"
 
 [features]
