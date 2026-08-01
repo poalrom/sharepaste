@@ -7,6 +7,27 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.4.0
+
+**Android only.** Nothing on this machine changes — no new desktop feature, no fix, no
+setting moved. If you do not use the Android app there is no reason to install this.
+
+- **The Android app was rebuilt to look like this one.** Same dark console, same
+  vocabulary, same colours, so a phone and a desktop showing the same history no longer
+  look like two products.
+- **What a phone will and will not do is now pinned to the top of the screen** instead of
+  sitting at the top of the list, where it scrolled away the moment you had more than a
+  screenful of entries. "Nothing arrives while this is closed" is always visible, and one
+  tap opens the full explanation.
+- **Whether the phone is in contact with the relay is always on screen.** It used to
+  appear only when something was wrong, which on a phone is almost always — a phone syncs
+  only while you are looking at it, so that read as permanently broken.
+- **Recall Latest is now the main button**, and the entry it will hand over is marked in
+  the list, so you can see what you are about to paste before you press it.
+- **Deleting an entry on the phone takes a swipe** rather than a tap next to Recall. A
+  delete reaches every paired device and cannot be undone, and the two used to be a
+  thumb's width apart.
+
 ## 0.3.0
 
 Sharepaste runs on Android now, and the pairing pane shows the short code as a
