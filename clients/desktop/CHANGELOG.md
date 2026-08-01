@@ -7,6 +7,48 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.5.0
+
+**Android only.** Nothing on this machine changes. The phone now says what a recall put
+on your clipboard, and several controls that did nothing when pressed now work.
+
+- **A recall tells you what arrived.** Pressing Recall used to be silent: nothing on the
+  phone said whether it had worked, or which entry you were about to paste. It now shows
+  the entry's first line for a few seconds, so you can see what you have before you paste
+  it into a message. **Android's own paste preview works again too** — Sharepaste used to
+  blank it out to a row of dots, which on a phone that shows one reads as the app being
+  broken. The trade is real and worth knowing: the recalled text is now legible in your
+  keyboard's clipboard history until that clears itself, the same as anything else you
+  copy. All of it needs your unlocked phone in somebody's hands.
+- **You can switch that off.** *Settings → This phone → Show what was recalled*. Off means
+  the entry still goes to your clipboard and Sharepaste simply does not say what it was —
+  for when the phone is not the only thing in the room. Warnings are not affected: a
+  recall that fell back to a cached entry still says so, because that one you have to
+  know about.
+- **The entry you just offered is where you can see it.** Two success banners used to
+  appear at the top of the history and push the newest entry off the bottom of the
+  screen — the one Recall Latest will hand over. Both banners are gone, and the list now
+  moves to the newest entry when one arrives.
+- **Swiping an entry and tapping Delete deletes it.** The red panel the swipe uncovered
+  did nothing at all when pressed; the only way through was to complete the swipe. Both
+  work now. A tap on an unswiped row still does nothing, which is the point of the swipe.
+- **The back gesture no longer closes the app.** Back from the settings screen returns to
+  your history, and back out of the pairing screen returns to settings. Back from the
+  history still leaves, as it should.
+- ***Pairings* is now *Settings*,** because it holds more than pairings. A pairing card
+  shows the relay address in full instead of truncating it behind an identifier you
+  cannot use, and the note about naming the phone has moved to where the name is actually
+  being chosen.
+- **Try again after a failed pairing starts over properly.** It cleared the error and left
+  the dead code sitting in the field, so pairing again re-sent a code the relay had
+  already thrown away, and the camera stayed off. The field is now empty and the
+  viewfinder is live; the name you gave the phone is kept.
+- **Fewer words in the way.** The three pairing steps are about a third of their old
+  length. Two lines that a phone cannot act on are gone: a countdown it could never
+  actually count, and a rule about relay addresses you never get to choose. On a phone
+  that has not finished starting up, the top of the history no longer shows a long
+  internal identifier where your name goes.
+
 ## 0.4.2
 
 **Desktop only.** One fix to the pairing screen. Nothing on Android changes.
