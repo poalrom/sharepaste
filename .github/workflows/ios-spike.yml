@@ -107,12 +107,16 @@ jobs:
       - name: Link 3 — a minimal SwiftPM package, no xcframework and no xcodebuild
         run: |
           set -euo pipefail
-          mkdir -p spike/Sources/sharepasteFFI spike/Sources/SharepasteCore spike/Sources/KatRunner spike/Vendor
+          # The generator names everything after the crate, `sharepaste_ffi`,
+          # so the C module is `sharepaste_ffiFFI` and a systemLibrary target
+          # has to carry that name exactly.
+          mkdir -p spike/Sources/sharepaste_ffiFFI spike/Sources/SharepasteCore spike/Sources/KatRunner spike/Vendor
 
           cp clients/target/aarch64-apple-ios-sim/release/libsharepaste_ffi.a spike/Vendor/
-          cp spike/generated/sharepaste.swift spike/Sources/SharepasteCore/
-          cp spike/generated/sharepasteFFI.h spike/Sources/sharepasteFFI/
-          cp spike/generated/sharepasteFFI.modulemap spike/Sources/sharepasteFFI/module.modulemap
+          cp spike/generated/sharepaste_ffi.swift spike/Sources/SharepasteCore/
+          cp spike/generated/sharepaste_ffiFFI.h spike/Sources/sharepaste_ffiFFI/
+          cp spike/generated/sharepaste_ffiFFI.modulemap spike/Sources/sharepaste_ffiFFI/module.modulemap
+          cat spike/Sources/sharepaste_ffiFFI/module.modulemap
 
           cat > spike/Package.swift <<'SWIFT'
           // swift-tools-version:5.9
@@ -122,10 +126,10 @@ jobs:
               name: "Spike",
               platforms: [.iOS(.v16)],
               targets: [
-                  .systemLibrary(name: "sharepasteFFI", path: "Sources/sharepasteFFI"),
+                  .systemLibrary(name: "sharepaste_ffiFFI", path: "Sources/sharepaste_ffiFFI"),
                   .target(
                       name: "SharepasteCore",
-                      dependencies: ["sharepasteFFI"],
+                      dependencies: ["sharepaste_ffiFFI"],
                       path: "Sources/SharepasteCore",
                       linkerSettings: [
                           .unsafeFlags(["-L", "Vendor"]),
