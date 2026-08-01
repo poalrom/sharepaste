@@ -1,9 +1,12 @@
-# Sharepaste desktop build — macOS only.
-# All targets below require macOS. Windows and Linux contributors should use:
-#   npm --prefix clients/desktop run build
-#
 # Sharepaste — top-level convenience targets.
-# macOS desktop app: build via Tauri, install to /Applications.
+#
+# The `desktop-*` targets are macOS only; Windows and Linux contributors should
+# use `npm --prefix clients/desktop run build` instead.
+#
+# The `ios-*` targets run wherever `xtool` does, which in practice is WSL or
+# Linux. They do not build the Rust half: `libsharepaste_ffi.a` is produced on
+# `macos-latest` by CI, because cross-compiling vendored C SQLite for an Apple
+# target needs Apple's own clang and sysroot. `ios-vendor` fetches it.
 
 DESKTOP_DIR := clients/desktop
 UI_DIR      := $(DESKTOP_DIR)/ui
@@ -14,7 +17,17 @@ APP_SRC     := $(BUNDLE_DIR)/macos/$(APP_NAME)
 APP_DEST    := /Applications/$(APP_NAME)
 DMG_DIR     := $(BUNDLE_DIR)/dmg
 
-.PHONY: help desktop-deps desktop-build desktop-install desktop-reinstall desktop-uninstall desktop-open desktop-dmg desktop-clean check-macos
+IOS_DIR     := clients/mobile/ios
+# Which slice `ios-vendor` installs. The device one, because that is what
+# `xtool dev` puts on the iPad; CI's own test job drops the simulator slice in
+# the same place. Nothing in `Package.swift` knows which it got, and that is the
+# whole mechanism that removes the need for an xcframework.
+IOS_SLICE   ?= device
+# The CI artifact holding both slices and the generated Swift bindings, from the
+# job in `.github/workflows/desktop-build.yml`.
+IOS_ARTIFACT := ios-static-library
+
+.PHONY: help desktop-deps desktop-build desktop-install desktop-reinstall desktop-uninstall desktop-open desktop-dmg desktop-clean check-macos ios-vendor ios-build ios-run ios-clean
 
 help:
 	@echo "Targets:"
@@ -26,6 +39,47 @@ help:
 	@echo "  desktop-open        Open the bundled .app from the build tree"
 	@echo "  desktop-dmg         Open the .dmg in Finder"
 	@echo "  desktop-clean       cargo clean + remove ui/dist"
+	@echo "  ios-vendor          Fetch the iOS static library + bindings from CI"
+	@echo "                      (IOS_SLICE=device|simulator, default device)"
+	@echo "  ios-build           xtool dev build (needs ios-vendor first)"
+	@echo "  ios-run             xtool dev run — build, sign, install over USB"
+	@echo "  ios-clean           Remove the fetched artifact and the build tree"
+
+# -----------------------------------------------------------------------------
+# iOS.
+#
+# A fresh clone cannot build the iOS app until this has run, and that is
+# intended: the archive and the bindings are build *inputs* produced elsewhere,
+# exactly as `libsharepaste_ffi.so` is on Android. The bindings come from the
+# built library rather than from the sources, which is what makes a
+# bindings/library mismatch impossible — so they travel together, from the same
+# CI run, and are fetched together here.
+# -----------------------------------------------------------------------------
+ios-vendor:
+	@command -v gh >/dev/null || { echo "gh is not installed; it is how the CI artifact is fetched"; exit 1; }
+	@case "$(IOS_SLICE)" in device|simulator) ;; *) echo "IOS_SLICE must be device or simulator, got '$(IOS_SLICE)'"; exit 1 ;; esac
+	@rm -rf $(IOS_DIR)/.vendor-download
+	@mkdir -p $(IOS_DIR)/.vendor-download
+	gh run download --name $(IOS_ARTIFACT) --dir $(IOS_DIR)/.vendor-download
+	@mkdir -p $(IOS_DIR)/Vendor $(IOS_DIR)/Sources/sharepaste_ffiFFI $(IOS_DIR)/Sources/SharepasteCore
+	@cp $(IOS_DIR)/.vendor-download/$(IOS_SLICE)/libsharepaste_ffi.a $(IOS_DIR)/Vendor/
+	@cp $(IOS_DIR)/.vendor-download/generated/sharepaste_ffi.swift $(IOS_DIR)/Sources/SharepasteCore/
+	@cp $(IOS_DIR)/.vendor-download/generated/sharepaste_ffiFFI.h $(IOS_DIR)/Sources/sharepaste_ffiFFI/
+	@cp $(IOS_DIR)/.vendor-download/generated/sharepaste_ffiFFI.modulemap $(IOS_DIR)/Sources/sharepaste_ffiFFI/module.modulemap
+	@rm -rf $(IOS_DIR)/.vendor-download
+	@echo ">> vendored the $(IOS_SLICE) slice into $(IOS_DIR)/Vendor"
+
+ios-build:
+	@test -f $(IOS_DIR)/Vendor/libsharepaste_ffi.a || { echo "no archive in $(IOS_DIR)/Vendor — run 'make ios-vendor' first"; exit 1; }
+	cd $(IOS_DIR) && xtool dev build
+
+ios-run:
+	@test -f $(IOS_DIR)/Vendor/libsharepaste_ffi.a || { echo "no archive in $(IOS_DIR)/Vendor — run 'make ios-vendor' first"; exit 1; }
+	cd $(IOS_DIR) && xtool dev run
+
+ios-clean:
+	rm -rf $(IOS_DIR)/Vendor $(IOS_DIR)/Sources/sharepaste_ffiFFI $(IOS_DIR)/Sources/SharepasteCore
+	rm -rf $(IOS_DIR)/.build $(IOS_DIR)/xtool
 
 check-macos:
 	@if [ "$$(uname -s)" != "Darwin" ]; then \

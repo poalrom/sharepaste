@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hand-written, and merged over xtool's defaults — every key here wins.
+
+  Generating it from `tauri.conf.json` was considered and declined: it would be
+  the only generated version in the repository, and it would give `xtool dev` a
+  prerequisite on every fresh clone. Instead `.github/scripts/check-versions.mjs`
+  reads `CFBundleShortVersionString` below and refuses to publish when it
+  disagrees with `tauri.conf.json`.
+-->
+<plist version="1.0">
+<dict>
+    <!--
+      The version SideStore compares. It is matched case-sensitively against
+      the `version` field of the source JSON; get them out of step and SideStore
+      offers a fresh install beside the real app rather than an update.
+    -->
+    <key>CFBundleShortVersionString</key>
+    <string>0.5.0</string>
+    <!--
+      The build number. iOS orders installs by this as well as by the marketing
+      string, and xtool's default is a literal "1" for every build ever made.
+      Tracked to the marketing version rather than incremented independently:
+      one artefact version across the whole client side is the rule
+      `check-versions.mjs` already enforces, and a second counter would be a
+      number nobody maintains until the release where it matters.
+    -->
+    <key>CFBundleVersion</key>
+    <string>0.5.0</string>
+
+    <!--
+      Dark, as an instruction rather than as a preference.
+
+      Decision 12 of the Android redesign refuses a light scheme. On iOS that is
+      not the same as defaulting to dark: without this key the system renders
+      the HUD light for anyone whose device is in light mode, and every contrast
+      ratio in `Fui.swift` is measured against the void.
+    -->
+    <key>UIUserInterfaceStyle</key>
+    <string>Dark</string>
+
+    <!--
+      The scanner. A phone is the claimer: it reads a shortcode off the QR the
+      desktop's pairing pane mints. Typed entry is the fallback and stays
+      available when this is refused, which is why the sentence says the
+      camera is a convenience rather than a requirement.
+    -->
+    <key>NSCameraUsageDescription</key>
+    <string>Sharepaste reads the pairing code from the QR square your desktop shows. Nothing is recorded, and you can type the code instead.</string>
+
+    <!--
+      No background modes, no push, no `UIBackgroundModes` key at all. Sync is
+      foreground-only (ADR 0007) and on iOS that is forced as well as chosen:
+      both are entitlement-gated and a free Personal Team has neither.
+    -->
+
+    <!--
+      Empty on purpose. `UIColorName` would name a colour in an asset catalog,
+      and there is no catalog here — nothing on the Linux build path can compile
+      one. With `UIUserInterfaceStyle` forced to Dark the system background is
+      black, which is within a shade of the void the first frame paints.
+    -->
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>UIStatusBarStyle</key>
+    <string>UIStatusBarStyleLightContent</string>
+</dict>
+</plist>

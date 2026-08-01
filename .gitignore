@@ -28,6 +28,21 @@ clients/mobile/android/local.properties
 # The Kotlin compiler's own scratch dir, created by the Compose build.
 clients/mobile/android/.kotlin/
 
+# iOS client. Three of these are build *inputs* rather than outputs, and that is
+# the point: `libsharepaste_ffi.a` is cross-compiled on `macos-latest` because
+# vendored C SQLite needs Apple's own clang, and the Swift bindings are
+# generated from that built archive rather than from the sources — which is what
+# makes a bindings/library mismatch impossible. `make ios-vendor` fetches all
+# three from one CI run, so a fresh clone cannot build until it has.
+clients/mobile/ios/Vendor/
+clients/mobile/ios/Sources/SharepasteCore/
+clients/mobile/ios/Sources/sharepaste_ffiFFI/
+# SwiftPM's build tree, and where `xtool` writes the .app and its throwaway
+# builder package.
+clients/mobile/ios/.build/
+clients/mobile/ios/xtool/
+clients/mobile/ios/.swiftpm/
+
 # Stray cargo target dirs (agents may set CARGO_TARGET_DIR from the repo root)
 /target/
 

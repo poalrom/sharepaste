@@ -1,0 +1,22 @@
+# How `xtool` turns this package into an app.
+#
+# Deliberately small, and one omission is the point: there is no version here.
+# xtool hardcodes `CFBundleShortVersionString` to "1.0.0" and has no key for it,
+# so the version can only arrive through `infoPath` — which is where it lives,
+# and which is the literal string SideStore compares one release against the
+# next. `.github/scripts/check-versions.mjs` polices it.
+version: 1
+
+# The installed identifier is not this string. `xtool` prefixes it with the
+# team — `XTL-1234.com.sharepaste.ios` — and SideStore applies its own scheme,
+# which is why the SideStore source JSON's identifier is read off a device
+# rather than copied from here.
+bundleID: com.sharepaste.ios
+
+# The package has one library product, so this is redundant today. Named anyway:
+# the failure when a second one appears is "Multiple library products were
+# found", at which point somebody has to guess which was meant.
+product: Sharepaste
+
+infoPath: Info.plist
+iconPath: Resources/AppIcon.png
