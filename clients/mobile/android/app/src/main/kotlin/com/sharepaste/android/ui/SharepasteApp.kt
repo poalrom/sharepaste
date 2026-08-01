@@ -1,5 +1,9 @@
 package com.sharepaste.android.ui
 
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -99,11 +103,18 @@ fun appActions(
  * phone with no Pairing has nothing to show and one screen it can usefully be on.
  * That is a `when`, not a navigation graph — and it stays a `when` at three, so
  * adding a `Screen` is a compile error here rather than a route nobody registered.
+ *
+ * The system-bar inset is applied here, once, and not by the three screens.
+ * Android 15 draws every app edge to edge whether it asked to or not, and each
+ * of these screens is a stack of fixed chrome bands with a list between them —
+ * an identity band under the status bar and a verb bar under the gesture pill
+ * are the exact two failures edge-to-edge invites. The window itself is already
+ * the same void (`themes.xml`), so the inset costs no visible seam.
  */
 @Composable
 fun SharepasteApp(state: UiState, actions: AppActions, modifier: Modifier = Modifier) {
     SharepasteTheme {
-        Surface(modifier = modifier) {
+        Surface(modifier = modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             when (state.screen) {
                 Screen.Pairing -> PairingScreen(
                     state = state.pairing,

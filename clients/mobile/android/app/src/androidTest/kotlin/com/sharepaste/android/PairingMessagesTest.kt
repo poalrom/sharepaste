@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -76,7 +77,9 @@ class PairingMessagesTest {
     fun an_expired_code_says_the_code_expired_and_why_it_is_short_lived() {
         showPairing(PairingState(attempt = PairAttempt.Failed(R.string.pair_code_expired)))
 
-        compose.onNodeWithTag(TAG_FAILURE).assertIsDisplayed()
+        // Under the button that failed, at the foot of a flow taller than a
+        // phone. That is where a person who just pressed Pair is looking.
+        compose.onNodeWithTag(TAG_FAILURE).performScrollTo().assertIsDisplayed()
         val message = resources.getString(R.string.pair_code_expired)
         compose.onNodeWithText(message, substring = true).assertIsDisplayed()
         Evidence.log("expired code  = $message")
@@ -117,7 +120,7 @@ class PairingMessagesTest {
         showPairing(
             PairingState(attempt = PairAttempt.Failed(R.string.pair_insecure_relay, fromTheCore)),
         )
-        compose.onNodeWithTag(TAG_FAILURE).assertIsDisplayed()
+        compose.onNodeWithTag(TAG_FAILURE).performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag(TAG_FAILURE_DETAIL).assertIsDisplayed()
         compose.onNodeWithText(fromTheCore, substring = true).assertIsDisplayed()
         Evidence.log("insecure msg  = ${resources.getString(R.string.pair_insecure_relay)}")

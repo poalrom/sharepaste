@@ -8,6 +8,9 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.sharepaste.android.ui.HistoryScreen
@@ -17,11 +20,13 @@ import com.sharepaste.android.ui.SharepasteTheme
 import com.sharepaste.android.ui.TAG_NOTICE
 import com.sharepaste.android.ui.TAG_NOTICE_STALE
 import com.sharepaste.android.ui.TAG_PENDING
+import com.sharepaste.android.ui.TAG_PENDING_COUNT
 import com.sharepaste.android.ui.UiState
 import com.sharepaste.android.ui.entryDeleteTag
 import com.sharepaste.android.ui.entryOriginTag
 import com.sharepaste.android.ui.entryPreviewTag
 import com.sharepaste.android.ui.entryRecallTag
+import com.sharepaste.android.ui.entryRowTag
 import com.sharepaste.android.ui.entryUndecryptableTag
 import com.sharepaste.android.ui.offerRefusalMessage
 import com.sharepaste.core.SkipReason
@@ -70,11 +75,23 @@ class HistoryListTest {
      */
     private val shown = MutableStateFlow(UiState())
 
+    /**
+     * Every Entry the screen asked to have deleted, in order.
+     *
+     * Wired here rather than per-test because a compose rule permits one
+     * `setContent`: a test that wants to press a delete has to have had the
+     * lambda in place before the first frame.
+     */
+    private val deleted = mutableListOf<Long>()
+
     @Before
     fun render() {
         compose.setContent {
             SharepasteTheme {
-                HistoryScreen(state = shown.collectAsState().value, actions = noActions())
+                HistoryScreen(
+                    state = shown.collectAsState().value,
+                    actions = noActions(deleteEntry = { deleted += it.id }),
+                )
             }
         }
     }
@@ -292,16 +309,51 @@ class HistoryListTest {
      *
      * Sync is foreground-only, so an Offer made with no connection waits for the
      * next time the app is opened. A queue nobody can see is a queue nobody comes
-     * back for.
+     * back for. The depth is a readout beside the sentence rather than a number
+     * inside it, so both halves are asserted: a band that lost its numeral would
+     * still read as a sentence about nothing in particular.
      */
     @Test
     fun the_pending_count_is_surfaced_and_disappears_when_the_queue_drains() {
         show(UiState(session = SessionPhase.OutOfContact("u"), pending = 2))
-        val two = resources.getQuantityString(R.plurals.pending_count, 2, 2)
+        val two = resources.getQuantityString(R.plurals.pending_count, 2)
         compose.onNodeWithTag(TAG_PENDING).assertTextEquals(two)
+        compose.onNodeWithTag(TAG_PENDING_COUNT).assertTextEquals("2")
         Evidence.log("pending 2     = $two")
 
         show(UiState(session = SessionPhase.InContact("u"), pending = 0))
         compose.onNodeWithTag(TAG_PENDING).assertDoesNotExist()
+        compose.onNodeWithTag(TAG_PENDING_COUNT).assertDoesNotExist()
+    }
+
+    /**
+     * A readable Entry is deleted by dragging for it, never by a tap next to
+     * Recall.
+     *
+     * The guard the desktop's unguarded `✕` never had, and the reason the row
+     * lost its second word-button: a Delete fans out over SSE to every paired
+     * device and cannot be undone, while Recall is a single-tap errand that
+     * happens twenty times a day. So the two are not adjacent targets — one is a
+     * 48dp square and the other is a gesture.
+     *
+     * The assertion that matters is the *pair*: pressing where the delete panel
+     * sits does nothing at all, and only the swipe reaches the action.
+     */
+    @Test
+    fun a_readable_entry_is_deleted_by_a_swipe_and_not_by_a_tap() {
+        show(
+            UiState(
+                session = SessionPhase.InContact("u"),
+                entries = listOf(entry(id = 4, preview = "caddy reverse_proxy localhost:8787")),
+            ),
+        )
+
+        compose.onNodeWithTag(entryDeleteTag(4)).performClick()
+        assertTrue("a tap must not delete an Entry", deleted.isEmpty())
+
+        compose.onNodeWithTag(entryRowTag(4)).performTouchInput { swipeLeft() }
+        compose.waitUntil(5_000) { deleted.isNotEmpty() }
+        assertEquals("the swipe must ask for exactly this Entry", listOf(4L), deleted)
+        Evidence.log("delete        = a tap does nothing; a swipe asks for Entry 4")
     }
 }

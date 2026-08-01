@@ -97,7 +97,7 @@ class PendingOnANonActivePairingTest {
         phone.await("the card must carry the queue of the Pairing left behind") {
             it.pairings.firstOrNull { p -> p.userId == queued }?.pending == 1L
         }
-        val one = resources.getQuantityString(R.plurals.pending_count, 1, 1)
+        val one = resources.getQuantityString(R.plurals.pairings_pending, 1, 1)
         phone.scrollToPairing(pairPendingTag(queued))
         compose.onNodeWithTag(pairPendingTag(queued)).assertTextEquals(one)
         compose.onNodeWithTag(pairActiveTag(queued)).assertDoesNotExist()

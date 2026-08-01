@@ -139,7 +139,7 @@ class OfflineOfferAndRecallTest {
         phone.await("an Offer made offline must still be taken") { it.notice is Notice.Offered }
         phone.await("the pending count must reach the screen") { it.pending == 1L }
 
-        val one = resources.getQuantityString(R.plurals.pending_count, 1, 1)
+        val one = resources.getQuantityString(R.plurals.pending_count, 1)
         compose.onNodeWithTag(TAG_PENDING).assertTextEquals(one)
         Evidence.log("queued        = $one")
 

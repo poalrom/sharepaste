@@ -2,16 +2,23 @@
 <!--
   The window, before Compose has drawn anything.
 
-  Everything visible is Material 3 from Compose, so this theme's only job is to
-  make the first frame — the window background behind the composition — the right
-  colour and free of a platform action bar. `DayNight` is inherited so that a
-  device in dark mode does not flash white on launch; it exists from API 29,
-  which is this app's floor.
+  Everything visible is drawn by Compose against the FUI palette in `Fui.kt`, so
+  this theme's only job is to make the first frame — the window background
+  behind the composition — the same void the app is about to paint, and to keep
+  the platform action bar off it.
+
+  Not `DayNight`, and that is the change the redesign made here: the app has one
+  scheme and it is dark (see `SharepasteTheme`), so inheriting a day variant
+  would flash a white window at a person launching on a light-mode phone and
+  then paint the void over it.
 -->
 <resources>
-    <style name="Theme.Sharepaste" parent="android:Theme.DeviceDefault.DayNight">
+    <color name="window_void" translatable="false">#FF070C12</color>
+
+    <style name="Theme.Sharepaste" parent="android:Theme.DeviceDefault">
         <item name="android:windowActionBar">false</item>
         <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@color/window_void</item>
     </style>
 
     <!--

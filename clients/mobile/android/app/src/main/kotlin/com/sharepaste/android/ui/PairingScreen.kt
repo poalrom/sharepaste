@@ -3,27 +3,30 @@ package com.sharepaste.android.ui
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -33,10 +36,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -55,12 +65,18 @@ import java.util.concurrent.Executors
  * is the practical one; typing the code underneath it is the fallback, and it is
  * load-bearing rather than decorative — it is the only way in when the camera is
  * refused or absent, which is why each of those has its own message rather than
- * a shared shrug.
+ * a shared shrug, and why the typed field is on screen either way rather than
+ * behind a camera failure.
  *
- * **The name is the person's.** The field starts empty and pairing is blocked
- * until it is not. The desktop's flow hard-codes a default; a machine's guess at
- * what someone calls their own phone is not a default, it is a thing they have to
- * notice and correct in a list they read later.
+ * **The name is the person's, and it comes first.** The field starts empty and
+ * pairing is blocked until it is not. The desktop's flow hard-codes a default; a
+ * machine's guess at what someone calls their own phone is not a default, it is
+ * a thing they have to notice and correct in a list they read later. Name before
+ * code, because the code expires after two minutes and the name does not.
+ *
+ * The footer states the two facts a phone cannot discover for itself: the cipher
+ * — ADR 0002 puts disclosure beside pairing, where the choice to trust a Relay
+ * is being made — and this build's refusal of a cleartext Relay.
  *
  * The camera arrives through [scanner] rather than being reached for here. The
  * screen's job is layout and wording, and it must be renderable from a
@@ -79,8 +95,8 @@ fun PairingScreen(
      * The way back, on a phone that already holds a Pairing.
      *
      * `null` on a fresh install, where this screen is the entire app and a back
-     * control would lead nowhere. Adding a Pairing to a phone that has one is
-     * ticket 11's path in, and a person who changes their mind halfway has to be
+     * control would lead nowhere. Adding a Pairing to a phone that has one has
+     * its own path in, and a person who changes their mind halfway has to be
      * able to leave without force-quitting.
      */
     onBack: (() -> Unit)? = null,
@@ -91,85 +107,212 @@ fun PairingScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp)
+            .background(Fui.Panel)
+            .fuiBackdrop()
             .testTag(TAG_PAIRING_SCREEN),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        onBack?.let {
-            TextButton(onClick = it, modifier = Modifier.testTag(TAG_PAIRING_BACK)) {
-                Text(stringResource(R.string.pairings_back))
-            }
-        }
-        Text(
-            text = stringResource(R.string.pair_title),
-            style = MaterialTheme.typography.headlineSmall,
+        TitleBand(
+            title = stringResource(R.string.pair_title),
+            onBack = onBack,
+            backDescription = stringResource(R.string.pairings_back),
+            backTag = TAG_PAIRING_BACK,
         )
 
-        // 1 — the name, first, because the code expires and the name does not.
-        Section(stringResource(R.string.pair_label_heading), stringResource(R.string.pair_label_explainer)) {
-            OutlinedTextField(
-                value = state.deviceLabel,
-                onValueChange = onLabelChange,
-                label = { Text(stringResource(R.string.pair_label_field)) },
-                placeholder = { Text(stringResource(R.string.pair_label_placeholder)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag(TAG_LABEL_FIELD),
-            )
-        }
-
-        // 2 — the camera, or the reason there isn't one.
-        Section(stringResource(R.string.pair_scan_heading), stringResource(R.string.pair_scan_explainer)) {
-            when (state.camera) {
-                CameraProblem.NoCamera -> Explanation(R.string.camera_absent, TAG_CAMERA_ABSENT)
-                CameraProblem.PermissionRefused ->
-                    Explanation(R.string.camera_permission_refused, TAG_CAMERA_REFUSED)
-
-                null -> scanner()
-            }
-        }
-
-        // The fallback, always visible rather than hidden behind the failure. A
-        // person whose camera cannot focus on a laptop screen is not in an error
-        // state, and should not have to reach one to find the other way in.
-        Section(stringResource(R.string.pair_typed_heading), stringResource(R.string.pair_typed_explainer)) {
-            OutlinedTextField(
-                value = typedCode,
-                onValueChange = { typedCode = it },
-                label = { Text(stringResource(R.string.pair_typed_field)) },
-                singleLine = true,
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Go),
-                modifier = Modifier.fillMaxWidth().testTag(TAG_CODE_FIELD),
-            )
-            Button(
-                onClick = { onCode(typedCode) },
-                enabled = state.canPair && typedCode.isNotBlank(),
-                modifier = Modifier.testTag(TAG_PAIR_BUTTON),
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Fui.Gutter, vertical = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            // 01 — the name, first, because the code expires and the name does not.
+            Step(
+                step = stringResource(R.string.pair_step_name),
+                heading = stringResource(R.string.pair_label_heading),
+                explainer = stringResource(R.string.pair_label_explainer),
             ) {
-                Text(
-                    stringResource(
-                        if (state.attempt is PairAttempt.Working) R.string.pair_working else R.string.pair_button,
-                    ),
+                FuiTextField(
+                    value = state.deviceLabel,
+                    onValueChange = onLabelChange,
+                    label = stringResource(R.string.pair_label_field),
+                    placeholder = stringResource(R.string.pair_label_placeholder),
+                    modifier = Modifier.testTag(TAG_LABEL_FIELD),
                 )
             }
+
+            Hairline()
+
+            // 02 — the camera, or the reason there isn't one.
+            Step(
+                step = stringResource(R.string.pair_step_scan),
+                heading = stringResource(R.string.pair_scan_heading),
+                explainer = stringResource(R.string.pair_scan_explainer),
+            ) {
+                when (state.camera) {
+                    // Caution for the permission, because there is something to
+                    // turn on; muted for the hardware, because there is not.
+                    CameraProblem.NoCamera ->
+                        Explanation(R.string.camera_absent, TAG_CAMERA_ABSENT, Fui.TextMuted)
+
+                    CameraProblem.PermissionRefused ->
+                        Explanation(R.string.camera_permission_refused, TAG_CAMERA_REFUSED, Fui.Amber400)
+
+                    null -> Viewfinder(scanner)
+                }
+            }
+
+            Hairline()
+
+            Step(
+                step = null,
+                heading = stringResource(R.string.pair_typed_heading),
+                explainer = stringResource(R.string.pair_typed_explainer),
+            ) {
+                FuiTextField(
+                    value = typedCode,
+                    onValueChange = { typedCode = it },
+                    label = stringResource(R.string.pair_typed_field),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    modifier = Modifier.testTag(TAG_CODE_FIELD),
+                )
+                FuiButton(
+                    text = stringResource(
+                        if (state.attempt is PairAttempt.Working) R.string.pair_working else R.string.pair_button,
+                    ),
+                    onClick = { onCode(typedCode) },
+                    solid = true,
+                    enabled = state.canPair && typedCode.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth().testTag(TAG_PAIR_BUTTON),
+                )
+            }
+
+            (state.attempt as? PairAttempt.Failed)?.let { failed ->
+                Failure(failed, onDismissFailure)
+            }
         }
 
-        (state.attempt as? PairAttempt.Failed)?.let { failed ->
-            Failure(failed, onDismissFailure)
+        Hairline()
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(34.dp)
+                .background(Fui.Recess)
+                .padding(horizontal = Fui.Gutter),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(stringResource(R.string.cipher_disclosure), style = Fui.Micro, color = Fui.TextMuted)
+            Text(stringResource(R.string.relay_must_be_https), style = Fui.Micro, color = Fui.Amber400)
         }
     }
 }
 
+/**
+ * A screen's own header: its name, and the way back if there is one.
+ *
+ * Shared by this screen and the Pairings so that two screens with a back arrow
+ * cannot end up with two different arrows in two different places.
+ */
 @Composable
-private fun Section(heading: String, explainer: String, content: @Composable () -> Unit) {
+fun TitleBand(
+    title: String,
+    backDescription: String,
+    backTag: String,
+    modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
+) {
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .background(Fui.CyanA08)
+                .padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (onBack != null) {
+                Box(
+                    modifier = Modifier
+                        .size(Fui.Target)
+                        .testTag(backTag)
+                        // A name, not just a click verb: the glyph is a picture
+                        // of the door and "◂" is not what a screen reader should
+                        // read out.
+                        .semantics { contentDescription = backDescription }
+                        .clickable(onClick = onBack, role = Role.Button),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("◂", style = Fui.Glyph, color = Fui.Cyan300, modifier = Modifier.clearAndSetSemantics {})
+                }
+            }
+            Text(
+                text = title,
+                style = Fui.Heading,
+                color = Fui.TextPrimary,
+                modifier = Modifier.padding(start = if (onBack != null) 4.dp else 10.dp),
+            )
+        }
+        Hairline()
+    }
+}
+
+/**
+ * One numbered step, or an unnumbered one.
+ *
+ * The number is drawn beside the heading rather than written into the string,
+ * so a step that moves does not need its words re-edited — and so the numeral
+ * can carry the emitter colour while the heading stays a heading.
+ */
+@Composable
+private fun Step(
+    step: String?,
+    heading: String,
+    explainer: String,
+    content: @Composable () -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(heading, style = MaterialTheme.typography.titleMedium)
-        Text(
-            explainer,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (step != null) Text(step, style = Fui.Label, color = Fui.Cyan400)
+            Text(heading, style = Fui.Subheading, color = Fui.TextPrimary)
+        }
+        Text(explainer, style = Fui.Prose, color = Fui.TextBody)
         content()
+    }
+}
+
+/**
+ * The camera, framed and captioned.
+ *
+ * The caption says what to point it at, and the strip underneath states the
+ * Relay's 120-second pairing slot as a rule rather than as a countdown — nothing
+ * on this phone knows when the computer printed the code, so a running clock
+ * here would be invented.
+ */
+@Composable
+private fun Viewfinder(scanner: @Composable () -> Unit) {
+    FuiPanel(
+        title = stringResource(R.string.pair_viewfinder_title),
+        code = stringResource(R.string.pair_viewfinder_code),
+    ) {
+        Box(Modifier.fillMaxWidth().height(220.dp).background(Fui.Void1000)) {
+            scanner()
+            Text(
+                text = stringResource(R.string.pair_viewfinder_hint),
+                style = Fui.Micro,
+                color = Fui.TextMuted,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.align(Alignment.Center).padding(horizontal = 24.dp),
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Fui.Recess)
+                .padding(vertical = 6.dp),
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            Text(stringResource(R.string.pair_code_ttl), style = Fui.Micro, color = Fui.Amber400)
+        }
     }
 }
 
@@ -183,27 +326,30 @@ private fun Section(heading: String, explainer: String, content: @Composable () 
  */
 @Composable
 private fun Failure(failed: PairAttempt.Failed, onDismiss: () -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.errorContainer,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth().testTag(TAG_FAILURE),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Fui.AlertA16)
+            .padding(12.dp)
+            .testTag(TAG_FAILURE),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FuiBadge(stringResource(R.string.pair_failed_badge), Accent.Alert, solid = true)
+        Text(stringResource(failed.message), style = Fui.Prose, color = Fui.TextPrimary)
+        failed.detail?.let {
             Text(
-                text = stringResource(failed.message),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onErrorContainer,
+                text = it,
+                style = Fui.Data,
+                color = Fui.TextBody,
+                modifier = Modifier.testTag(TAG_FAILURE_DETAIL),
             )
-            failed.detail?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.testTag(TAG_FAILURE_DETAIL),
-                )
-            }
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.pair_dismiss)) }
         }
+        FuiButton(
+            text = stringResource(R.string.pair_dismiss),
+            onClick = onDismiss,
+            accent = Accent.Alert,
+            height = Fui.TargetSmall,
+        )
     }
 }
 
@@ -246,19 +392,25 @@ fun CameraScanner(onProblem: (CameraProblem?) -> Unit, onCode: (String) -> Unit)
     if (cameraProblem(hasCamera, granted) == null) CameraPreview(onCode)
 }
 
+/**
+ * A camera failure, in a slot that is dashed rather than framed.
+ *
+ * Dashed because the viewfinder is *missing*, not broken: the typed path is
+ * already on screen underneath and works just as well, so a solid alert frame
+ * would overstate what has gone wrong.
+ */
 @Composable
-private fun Explanation(message: Int, tag: String) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth().testTag(tag),
+private fun Explanation(@StringRes message: Int, tag: String, mark: Color) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .dashedBorder(Fui.Inert)
+            .padding(12.dp)
+            .testTag(tag),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(
-            text = stringResource(message),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(16.dp),
-        )
+        Text("⊘", style = Fui.Glyph, color = mark)
+        Text(stringResource(message), style = Fui.Prose, color = Fui.TextBody)
     }
 }
 
@@ -281,10 +433,10 @@ private fun CameraPreview(onCode: (String) -> Unit) {
     DisposableEffect(Unit) { onDispose { executor.shutdown() } }
 
     Box(
-        modifier = Modifier.fillMaxWidth().height(280.dp).testTag(TAG_CAMERA_PREVIEW),
+        modifier = Modifier.fillMaxSize().testTag(TAG_CAMERA_PREVIEW),
         contentAlignment = Alignment.Center,
     ) {
-        CircularProgressIndicator()
+        CircularProgressIndicator(color = Fui.Cyan400)
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
@@ -311,6 +463,46 @@ private fun CameraPreview(onCode: (String) -> Unit) {
             },
         )
     }
+}
+
+/**
+ * A text field in the console's own voice.
+ *
+ * Material's outlined field underneath, because a hand-rolled one would owe the
+ * platform a cursor, a selection handle, an IME contract and an accessibility
+ * tree. Only its colours, shape and type are ours.
+ */
+@Composable
+private fun FuiTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    placeholder: String? = null,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label, style = Fui.Micro) },
+        placeholder = placeholder?.let { { Text(it, style = Fui.Data, color = Fui.TextDim) } },
+        singleLine = true,
+        shape = RectangleShape,
+        textStyle = Fui.Data,
+        keyboardOptions = keyboardOptions,
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = Fui.TextPrimary,
+            unfocusedTextColor = Fui.TextBody,
+            focusedBorderColor = Fui.Cyan400,
+            unfocusedBorderColor = Fui.Frame,
+            focusedLabelColor = Fui.TextEmitter,
+            unfocusedLabelColor = Fui.TextMuted,
+            cursorColor = Fui.Cyan400,
+            focusedContainerColor = Fui.Recess,
+            unfocusedContainerColor = Fui.Recess,
+        ),
+        modifier = modifier.fillMaxWidth(),
+    )
 }
 
 const val TAG_PAIRING_SCREEN = "pairing-screen"

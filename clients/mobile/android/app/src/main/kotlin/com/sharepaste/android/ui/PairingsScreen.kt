@@ -1,5 +1,6 @@
 package com.sharepaste.android.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -10,16 +11,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
@@ -48,51 +41,46 @@ import com.sharepaste.core.PairingSummary
  * remains is on the cards: the Device Label this phone chose, clearing a History,
  * forgetting a Pairing, and the cipher disclosure ADR 0002 puts beside pairing.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PairingsScreen(state: UiState, actions: AppActions, modifier: Modifier = Modifier) {
-    Scaffold(
-        modifier = modifier.testTag(TAG_PAIRINGS_SCREEN),
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.pairings_title)) },
-                navigationIcon = {
-                    TextButton(
-                        onClick = actions.openHistory,
-                        modifier = Modifier.testTag(TAG_BACK_TO_HISTORY),
-                    ) {
-                        Text(stringResource(R.string.pairings_back))
-                    }
-                },
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Fui.Panel)
+            .fuiBackdrop()
+            .testTag(TAG_PAIRINGS_SCREEN),
+    ) {
+        TitleBand(
+            title = stringResource(R.string.pairings_title),
+            onBack = actions.openHistory,
+            backDescription = stringResource(R.string.pairings_back),
+            backTag = TAG_BACK_TO_HISTORY,
+        )
+        state.notice?.let { NoticeBanner(it, actions.dismissNotice) }
+        if (state.diverged) {
+            DivergenceBand(
+                viewedName = state.nameOf(state.viewedPairing),
+                activeName = state.nameOf(state.activeUserId),
+                onUseViewed = { state.viewedPairing?.let(actions.activatePairing) },
             )
-        },
-    ) { insets ->
-        Column(modifier = Modifier.fillMaxSize().padding(insets)) {
-            state.notice?.let { NoticeBanner(it, actions.dismissNotice) }
-            if (state.diverged) {
-                DivergenceBand(
-                    viewedName = state.nameOf(state.viewedPairing),
-                    activeName = state.nameOf(state.activeUserId),
-                    onUseViewed = { state.viewedPairing?.let(actions.activatePairing) },
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().testTag(TAG_PAIRINGS_LIST),
+            contentPadding = PaddingValues(Fui.Gutter),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            items(state.pairings, key = { it.userId }) { pairing ->
+                PairingCard(
+                    pairing = pairing,
+                    viewed = pairing.userId == state.viewedPairing,
+                    foreground = state.foreground,
+                    confirming = state.confirming?.takeIf { it.userId == pairing.userId },
+                    actions = actions,
                 )
             }
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().testTag(TAG_PAIRINGS_LIST),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                items(state.pairings, key = { it.userId }) { pairing ->
-                    PairingCard(
-                        pairing = pairing,
-                        viewed = pairing.userId == state.viewedPairing,
-                        foreground = state.foreground,
-                        confirming = state.confirming?.takeIf { it.userId == pairing.userId },
-                        actions = actions,
-                    )
-                }
-                item { AddPairingRow(actions.openAddPairing) }
-                item { PhoneSettings() }
-            }
+            item { AddPairingSection(actions.openAddPairing) }
+            item { Hairline() }
+            item { PhoneSettings() }
         }
     }
 }
@@ -100,9 +88,11 @@ fun PairingsScreen(state: UiState, actions: AppActions, modifier: Modifier = Mod
 /**
  * One Pairing, and everything a phone can do to it.
  *
- * The heading names the **User**, not this machine: `label` is the Device Label
- * this phone chose when it paired, and heading the card with it made every
- * Pairing on the desktop look like an account named after the local machine.
+ * The panel is headed by the **User** and its address, never by this machine's
+ * Device Label: heading a Pairing with the local machine's name made every
+ * Pairing on the desktop look like an account named after the computer. The
+ * Device Label is a line *inside* the card, where it reads as what it is — what
+ * this phone told the Relay to call itself.
  *
  * A card that is not the Active one is *resting*, not faulty — see
  * [pairingPhase]. That is the whole reason [PairingStatus] exists rather than a
@@ -116,114 +106,119 @@ private fun PairingCard(
     confirming: Confirmation?,
     actions: AppActions,
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth().testTag(pairCardTag(pairing.userId)),
+    val phase = pairingPhase(pairing, foreground)
+    FuiPanel(
+        title = pairing.username ?: pairing.userId,
+        code = "${pairing.userId} @ ${pairing.relayHost}",
+        accent = if (toneOf(phase) == Tone.Fault) Accent.Alert else Accent.Emitter,
+        modifier = Modifier.testTag(pairCardTag(pairing.userId)),
     ) {
-        Column {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = pairing.username ?: pairing.userId,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Exactly one card carries SYNCING; SHOWING moves independently of
+            // it, because viewing a Pairing changes nothing about what the phone
+            // syncs or captures to.
+            if (pairing.isActive || viewed) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (pairing.isActive) {
-                        Badge(R.string.pairings_active_badge, pairActiveTag(pairing.userId))
+                        FuiBadge(
+                            text = stringResource(R.string.pairings_active_badge),
+                            accent = Accent.Emitter,
+                            solid = true,
+                            modifier = Modifier.testTag(pairActiveTag(pairing.userId)),
+                        )
                     }
                     if (viewed) {
-                        Badge(R.string.pairings_viewed_badge, pairViewedTag(pairing.userId))
+                        FuiBadge(
+                            text = stringResource(R.string.pairings_viewed_badge),
+                            accent = Accent.Neutral,
+                            modifier = Modifier.testTag(pairViewedTag(pairing.userId)),
+                        )
                     }
                 }
-                Text(
-                    text = "${pairing.userId} @ ${pairing.relayHost}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                // The Device Label, shown and not editable. The Relay sets it once
-                // at `POST /devices` and serves it from `GET /me`; there is no
-                // rename route, so a local-only rename would show this phone one
-                // name and every other device another. See `settings_label_note`.
-                Text(
-                    text = stringResource(R.string.pairings_this_phone, pairing.label),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.testTag(pairLabelTag(pairing.userId)),
-                )
-                PairingStatus(
-                    phase = pairingPhase(pairing, foreground),
-                    tag = pairStatusTag(pairing.userId),
-                )
-                // The one surface on this phone that shows a queue belonging to a
-                // Pairing the device has switched away from. Nothing else would:
-                // the History's own count is the Active Pairing's.
-                if (pairing.pending > 0) {
+            }
+            // The Device Label, shown and not editable. The Relay sets it once
+            // at `POST /devices` and serves it from `GET /me`; there is no
+            // rename route, so a local-only rename would show this phone one
+            // name and every other device another. See `settings_label_note`.
+            Text(
+                text = stringResource(R.string.pairings_this_phone, pairing.label),
+                style = Fui.Data,
+                color = Fui.TextBody,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag(pairLabelTag(pairing.userId)),
+            )
+            PairingStatus(phase = phase, tag = pairStatusTag(pairing.userId))
+            // The one surface on this phone that shows a queue belonging to a
+            // Pairing the device has switched away from. Nothing else would:
+            // the History's own count is the Active Pairing's.
+            if (pairing.pending > 0) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Fui.AmberA16)
+                        .padding(10.dp, 6.dp),
+                ) {
                     Text(
                         text = pluralStringResource(
-                            R.plurals.pending_count,
+                            R.plurals.pairings_pending,
                             pairing.pending.toInt(),
                             pairing.pending,
                         ),
-                        style = MaterialTheme.typography.bodySmall,
+                        style = Fui.Micro,
+                        color = Fui.Amber400,
                         modifier = Modifier.testTag(pairPendingTag(pairing.userId)),
                     )
                 }
+            }
 
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (!viewed) {
-                        TextButton(
-                            onClick = { actions.viewPairing(pairing.userId) },
-                            modifier = Modifier.testTag(pairViewTag(pairing.userId)),
-                        ) {
-                            Text(stringResource(R.string.pairings_view))
-                        }
-                    }
-                    if (!pairing.isActive) {
-                        TextButton(
-                            onClick = { actions.activatePairing(pairing.userId) },
-                            modifier = Modifier.testTag(pairUseTag(pairing.userId)),
-                        ) {
-                            Text(stringResource(R.string.pairings_use))
-                        }
-                    }
-                    TextButton(
-                        onClick = { actions.confirm(Confirmation.ClearHistory(pairing.userId)) },
-                        modifier = Modifier.testTag(pairClearTag(pairing.userId)),
-                    ) {
-                        Text(stringResource(R.string.pairings_clear_history))
-                    }
-                    TextButton(
-                        onClick = { actions.confirm(Confirmation.Forget(pairing.userId)) },
-                        modifier = Modifier.testTag(pairForgetTag(pairing.userId)),
-                    ) {
-                        Text(stringResource(R.string.pairings_forget))
-                    }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (!viewed) {
+                    FuiButton(
+                        text = stringResource(R.string.pairings_view),
+                        onClick = { actions.viewPairing(pairing.userId) },
+                        height = Fui.TargetSmall,
+                        modifier = Modifier.testTag(pairViewTag(pairing.userId)),
+                    )
                 }
+                if (!pairing.isActive) {
+                    FuiButton(
+                        text = stringResource(R.string.pairings_use),
+                        onClick = { actions.activatePairing(pairing.userId) },
+                        height = Fui.TargetSmall,
+                        modifier = Modifier.testTag(pairUseTag(pairing.userId)),
+                    )
+                }
+                FuiButton(
+                    text = stringResource(R.string.pairings_clear_history),
+                    onClick = { actions.confirm(Confirmation.ClearHistory(pairing.userId)) },
+                    accent = Accent.Neutral,
+                    height = Fui.TargetSmall,
+                    modifier = Modifier.testTag(pairClearTag(pairing.userId)),
+                )
+                FuiButton(
+                    text = stringResource(R.string.pairings_forget),
+                    onClick = { actions.confirm(Confirmation.Forget(pairing.userId)) },
+                    accent = Accent.Alert,
+                    height = Fui.TargetSmall,
+                    modifier = Modifier.testTag(pairForgetTag(pairing.userId)),
+                )
             }
 
             confirming?.let { ConfirmStrip(it, pairing, actions) }
 
-            HorizontalDivider()
+            Hairline()
             // ADR 0002 puts cipher disclosure beside pairing — where the choice to
             // trust a Relay is being made — and nowhere else. One line per card,
             // and it is the only cipher this product names.
             Text(
                 text = stringResource(R.string.cipher_disclosure),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-                    .testTag(pairCipherTag(pairing.userId)),
+                style = Fui.Micro,
+                color = Fui.TextMuted,
+                modifier = Modifier.testTag(pairCipherTag(pairing.userId)),
             )
         }
     }
@@ -232,10 +227,16 @@ private fun PairingCard(
 /**
  * The yes-or-no strip for the two things that cannot be undone.
  *
- * Inline and under the card it is about, never a dialog: the scope of the erase
+ * Inline and inside the card it is about, never a dialog: the scope of the erase
  * stays on screen while the choice is being made. It names the **User and the
  * Relay**, not the heading — two Pairings can share a username, and this is the
  * one action with no way back.
+ *
+ * `KEEP IT` is the outline and the destructive verb is the solid one, which is
+ * the opposite of the usual advice and is right here: the person has already
+ * asked for this, the strip exists to make them read what it costs, and burying
+ * the verb they came for behind the safe-looking button would just be answered
+ * twice.
  */
 @Composable
 private fun ConfirmStrip(
@@ -248,80 +249,59 @@ private fun ConfirmStrip(
         is Confirmation.ClearHistory -> stringResource(R.string.pairings_clear_confirm, target)
         is Confirmation.Forget -> stringResource(R.string.pairings_forget_confirm, target)
     }
-    Surface(
-        color = MaterialTheme.colorScheme.errorContainer,
-        modifier = Modifier.fillMaxWidth().testTag(pairConfirmTag(pairing.userId)),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Fui.AlertA16)
+            .padding(12.dp)
+            .testTag(pairConfirmTag(pairing.userId)),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                text = question,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onErrorContainer,
+        FuiBadge(stringResource(R.string.pairings_confirm_badge), Accent.Alert, solid = true)
+        Text(question, style = Fui.Prose, color = Fui.TextPrimary)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FuiButton(
+                text = stringResource(R.string.pairings_cancel),
+                onClick = { actions.confirm(null) },
+                height = Fui.TargetSmall,
+                modifier = Modifier.testTag(pairCancelTag(pairing.userId)),
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(
-                    onClick = { actions.confirm(null) },
-                    modifier = Modifier.testTag(pairCancelTag(pairing.userId)),
-                ) {
-                    Text(stringResource(R.string.pairings_cancel))
-                }
-                TextButton(
-                    onClick = {
-                        when (confirming) {
-                            is Confirmation.ClearHistory -> actions.clearHistory(pairing.userId)
-                            is Confirmation.Forget -> actions.forgetPairing(pairing.userId)
-                        }
+            FuiButton(
+                text = stringResource(
+                    when (confirming) {
+                        is Confirmation.ClearHistory -> R.string.pairings_clear_history
+                        is Confirmation.Forget -> R.string.pairings_forget
                     },
-                    modifier = Modifier.testTag(pairConfirmYesTag(pairing.userId)),
-                ) {
-                    Text(
-                        stringResource(
-                            when (confirming) {
-                                is Confirmation.ClearHistory -> R.string.pairings_clear_history
-                                is Confirmation.Forget -> R.string.pairings_forget
-                            },
-                        ),
-                    )
-                }
-            }
+                ),
+                onClick = {
+                    when (confirming) {
+                        is Confirmation.ClearHistory -> actions.clearHistory(pairing.userId)
+                        is Confirmation.Forget -> actions.forgetPairing(pairing.userId)
+                    }
+                },
+                accent = Accent.Alert,
+                solid = true,
+                height = Fui.TargetSmall,
+                modifier = Modifier.testTag(pairConfirmYesTag(pairing.userId)),
+            )
         }
     }
 }
 
 @Composable
-private fun Badge(message: Int, tag: String) {
-    Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        shape = MaterialTheme.shapes.extraSmall,
-        modifier = Modifier.padding(start = 8.dp).testTag(tag),
-    ) {
-        Text(
-            text = stringResource(message),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSecondaryContainer,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-        )
-    }
-}
-
-@Composable
-private fun AddPairingRow(onAdd: () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            text = stringResource(R.string.pairings_add_heading),
-            style = MaterialTheme.typography.titleSmall,
-        )
+private fun AddPairingSection(onAdd: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionHeading(stringResource(R.string.pairings_add_heading))
         Text(
             text = stringResource(R.string.pairings_add_body),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = Fui.Prose,
+            color = Fui.TextBody,
         )
-        TextButton(onClick = onAdd, modifier = Modifier.testTag(TAG_ADD_PAIRING)) {
-            Text(stringResource(R.string.pairings_add_button))
-        }
+        FuiButton(
+            text = stringResource(R.string.pairings_add_button),
+            onClick = onAdd,
+            modifier = Modifier.testTag(TAG_ADD_PAIRING),
+        )
     }
 }
 
@@ -333,7 +313,11 @@ private fun AddPairingRow(onAdd: () -> Unit) {
  * indistinguishable from finding a half-built screen. Both are inert on a phone —
  * one governs Watched Capture, which a phone never performs; the other matches a
  * frontmost application, which a phone has no notion of — and saying so takes two
- * sentences.
+ * sentences and three chips.
+ *
+ * The third chip is the one the desktop cannot show: a phone carries no update
+ * code at all (ADR 0008), so unlike a desktop it never asks an update source
+ * anything and the Relay is the only counterparty it has.
  *
  * The Device Label rule belongs here for the same reason. It is display-only
  * because the Relay sets it once at `POST /devices` and has no rename route, so a
@@ -343,25 +327,27 @@ private fun AddPairingRow(onAdd: () -> Unit) {
 @Composable
 private fun PhoneSettings() {
     Column(
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier.testTag(TAG_PHONE_SETTINGS),
     ) {
-        Text(
-            text = stringResource(R.string.settings_heading),
-            style = MaterialTheme.typography.titleSmall,
-        )
-        Text(
+        SectionHeading(stringResource(R.string.settings_heading))
+        QuotedNote(
             text = stringResource(R.string.settings_label_note),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.testTag(TAG_SETTINGS_LABEL_NOTE),
         )
-        Text(
+        QuotedNote(
             text = stringResource(R.string.settings_absent_note),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.testTag(TAG_SETTINGS_ABSENT_NOTE),
         )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(top = 2.dp),
+        ) {
+            FuiTag(stringResource(R.string.settings_tag_watched_capture), inert = true)
+            FuiTag(stringResource(R.string.settings_tag_deny_list), inert = true)
+            FuiTag(stringResource(R.string.settings_tag_update_check), inert = true)
+        }
     }
 }
 

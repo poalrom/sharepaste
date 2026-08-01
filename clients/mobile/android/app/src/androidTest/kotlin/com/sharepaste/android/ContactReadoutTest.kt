@@ -4,6 +4,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.sharepaste.android.ui.ContactReadout
@@ -12,6 +13,7 @@ import com.sharepaste.android.ui.SessionPhase
 import com.sharepaste.android.ui.SharepasteTheme
 import com.sharepaste.android.ui.TAG_FAULT
 import com.sharepaste.android.ui.TAG_FOREGROUND_NOTE
+import com.sharepaste.android.ui.TAG_FOREGROUND_WHY
 import com.sharepaste.android.ui.TAG_HISTORY_EMPTY
 import com.sharepaste.android.ui.TAG_NOMINAL
 import com.sharepaste.android.ui.Tone
@@ -105,11 +107,15 @@ class ContactReadoutTest {
     }
 
     /**
-     * An empty History says why it is empty, and it says the surprising part.
+     * An empty History says why it is empty, and the surprising part is one tap
+     * away from anywhere in the list.
      *
      * A phone that has just paired shows nothing, which is correct and reads as a
      * bug. The note is the difference between "this is broken" and "this is how it
-     * works".
+     * works" — and it is now pinned chrome rather than the list's first item, so
+     * what this asserts is stronger than it was: the clipped line is on screen
+     * whatever the list is doing, and `WHY ▸` opens it in full without scrolling
+     * anywhere.
      */
     @Test
     fun an_empty_history_explains_itself_and_the_foreground_only_rule() {
@@ -125,8 +131,14 @@ class ContactReadoutTest {
         compose.onNodeWithTag(TAG_FOREGROUND_NOTE).assertIsDisplayed()
         compose.onNodeWithTag(TAG_FAULT).assertDoesNotExist()
 
+        val pinned = resources.getString(R.string.foreground_only_pinned)
+        compose.onNodeWithText(pinned, substring = true).assertIsDisplayed()
+
+        // Clipped until asked, verbatim once opened.
         val note = resources.getString(R.string.foreground_only_note)
+        compose.onNodeWithText(note, substring = true).assertDoesNotExist()
+        compose.onNodeWithTag(TAG_FOREGROUND_WHY).performClick()
         compose.onNodeWithText(note, substring = true).assertIsDisplayed()
-        Evidence.log("empty history = no fault; the note reads: $note")
+        Evidence.log("empty history = no fault; pinned \"$pinned\"; WHY opens: $note")
     }
 }

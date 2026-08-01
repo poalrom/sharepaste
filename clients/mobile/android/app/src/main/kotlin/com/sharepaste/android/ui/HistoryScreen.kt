@@ -1,126 +1,191 @@
 package com.sharepaste.android.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.sharepaste.android.R
 import com.sharepaste.core.Entry
 
 /**
- * The Entries of the Active Pairing, and the two things a person can do here.
+ * The Entries of the Viewed Pairing, and the two verbs that need no row.
  *
  * The list is the whole point of the client: something copied on the computer
  * shows up as an Entry, and a Recall puts it back on this phone's clipboard.
- * Above it, the Contact readout and the foreground-only note stay exactly where
- * ticket 09 put them — the note especially, because "nothing arrives while this
- * is closed" is the single most surprising thing about how this app works and it
- * belongs where a puzzled person is already looking.
+ *
+ * **Everything above the list is chrome and cannot scroll away.** That is the
+ * one structural change the redesign made here, and it is worth stating because
+ * the previous arrangement looked identical until you scrolled: the Contact
+ * readout and the foreground-only note were the first two items *in* the list,
+ * so the two facts a puzzled person most needs were the first two to leave the
+ * screen. Now the identity, Contact and the background policy are three fixed
+ * bands — 112dp of them — and the eleventh row peeks under the verb bar instead.
+ *
+ * Contact is permanent rather than degraded-only, inverting the desktop's rule
+ * (ADR 0002) rather than copying it: a phone is out of contact almost always, so
+ * a band that appeared only when disconnected would be a band that was always
+ * there and always looked like bad news. See [ContactReadout].
  *
  * Takes a whole [UiState] and an [AppActions] rather than a widening list of
  * pieces: no composable here sees the state holder, the repository or the core,
  * which is what lets every sentence on this screen be asserted with no facade
  * behind it.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(state: UiState, actions: AppActions, modifier: Modifier = Modifier) {
-    Scaffold(
-        modifier = modifier.testTag(TAG_HISTORY_SCREEN),
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.history_title)) },
-                // The only way to the Pairings, and it belongs here rather than
-                // behind a drawer: on a phone that holds one Pairing it is a door
-                // to the settings, and on a phone that holds several it is the
-                // only place the other ones exist at all.
-                actions = {
-                    TextButton(
-                        onClick = actions.openPairings,
-                        modifier = Modifier.testTag(TAG_OPEN_PAIRINGS),
-                    ) {
-                        Text(stringResource(R.string.pairings_open))
-                    }
-                },
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Fui.Panel)
+            .fuiBackdrop()
+            .testTag(TAG_HISTORY_SCREEN),
+    ) {
+        IdentityBand(state, actions)
+        // Permanent, in every phase. A revoked token is the one that grows a
+        // sentence and a way out of it.
+        ContactReadout(state.session, onPairAgain = actions.openAddPairing)
+        ForegroundOnlyNote()
+        // Beside the background policy, because they are the same kind of fact:
+        // what this app will and will not do while you are not looking at it.
+        // Only when the platform is actually refusing — a phone whose
+        // notifications work says nothing.
+        if (state.standingActionsBlocked) {
+            StandingActionsBlockedNote(actions.enableStandingActions)
+        }
+        // What just happened is not an Entry, and a notice that scrolled away
+        // with the rows would be a notice the person never read.
+        state.notice?.let { NoticeBanner(it, actions.dismissNotice) }
+        // The same reasoning, more urgently. These rows belong to a Pairing this
+        // phone is not syncing, so nothing here is being kept up to date — and a
+        // frozen list looks exactly like a current one.
+        if (state.diverged) {
+            DivergenceBand(
+                viewedName = state.nameOf(state.viewedPairing),
+                activeName = state.nameOf(state.activeUserId),
+                onUseViewed = { state.viewedPairing?.let(actions.activatePairing) },
             )
-        },
-        bottomBar = { OfferAndRecall(actions) },
-    ) { insets ->
-        Column(modifier = Modifier.fillMaxSize().padding(insets)) {
-            // Above the list rather than in it: what just happened is not an
-            // Entry, and a notice that scrolled away with the rows would be a
-            // notice the person never read.
-            state.notice?.let { NoticeBanner(it, actions.dismissNotice) }
-            // The same reasoning, more urgently. These rows belong to a Pairing
-            // this phone is not syncing, so nothing here is being kept up to
-            // date — and a frozen list looks exactly like a current one.
-            if (state.diverged) {
-                DivergenceBand(
-                    viewedName = state.nameOf(state.viewedPairing),
-                    activeName = state.nameOf(state.activeUserId),
-                    onUseViewed = { state.viewedPairing?.let(actions.activatePairing) },
-                )
-            }
-            if (state.pending > 0) PendingReadout(state.pending)
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().testTag(TAG_HISTORY_LIST),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                item { ContactReadout(state.session) }
-                item { ForegroundOnlyNote() }
-                // Beside the foreground-only note, because they are the same
-                // kind of fact: what this app will and will not do while you
-                // are not looking at it. Only when the platform is actually
-                // refusing — a phone whose notifications work says nothing.
-                if (state.standingActionsBlocked) {
-                    item { StandingActionsBlockedNote(actions.enableStandingActions) }
-                }
-                if (state.entries.isEmpty()) {
-                    item { EmptyHistory() }
-                } else {
-                    entryRows(state.entries, state.ownDeviceId, actions.recall, actions.deleteEntry)
-                }
+        }
+        if (state.pending > 0) PendingReadout(state.pending)
+
+        LazyColumn(modifier = Modifier.weight(1f).testTag(TAG_HISTORY_LIST)) {
+            if (state.entries.isEmpty()) {
+                item { EmptyHistory() }
+            } else {
+                entryRows(state.entries, state.ownDeviceId, actions.recall, actions.deleteEntry)
             }
         }
+        VerbBar(actions)
+    }
+}
+
+/**
+ * Who this phone is, and the only door off this screen.
+ *
+ * The identity is the **Viewed** Pairing rather than the Active one, because it
+ * heads the list underneath it and the list is the Viewed Pairing's. When the two
+ * differ the badge says so here as well as in [DivergenceBand] — the band
+ * explains, this states, and a person who has scrolled the band out of a long
+ * History still has the fact in front of them.
+ */
+@Composable
+private fun IdentityBand(state: UiState, actions: AppActions) {
+    val viewed = state.pairings.firstOrNull { it.userId == state.viewedPairing }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .background(Brush.verticalGradient(listOf(Fui.CyanA08, Color.Transparent)))
+                .padding(start = Fui.Gutter, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.history_title),
+                    style = Fui.Micro,
+                    color = Fui.TextEmitter,
+                )
+                if (viewed != null) {
+                    Text(
+                        text = stringResource(
+                            R.string.history_identity,
+                            viewed.username ?: viewed.userId,
+                            viewed.relayHost,
+                        ),
+                        style = Fui.Data,
+                        color = Fui.TextBody,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag(TAG_IDENTITY),
+                    )
+                }
+            }
+            if (state.diverged) {
+                FuiBadge(stringResource(R.string.pairings_viewed_badge), Accent.Neutral)
+            }
+            // The only way to the Pairings, and it belongs here rather than
+            // behind a drawer: on a phone that holds one Pairing it is a door to
+            // the settings, and on a phone that holds several it is the only
+            // place the other ones exist at all.
+            GlyphButton(
+                glyph = "◎",
+                onClick = actions.openPairings,
+                contentDescription = stringResource(R.string.pairings_open),
+                modifier = Modifier.testTag(TAG_OPEN_PAIRINGS),
+            )
+        }
+        Hairline()
     }
 }
 
 @Composable
 private fun EmptyHistory() {
     Column(
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.testTag(TAG_HISTORY_EMPTY),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(24.dp)
+            .testTag(TAG_HISTORY_EMPTY),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
             text = stringResource(R.string.history_empty_heading),
-            style = MaterialTheme.typography.titleMedium,
+            style = Fui.Heading,
+            color = Fui.TextPrimary,
         )
         Text(
             text = stringResource(R.string.history_empty_body),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = Fui.Prose,
+            color = Fui.TextBody,
+            textAlign = TextAlign.Center,
         )
     }
 }
@@ -128,9 +193,9 @@ private fun EmptyHistory() {
 /**
  * The rows.
  *
- * One item per Entry, and the surrounding screen never has to change — the seam
- * ticket 09 left. Three things each row has to get right, and each of them is a
- * mistake the desktop made first:
+ * One item per Entry, and the surrounding screen never has to change. Three
+ * things each row has to get right, and each of them is a mistake the desktop
+ * made first:
  *
  *  * The **Preview** is rendered as it arrives. [Entry.preview] is the Preview
  *    on every path the core produces an Entry on — one line, control characters
@@ -151,73 +216,208 @@ private fun LazyListScope.entryRows(
     onRecall: (Entry) -> Unit,
     onDelete: (Entry) -> Unit,
 ) {
-    items(entries, key = { it.id }) { entry ->
-        EntryRow(entry, ownDeviceId, onRecall, onDelete)
+    itemsIndexed(entries, key = { _, entry -> entry.id }) { index, entry ->
+        if (entry.undecryptable) {
+            UndecryptableRow(entry, onDelete)
+        } else {
+            // The newest Entry is the one `RECALL LATEST` will hand over, so it
+            // is the one row drawn as the emitter's: the verb bar's target,
+            // named in the list rather than only in the bar.
+            EntryRow(entry, ownDeviceId, newest = index == 0, onRecall, onDelete)
+        }
     }
 }
 
+/**
+ * One readable Entry: a single tap target, and a Delete that has to be dragged
+ * for.
+ *
+ * **The row used to carry two word-buttons.** On a full screen that is twenty
+ * targets, with the destructive one a thumb's width from the safe one and
+ * nothing between them — and a Delete fans out over SSE to every paired device
+ * and cannot be undone, while the desktop's `✕` was never guarded either. So
+ * Recall keeps its 48dp square on every row and Delete is behind a swipe, which
+ * is the guard neither client had.
+ *
+ * The swipe panel carries [entryDeleteTag] because it *is* this row's delete —
+ * exactly one node per row wears that tag, here or on the button an
+ * [UndecryptableRow] draws instead.
+ */
 @Composable
 private fun EntryRow(
     entry: Entry,
     ownDeviceId: String?,
+    newest: Boolean,
     onRecall: (Entry) -> Unit,
     onDelete: (Entry) -> Unit,
 ) {
-    Column(
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-        modifier = Modifier.fillMaxWidth().testTag(entryRowTag(entry.id)),
+    val swipe = rememberSwipeToDismissBoxState()
+    // The list is the source of truth about which Entries exist. The swipe asks
+    // for the delete and then springs back; the row leaves when the facade says
+    // it left, so a delete the Relay refuses does not hide a row that is still
+    // there.
+    LaunchedEffect(swipe.currentValue) {
+        if (swipe.currentValue == SwipeToDismissBoxValue.EndToStart) swipe.reset()
+    }
+    SwipeToDismissBox(
+        state = swipe,
+        enableDismissFromStartToEnd = false,
+        onDismiss = { onDelete(entry) },
+        backgroundContent = { DeleteBehindTheRow(entry) },
+        modifier = Modifier.testTag(entryRowTag(entry.id)),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (entry.undecryptable) {
+        // Two layers, not one: the emitter's tint is 12% alpha and the delete
+        // panel is sitting right behind it, so a single translucent background
+        // paints the newest row red.
+        Column(
+            Modifier
+                .background(Fui.Panel)
+                .then(if (newest) Modifier.background(Fui.Active) else Modifier),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(Fui.RowHeight)
+                    .padding(end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                // The emitter's own rule, on the one row Recall Latest will hand
+                // over. Every other row is flush with the gutter.
+                if (newest) {
+                    Box(Modifier.width(2.dp).fillMaxHeight().background(Fui.Cyan400))
+                }
+                Column(
+                    modifier = Modifier.weight(1f).padding(start = if (newest) 12.dp else Fui.Gutter),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Text(
+                        // The facade's Preview, verbatim — see `entryRows`.
+                        text = entry.preview,
+                        style = Fui.Data,
+                        color = if (newest) Fui.TextPrimary else Fui.TextBody,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag(entryPreviewTag(entry.id)),
+                    )
+                    if (entry.deviceId != ownDeviceId) {
+                        Text(
+                            // Resolved by the core: the Device Label, or a slice
+                            // of the Device id when the mirror has none.
+                            text = stringResource(R.string.entry_origin, entry.originLabel),
+                            style = Fui.Micro,
+                            color = Fui.TextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag(entryOriginTag(entry.id)),
+                        )
+                    }
+                }
+                if (newest) {
+                    // Named, filled and wider, because this is the row the verb
+                    // bar acts on and a person should be able to see which one
+                    // that is before they press it.
+                    FuiButton(
+                        text = stringResource(R.string.entry_recall),
+                        onClick = { onRecall(entry) },
+                        solid = true,
+                        modifier = Modifier.width(96.dp).testTag(entryRecallTag(entry.id)),
+                    )
+                } else {
+                    GlyphButton(
+                        glyph = "↓",
+                        onClick = { onRecall(entry) },
+                        contentDescription = stringResource(R.string.entry_recall),
+                        modifier = Modifier.testTag(entryRecallTag(entry.id)),
+                    )
+                }
+            }
+            Hairline(color = Fui.CyanA08)
+        }
+    }
+}
+
+/** What the swipe uncovers. */
+@Composable
+private fun DeleteBehindTheRow(entry: Entry) {
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Fui.Alert500),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(
+            modifier = Modifier
+                .width(96.dp)
+                .fillMaxHeight()
+                .testTag(entryDeleteTag(entry.id)),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text("✕", style = Fui.Glyph, color = Fui.OnEmitter)
+            Text(stringResource(R.string.entry_delete), style = Fui.Micro, color = Fui.OnEmitter)
+        }
+    }
+}
+
+/**
+ * Ciphertext this phone holds no key for: named, not blanked, and deletable.
+ *
+ * It keeps both controls inline rather than the swipe, and that asymmetry is the
+ * point. Recall is **disabled rather than hidden**, following the desktop's
+ * detail pane and not its row — the control someone is looking for has to still
+ * be where they are looking, saying no, with the marker beside it as the reason.
+ * And Delete is the one thing a person can actually do with the row, so it is
+ * not put behind a gesture they would have to discover.
+ */
+@Composable
+private fun UndecryptableRow(entry: Entry, onDelete: (Entry) -> Unit) {
+    Column(Modifier.testTag(entryRowTag(entry.id))) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(Fui.RowHeight)
+                .background(Fui.AlertA16)
+                .padding(end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Box(Modifier.width(2.dp).fillMaxHeight().background(Fui.Alert400))
+            Column(
+                modifier = Modifier.weight(1f).padding(start = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.entry_undecryptable_marker),
+                    style = Fui.Label,
+                    color = Fui.Alert400,
+                    maxLines = 1,
+                )
                 Text(
                     text = stringResource(R.string.entry_undecryptable),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
+                    style = Fui.Micro,
+                    color = Fui.TextBody,
                     maxLines = 2,
-                    modifier = Modifier.weight(1f).testTag(entryUndecryptableTag(entry.id)),
-                )
-            } else {
-                Text(
-                    // The facade's Preview, verbatim — see `entryRows`.
-                    text = entry.preview,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).testTag(entryPreviewTag(entry.id)),
+                    modifier = Modifier.testTag(entryUndecryptableTag(entry.id)),
                 )
             }
-            // Disabled rather than hidden for an Undecryptable Entry, following
-            // the desktop's detail pane and not its row: the control someone is
-            // looking for has to still be where they are looking, saying no. The
-            // marker beside it is the reason.
-            TextButton(
-                onClick = { onRecall(entry) },
-                enabled = !entry.undecryptable,
+            GlyphButton(
+                glyph = "↓",
+                onClick = {},
+                contentDescription = stringResource(R.string.entry_recall),
+                enabled = false,
                 modifier = Modifier.testTag(entryRecallTag(entry.id)),
-            ) {
-                Text(stringResource(R.string.entry_recall))
-            }
-            // Always offered. Ciphertext this phone cannot read is the row a
-            // person most wants gone, and deleting is the only thing they can do
-            // with it.
-            TextButton(
+            )
+            GlyphButton(
+                glyph = "✕",
                 onClick = { onDelete(entry) },
+                contentDescription = stringResource(R.string.entry_delete),
+                accent = Accent.Alert,
                 modifier = Modifier.testTag(entryDeleteTag(entry.id)),
-            ) {
-                Text(stringResource(R.string.entry_delete))
-            }
-        }
-        if (entry.deviceId != ownDeviceId) {
-            Text(
-                // Resolved by the core: the Device Label, or a slice of the
-                // Device id when the mirror has none.
-                text = stringResource(R.string.entry_origin, entry.originLabel),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                modifier = Modifier.testTag(entryOriginTag(entry.id)),
             )
         }
+        Hairline(color = Fui.CyanA08)
     }
 }
 
@@ -226,29 +426,36 @@ private fun EntryRow(
  *
  * Deliberately **not** called Standing Actions: those are the verbs a device
  * exposes *without being opened*, and these are buttons on an open screen. They
- * call the same two repository entry points ticket 12's Standing Actions will,
- * which is the point — neither of those entry points assumes a composition
- * exists.
+ * call the same two repository entry points the Standing Actions do, which is
+ * the point — neither of those entry points assumes a composition exists.
+ *
+ * **Recall Latest is the solid one and comes first.** Recall is why a phone is
+ * opened at all — the laptop copied something and the phone has to paste it —
+ * and it is the one verb that fetches rather than trusting the cache, so it is
+ * the one that must never hand over something stale. Two equal outlines were
+ * truthful about their symmetry in the code and mute about which one a person
+ * reaches for. Offer keeps a full-height target beside it, in the order the
+ * notification lists them.
  */
 @Composable
-private fun OfferAndRecall(actions: AppActions) {
-    Surface(tonalElevation = 3.dp) {
+private fun VerbBar(actions: AppActions) {
+    Column(Modifier.fillMaxWidth()) {
+        Hairline(color = Fui.Frame)
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().background(Fui.Band).padding(Fui.Gutter),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            TextButton(
+            FuiButton(
+                text = stringResource(R.string.recall_latest_bar),
+                onClick = actions.recallLatest,
+                solid = true,
+                modifier = Modifier.weight(1.6f).testTag(TAG_RECALL_LATEST),
+            )
+            FuiButton(
+                text = stringResource(R.string.offer_bar),
                 onClick = actions.offerClipboard,
                 modifier = Modifier.weight(1f).testTag(TAG_OFFER),
-            ) {
-                Text(stringResource(R.string.offer_button))
-            }
-            TextButton(
-                onClick = actions.recallLatest,
-                modifier = Modifier.weight(1f).testTag(TAG_RECALL_LATEST),
-            ) {
-                Text(stringResource(R.string.recall_latest_button))
-            }
+            )
         }
     }
 }
@@ -260,15 +467,33 @@ private fun OfferAndRecall(actions: AppActions) {
  * foreground-only: an Offer made with no connection sits in the queue until the
  * app is next opened, and a queue nobody can see is a queue nobody comes back
  * for. It disappears of its own accord when the uploader drains it.
+ *
+ * The count is a readout beside the sentence rather than a number inside it,
+ * because the number is what is being reported and the sentence is what it
+ * means. [TAG_PENDING] stays on the sentence.
  */
 @Composable
 private fun PendingReadout(pending: Long) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = pluralStringResource(R.plurals.pending_count, pending.toInt(), pending),
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(16.dp, 8.dp).testTag(TAG_PENDING),
-        )
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().background(Fui.AmberA16).padding(Fui.Gutter, 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = pending.toString(),
+                style = Fui.Readout,
+                color = Fui.Amber400,
+                modifier = Modifier.testTag(TAG_PENDING_COUNT),
+            )
+            Text(
+                text = pluralStringResource(R.plurals.pending_count, pending.toInt()),
+                style = Fui.Prose,
+                color = Fui.TextBody,
+                modifier = Modifier.weight(1f).testTag(TAG_PENDING),
+            )
+        }
+        Hairline(color = Fui.AmberA40)
     }
 }
 
@@ -283,14 +508,31 @@ const val TAG_HISTORY_SCREEN = "history-screen"
 const val TAG_HISTORY_LIST = "history-list"
 
 const val TAG_HISTORY_EMPTY = "history-empty"
+
+/** Which Pairing's History is on screen: `<user> @ <relay host>`. */
+const val TAG_IDENTITY = "history-identity"
+
 const val TAG_OFFER = "offer-clipboard"
 const val TAG_RECALL_LATEST = "recall-latest"
 const val TAG_OPEN_PAIRINGS = "open-pairings"
+
+/** The sentence that says what a queue is. */
 const val TAG_PENDING = "pending-count"
+
+/** The queue depth itself, as a readout. */
+const val TAG_PENDING_COUNT = "pending-readout"
 
 fun entryRowTag(id: Long) = "entry-$id"
 fun entryPreviewTag(id: Long) = "entry-preview-$id"
 fun entryOriginTag(id: Long) = "entry-origin-$id"
 fun entryUndecryptableTag(id: Long) = "entry-undecryptable-$id"
 fun entryRecallTag(id: Long) = "entry-recall-$id"
+
+/**
+ * This row's Delete, wherever it is.
+ *
+ * Exactly one node per row: the panel a swipe uncovers on a readable Entry, or
+ * the `✕` an [UndecryptableRow] draws inline because deleting is the only thing
+ * a person can do with it.
+ */
 fun entryDeleteTag(id: Long) = "entry-delete-$id"

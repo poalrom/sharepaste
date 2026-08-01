@@ -196,7 +196,7 @@ class PairingsScreenTest {
         show(UiState(pairings = listOf(syncing, queued), activeUserId = syncing.userId))
 
         scrollTo(pairCardTag(queued.userId))
-        val two = resources.getQuantityString(R.plurals.pending_count, 2, 2)
+        val two = resources.getQuantityString(R.plurals.pairings_pending, 2, 2)
         compose.onNodeWithTag(pairPendingTag(queued.userId)).assertTextEquals(two)
         compose.onNodeWithTag(pairPendingTag(syncing.userId)).assertDoesNotExist()
         Evidence.log("queue on a resting Pairing = $two")

@@ -5,28 +5,59 @@
   The vocabulary is the project's own and is not negotiable per-screen: Entry,
   Preview, Pairing, Active Pairing, Offered Capture, Recall, Relay, Contact,
   Origin. See CONTEXT.md.
+
+  Two registers, and which one a string is in is a design decision rather than a
+  typing habit. **Chrome, controls and telemetry are written in capitals** —
+  they are HUD readouts, scanned rather than read, and writing them in capitals
+  here rather than transforming them at render time keeps what is on screen
+  greppable and keeps a locale's casing rules out of it. **Whole sentences stay
+  sentence case**, at full length, wherever the app has something to explain:
+  the foreground-only note, the stale-Recall warning, the blocked-notification
+  note, the two erasures and the two absent settings are the load-bearing ones,
+  and none of them is shortened to fit a band.
 -->
 <resources>
     <string name="app_name">Sharepaste</string>
 
     <!-- Pairing -->
-    <string name="pair_title">Pair this phone</string>
-    <string name="pair_label_heading">1. Name this phone</string>
+    <string name="pair_title">PAIR THIS PHONE</string>
+    <!-- The step numbers are drawn beside these, not written into them. -->
+    <string name="pair_step_name" translatable="false">01</string>
+    <string name="pair_step_scan" translatable="false">02</string>
+    <string name="pair_label_heading">NAME THIS PHONE</string>
     <string name="pair_label_explainer">Your computer lists this name beside every Entry that
         comes from here, so pick something you will recognise later.</string>
     <string name="pair_label_field">This phone\u2019s name</string>
     <string name="pair_label_placeholder">Pixel in my pocket</string>
-    <string name="pair_scan_heading">2. Scan the code on your computer</string>
+    <string name="pair_scan_heading">SCAN THE CODE ON YOUR COMPUTER</string>
     <string name="pair_scan_explainer">Open Sharepaste on the computer you are already paired to
         and choose Pair a device. Point this phone at the square code it shows.</string>
     <string name="pair_needs_a_name">Name this phone first — the code is only good for two
         minutes, so we would rather ask now than lose it.</string>
-    <string name="pair_typed_heading">Or type the code</string>
+    <string name="pair_typed_heading">OR TYPE THE CODE</string>
     <string name="pair_typed_explainer">Your computer prints the code underneath the square, in
         groups of four. Upper or lower case, dashes or not — it does not matter.</string>
     <string name="pair_typed_field">Pairing code</string>
-    <string name="pair_button">Pair this phone</string>
-    <string name="pair_working">Pairing\u2026</string>
+    <string name="pair_button">PAIR THIS PHONE</string>
+    <string name="pair_working">PAIRING\u2026</string>
+
+    <!-- The viewfinder's own chrome. -->
+    <string name="pair_viewfinder_title">VIEWFINDER</string>
+    <string name="pair_viewfinder_code">BACK CAMERA</string>
+    <string name="pair_viewfinder_hint">POINT AT THE SQUARE ON THE PAIR A DEVICE SCREEN</string>
+    <!--
+      The Relay gives a pairing slot 120 seconds (`serve.ts`), which is a fact
+      about the code and not a countdown this phone could run: nothing here
+      knows when the computer printed it. Worded as the rule rather than as a
+      clock, because a static "02:00" beside a viewfinder reads as one.
+    -->
+    <string name="pair_code_ttl">CODES EXPIRE AFTER 02:00</string>
+    <!--
+      The second fact a phone cannot discover for itself, beside the cipher.
+      Enforced by the shell declining Android's cleartext exception and by
+      `REQUIRE_HTTPS` travelling into the facade — see `build.gradle.kts`.
+    -->
+    <string name="relay_must_be_https">RELAY MUST BE HTTPS</string>
 
     <!-- The three camera and code failures, each said in its own words. -->
     <string name="camera_permission_refused">Sharepaste cannot use the camera, so it cannot read
@@ -54,26 +85,66 @@
         anyone on the network can read, so it refused before connecting.</string>
     <string name="pair_failed">Pairing did not go through. Ask your computer for a fresh code and
         try again.</string>
-    <string name="pair_dismiss">Try again</string>
+    <string name="pair_dismiss">TRY AGAIN</string>
+    <string name="pair_failed_badge">DID NOT PAIR</string>
 
     <!-- History -->
-    <string name="history_title">Sharepaste</string>
-    <string name="history_empty_heading">Nothing here yet</string>
+    <!-- The identity band's own name for the product. -->
+    <string name="history_title">SHAREPASTE</string>
+    <!-- %1$s is the User, %2$s the Relay host. Which Pairing is on screen. -->
+    <string name="history_identity">%1$s @ %2$s</string>
+    <string name="history_empty_heading">NOTHING HERE YET</string>
     <string name="history_empty_body">Anything you copy on a paired computer shows up here as an
         Entry. Nothing has been offered yet.</string>
 
     <!-- A row. The Preview itself is the facade's and is never re-worded here. -->
-    <string name="entry_undecryptable">Undecryptable — sealed with a key this phone does not
-        have</string>
-    <string name="entry_recall">Recall</string>
-    <string name="entry_delete">Delete</string>
-    <!-- Shown only for an Entry captured on another Device. %1$s is its Origin. -->
-    <string name="entry_origin">From %1$s</string>
+    <!--
+      Two parts, because the row draws two. The marker names the state in the
+      product's own word; the sentence underneath says what it means, and it is
+      the sentence a test reads back.
+    -->
+    <string name="entry_undecryptable_marker">\u2298 UNDECRYPTABLE</string>
+    <string name="entry_undecryptable">SEALED WITH A KEY THIS PHONE DOES NOT HAVE</string>
+    <string name="entry_recall">RECALL</string>
+    <string name="entry_delete">DELETE</string>
+    <!--
+      Shown only for an Entry captured on another Device. %1$s is its Origin,
+      which is a name a person chose and is never re-cased.
+    -->
+    <string name="entry_origin">FROM %1$s</string>
 
-    <!-- Offer and Recall. Not "Standing Actions": those are the verbs a closed phone exposes. -->
+    <!--
+      Offer and Recall. Not "Standing Actions": those are the verbs a closed
+      phone exposes, and they keep the long titles below, because a notification
+      action has no surrounding screen to say what it acts on.
+    -->
     <string name="offer_button">Offer what I copied</string>
     <string name="recall_latest_button">Recall the latest Entry</string>
-    <string name="notice_dismiss">Dismiss</string>
+    <!-- The same two verbs on the open screen, where the screen is the context. -->
+    <string name="offer_bar">OFFER</string>
+    <string name="recall_latest_bar">RECALL LATEST</string>
+    <string name="notice_dismiss">DISMISS</string>
+
+    <!--
+      Every notice is labelled with the outcome it reports, in one or two words,
+      before the sentence that explains it. The same four the invisible activity
+      shows over whatever a person was doing — a Standing Action and an in-app
+      press are the same operation and must not report it in two idioms.
+    -->
+    <string name="notice_offered">OFFERED</string>
+    <string name="notice_recalled">RECALLED</string>
+    <string name="notice_not_paired">NOT PAIRED</string>
+    <string name="notice_cleared">CLEARED</string>
+    <string name="notice_forgotten">FORGOTTEN</string>
+    <string name="notice_failed">DID NOT WORK</string>
+    <!-- One per reachable refusal, naming what to do about it. -->
+    <string name="notice_nothing_to_send">NOTHING TO SEND</string>
+    <string name="notice_too_big">TOO BIG · 64 KB CAP</string>
+    <string name="notice_already_here">ALREADY HERE</string>
+    <string name="notice_refused">REFUSED</string>
+    <string name="notice_nothing_to_recall">NOTHING TO RECALL</string>
+    <!-- The share sheet's own refusal, per the mock's off-app surface. -->
+    <string name="notice_refused_sensitive">REFUSED · FLAGGED SENSITIVE</string>
 
     <string name="offer_queued">Offered. Sharepaste sends it to the Relay while this app is
         open.</string>
@@ -111,6 +182,12 @@
     <string name="recall_from_cache">Sharepaste could not reach the Relay, so this is the newest
         Entry it already had. Anything you copied on your computer since then is not here yet —
         open Sharepaste again once you have a connection.</string>
+    <!--
+      Its badge. The notice above is about what is *now on the clipboard*, not
+      about what the app just did, which is why it is the one notice that wears
+      a colour at all.
+    -->
+    <string name="recall_from_cache_badge">MAY BE STALE</string>
     <string name="recall_nothing_to_recall">There is nothing to recall. Either this History is
         empty, or that Entry is Undecryptable and this phone holds no plaintext for it.</string>
     <string name="recall_failed">Sharepaste could not recall that.</string>
@@ -147,11 +224,12 @@
       on any version. The app is not broken by it and says so: every verb still
       works from this screen.
     -->
+    <string name="standing_actions_blocked_heading">STANDING ACTIONS · UNREACHABLE</string>
     <string name="standing_actions_blocked">Sharepaste cannot show its notification, so Offer and
         Recall are not reachable without opening the app. Nothing else is affected — both still
         work from here. Turn this app\u2019s notifications on to get the Standing Actions
         back.</string>
-    <string name="standing_actions_enable">Turn notifications on</string>
+    <string name="standing_actions_enable">TURN NOTIFICATIONS ON</string>
 
     <!-- The share sheet reads this. It names the verb, not the product. -->
     <string name="share_target_label">Offer to Sharepaste</string>
@@ -170,12 +248,28 @@
       Pending, surfaced. Sync is foreground-only, so an Offer made with no
       connection waits for the next time the app is opened; a count nobody can
       see is a count nobody comes back for.
+
+      The count is drawn beside this sentence as a readout rather than written
+      into it, which is why there is no `%1$d` here: on the History the number
+      is the thing being reported and the sentence is what it means.
     -->
     <plurals name="pending_count">
-        <item quantity="one">%1$d Entry is waiting for the Relay. Sharepaste sends it while this
+        <item quantity="one">Entry is waiting for the Relay. Sharepaste sends it while this
             app is open.</item>
-        <item quantity="other">%1$d Entries are waiting for the Relay. Sharepaste sends them
+        <item quantity="other">Entries are waiting for the Relay. Sharepaste sends them
             while this app is open.</item>
+    </plurals>
+
+    <!--
+      The same queue on a Pairing card, where it has no room for a readout and
+      has to carry its own count. This is the only surface that shows a queue
+      belonging to a Pairing the phone switched away from.
+    -->
+    <plurals name="pairings_pending">
+        <item quantity="one">%1$d ENTRY WAITING FOR THE RELAY · SENT WHILE THIS APP IS
+            OPEN</item>
+        <item quantity="other">%1$d ENTRIES WAITING FOR THE RELAY · SENT WHILE THIS APP IS
+            OPEN</item>
     </plurals>
 
     <!--
@@ -183,28 +277,57 @@
       screen rather than in a release note. It is the single most surprising
       thing about how this app works, and a person who does not know it will
       read it as a bug.
+
+      It is pinned chrome, not a list item: clipped to one line until asked and
+      verbatim once opened. A fact that scrolls away is a fact the puzzled
+      person never reaches, and this is the one they are puzzled about.
     -->
+    <string name="foreground_only_pinned">NOTHING ARRIVES WHILE THIS IS CLOSED</string>
+    <string name="foreground_only_why">WHY \u25B8</string>
+    <string name="foreground_only_close">\u25B4 CLOSE</string>
+    <!--
+      What the band's tap does, for a screen reader. The chip says `WHY ▸`,
+      which is an affordance rather than a sentence, and the whole band is the
+      target.
+    -->
+    <string name="foreground_only_why_action">Show why nothing arrives while this is
+        closed</string>
     <string name="foreground_only_note">Sharepaste only looks for new Entries while this app is
         open. It does no work in the background — that is deliberate, and it is why nothing here
         drains your battery or reads your clipboard behind your back. Something you copied on
         the computer an hour ago arrives the moment you open Sharepaste, not before.</string>
+    <!-- The same fact as four things that are not happening. -->
+    <string name="foreground_only_tag_sync">NO BACKGROUND SYNC</string>
+    <string name="foreground_only_tag_notification">NO NEW-ENTRY NOTIFICATION</string>
+    <string name="foreground_only_tag_watching">NO CLIPBOARD WATCHING</string>
+    <string name="foreground_only_tag_counterparty">ONE COUNTERPARTY: YOUR RELAY</string>
 
-    <!-- Contact, in the phone's terms. Not being in contact is the normal case. -->
-    <string name="contact_looking">Checking for new Entries\u2026</string>
-    <string name="contact_online">In contact with the Relay</string>
-    <string name="contact_offline">Not in contact. Sharepaste will look again next time you open
-        it.</string>
-    <string name="contact_resting">Resting. Sharepaste is not looking while it is closed.</string>
+    <!--
+      Contact, in the phone's terms, and permanently on screen rather than only
+      when degraded. The desktop's rule is the other way round (ADR 0002); a
+      phone is out of contact almost always, so hiding the nominal reading would
+      leave the band meaning "something is wrong" every time it appeared.
+    -->
+    <string name="contact_looking">CHECKING FOR NEW ENTRIES\u2026</string>
+    <string name="contact_online">IN CONTACT WITH THE RELAY</string>
+    <string name="contact_offline">NOT IN CONTACT · NOMINAL</string>
+    <string name="contact_resting">RESTING · NOT LOOKING WHILE CLOSED</string>
     <!--
       A Pairing that is not the Active one. Distinct from `contact_resting`,
       which is the *phone* put down: this one is idle on a phone that is wide
       awake, and it is nominal. A Pairing nobody asked to connect is resting,
       not faulty.
     -->
-    <string name="contact_not_active">Resting. This phone is not syncing this Pairing at the
-        moment.</string>
+    <string name="contact_not_active">RESTING · NOT SYNCING THIS PAIRING</string>
+    <!--
+      The one true fault, and the only readout that is a whole sentence: no
+      amount of waiting fixes a revoked token, so this one has to say what to do
+      about it rather than report a state.
+    -->
+    <string name="contact_refused_short">RELAY REFUSED THIS PHONE</string>
     <string name="contact_refused">The Relay no longer recognises this phone. It has probably
         been unpaired from your computer; pair it again to start over.</string>
+    <string name="contact_pair_again">PAIR THIS PHONE AGAIN</string>
 
     <!--
       ===================================================================
@@ -214,18 +337,18 @@
       forgotten when the app is put down (CONTEXT.md).
       ===================================================================
     -->
-    <string name="pairings_title">Pairings</string>
+    <string name="pairings_title">PAIRINGS</string>
     <string name="pairings_open">Pairings</string>
     <string name="pairings_back">Back</string>
-    <string name="pairings_active_badge">Syncing</string>
-    <string name="pairings_viewed_badge">Showing</string>
+    <string name="pairings_active_badge">SYNCING</string>
+    <string name="pairings_viewed_badge">SHOWING</string>
     <!-- %1$s is the Device Label this phone chose when it paired. -->
     <string name="pairings_this_phone">This phone here: %1$s</string>
-    <string name="pairings_view">Show its Entries</string>
-    <string name="pairings_use">Sync this one</string>
-    <string name="pairings_clear_history">Clear History</string>
-    <string name="pairings_forget">Forget</string>
-    <string name="pairings_cancel">Keep it</string>
+    <string name="pairings_view">SHOW ITS ENTRIES</string>
+    <string name="pairings_use">SYNC THIS ONE</string>
+    <string name="pairings_clear_history">CLEAR HISTORY</string>
+    <string name="pairings_forget">FORGET</string>
+    <string name="pairings_cancel">KEEP IT</string>
 
     <!--
       The divergence, admitted. Without this the History shows one Pairing's
@@ -235,13 +358,16 @@
     -->
     <string name="pairing_diverged">You are looking at %1$s, but this phone is syncing %2$s.
         Nothing here is being kept up to date, and anything you offer goes to %2$s.</string>
-    <string name="pairing_diverged_use">Sync this one instead</string>
+    <string name="pairing_diverged_use">SYNC THIS ONE INSTEAD</string>
 
     <!--
       The two erasures name the User and the Relay rather than the heading: two
       Pairings can share a name, and neither of these can be undone. %1$s is
-      "<user> @ <relay host>".
+      "<user> @ <relay host>". Both are answered inside the card they belong to
+      rather than in a dialog, so the scope stays on screen while the choice is
+      being made.
     -->
+    <string name="pairings_confirm_badge">CANNOT BE UNDONE</string>
     <string name="pairings_clear_confirm">Erase every Entry of %1$s, on the Relay and on every
         device paired to it?</string>
     <string name="pairings_forget_confirm">Forget %1$s? This phone erases its Entries, its key
@@ -260,10 +386,10 @@
         erased — try again once you have a connection.</string>
     <string name="forget_failed">Sharepaste could not finish forgetting that Pairing.</string>
 
-    <string name="pairings_add_heading">Add another Pairing</string>
+    <string name="pairings_add_heading">ADD ANOTHER PAIRING</string>
     <string name="pairings_add_body">A phone can hold several. Only the one marked Syncing is
         the one this phone sends to and receives from.</string>
-    <string name="pairings_add_button">Pair with a code</string>
+    <string name="pairings_add_button">PAIR WITH A CODE</string>
 
     <!--
       ADR 0002 puts cipher disclosure beside pairing, where the choice to trust a
@@ -280,7 +406,7 @@
       nothing is indistinguishable from finding a half-built screen.
       ===================================================================
     -->
-    <string name="settings_heading">About this phone</string>
+    <string name="settings_heading">ABOUT THIS PHONE</string>
     <!--
       Display-only, and this says why. The Relay sets a Device Label once, when
       the device is created, and serves it from there; it has no rename route. A
@@ -299,4 +425,14 @@
     <string name="settings_absent_note">Your computer has two switches this phone does not.
         Sharepaste never watches this phone\u2019s clipboard — it only ever sends what you hand
         it — so there is nothing to turn on, and no list of apps to keep it away from.</string>
+    <!--
+      The same two, plus the update check, as chips. A chip that says N/A makes a
+      missing switch legible as a decision; nothing at all makes it look like a
+      screen somebody stopped building. `UPDATE CHECK · NONE` is ADR 0008: the
+      phone carries no update code, so unlike a desktop it never asks an update
+      source anything and the Relay is its only counterparty.
+    -->
+    <string name="settings_tag_watched_capture">WATCHED CAPTURE · N/A</string>
+    <string name="settings_tag_deny_list">DENY-LIST · N/A</string>
+    <string name="settings_tag_update_check">UPDATE CHECK · NONE</string>
 </resources>

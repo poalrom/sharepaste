@@ -266,6 +266,46 @@ fun offerRefusalMessage(reason: SkipReason): Int = when (reason) {
 }
 
 /**
+ * The same refusal in one or two words, for the label above the sentence.
+ *
+ * Not a shortening of the sentence: it names *what to do about it*, which is the
+ * only reason the three reachable reasons are three reasons.
+ */
+@StringRes
+fun offerRefusalLabel(reason: SkipReason): Int = when (reason) {
+    SkipReason.NON_TEXT -> R.string.notice_nothing_to_send
+    SkipReason.TOO_LARGE -> R.string.notice_too_big
+    SkipReason.DUPLICATE -> R.string.notice_already_here
+
+    SkipReason.DISABLED,
+    SkipReason.DENY_LIST,
+    SkipReason.SELF_WRITE,
+    SkipReason.TRANSIENT,
+    -> R.string.notice_refused
+}
+
+/**
+ * How loudly a refusal is drawn.
+ *
+ * `ALREADY HERE` is the one that is not a caution: a duplicate Offer is the app
+ * working correctly and a person who tapped Offer twice has lost nothing, so it
+ * reads as a fact rather than as something to fix. The other two each need
+ * something done — put different content on the clipboard, or send something
+ * smaller — and wear the caution rule that says so.
+ */
+fun offerRefusalAccent(reason: SkipReason): Accent = when (reason) {
+    SkipReason.DUPLICATE -> Accent.Neutral
+
+    SkipReason.NON_TEXT,
+    SkipReason.TOO_LARGE,
+    SkipReason.DISABLED,
+    SkipReason.DENY_LIST,
+    SkipReason.SELF_WRITE,
+    SkipReason.TRANSIENT,
+    -> Accent.Caution
+}
+
+/**
  * Which screen is in front.
  *
  * Not a navigation library. There are two destinations and the choice between
@@ -340,14 +380,24 @@ sealed interface SessionPhase {
 }
 
 /**
- * Whether a phase is ordinary news or a fault.
+ * Whether a phase is ordinary news or something the person has to act on.
  *
  * Exhaustive over [SessionPhase] on purpose: adding a phase without deciding
  * which of the two it is becomes a compile error, which is the only way this
- * rule survives the three tickets built on top of it.
+ * rule survives the tickets built on top of it. It is the **only** statement of
+ * that rule — `Signal` in `Fui.kt` chooses a lamp colour and defers its alert
+ * arm to this, rather than re-enumerating which phases are faults.
  */
 enum class Tone {
-    /** Say it in the ordinary voice. No colour, no icon, no badge. */
+    /**
+     * Say it in the ordinary voice.
+     *
+     * A nominal phase does get a lit status light — the redesign made Contact a
+     * permanent readout — but never an alert colour, never a container, and
+     * never a call to action. Three of the phases here light `Signal.Standby`
+     * and only being *in contact* lights `Signal.Nominal`, so the two words
+     * called Nominal are not the same set.
+     */
     Nominal,
 
     /** Something is actually wrong and the person has to act. */

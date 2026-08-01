@@ -10,6 +10,7 @@ import com.sharepaste.android.R
 import com.sharepaste.android.RecallAttempt
 import com.sharepaste.android.SharepasteApplication
 import com.sharepaste.android.SharepasteRepository
+import com.sharepaste.android.ui.offerRefusalLabel
 import com.sharepaste.android.ui.offerRefusalMessage
 import com.sharepaste.core.AppException
 import com.sharepaste.core.OfferOutcome
@@ -124,10 +125,10 @@ class StandingActionActivity : Activity() {
             try {
                 when (action) {
                     StandingActions.ACTION_OFFER -> {
-                        val (message, queuedOn) = offer()
+                        val (said, queuedOn) = offer()
                         // Reported first: the person pressed a control and is
                         // owed an answer now, not when the network has finished.
-                        report(action, message)
+                        report(action, said)
                         // And then actually sent. `offer` only enqueues — the
                         // uploader lives on a session, which a phone with no
                         // screen open does not have, so without this "Offer
@@ -180,19 +181,25 @@ class StandingActionActivity : Activity() {
      * queue now has something in it. See [SharepasteRepository.sendPending] for
      * why that second half exists.
      */
-    private suspend fun offer(): Pair<String, String?> = try {
+    private suspend fun offer(): Pair<Said, String?> = try {
         when (val attempt = repository.offerClipboard()) {
-            OfferAttempt.Unpaired -> getString(R.string.action_unpaired) to null
+            OfferAttempt.Unpaired ->
+                Said(R.string.notice_not_paired, getString(R.string.action_unpaired)) to null
+
             is OfferAttempt.Settled -> when (val outcome = attempt.outcome) {
-                is OfferOutcome.Queued -> getString(R.string.offer_queued) to attempt.userId
-                // The same three sentences the screen uses, from the same
-                // function. A refusal a person cannot act on is a control that
-                // did nothing.
-                is OfferOutcome.Rejected -> getString(offerRefusalMessage(outcome.reason)) to null
+                is OfferOutcome.Queued ->
+                    Said(R.string.notice_offered, getString(R.string.offer_queued)) to attempt.userId
+                // The same three sentences the screen uses, under the same three
+                // labels, from the same two functions. A refusal a person cannot
+                // act on is a control that did nothing.
+                is OfferOutcome.Rejected -> Said(
+                    offerRefusalLabel(outcome.reason),
+                    getString(offerRefusalMessage(outcome.reason)),
+                ) to null
             }
         }
     } catch (e: AppException) {
-        getString(R.string.offer_failed) to null
+        Said(R.string.notice_failed, getString(R.string.offer_failed)) to null
     }
 
     /**
@@ -206,17 +213,23 @@ class StandingActionActivity : Activity() {
      * carry it — and it carries the same sentence the in-app band does, because
      * it is the same fact.
      */
-    private suspend fun recallLatest(): String = try {
+    private suspend fun recallLatest(): Said = try {
         when (val attempt = repository.recallLatestOnActivePairing()) {
-            RecallAttempt.Unpaired -> getString(R.string.action_unpaired)
-            is RecallAttempt.Done -> getString(
-                if (attempt.fromCache) R.string.recall_from_cache else R.string.recall_done,
+            RecallAttempt.Unpaired -> Said(
+                R.string.notice_not_paired,
+                getString(R.string.action_unpaired),
             )
+
+            is RecallAttempt.Done -> if (attempt.fromCache) {
+                Said(R.string.recall_from_cache_badge, getString(R.string.recall_from_cache))
+            } else {
+                Said(R.string.notice_recalled, getString(R.string.recall_done))
+            }
         }
     } catch (e: AppException.NotFound) {
-        getString(R.string.recall_nothing_to_recall)
+        Said(R.string.notice_nothing_to_recall, getString(R.string.recall_nothing_to_recall))
     } catch (e: AppException) {
-        getString(R.string.recall_failed)
+        Said(R.string.notice_failed, getString(R.string.recall_failed))
     }
 
     /**
@@ -229,19 +242,29 @@ class StandingActionActivity : Activity() {
      * cache-fallback warning that is silently swallowed turns a correct
      * operation into a wrong one.
      *
-     * The log line is the same sentence, under the verb that produced it. The
-     * verb is passed in rather than read back off [getIntent], because [intent]
-     * answers with whatever was delivered *most recently* — a second press
-     * arriving while this one is still working would otherwise relabel this
-     * line as the other verb.
+     * The Toast is the label and then the sentence, which is the same shape the
+     * History's own band draws — see [Said]. The **log line is the sentence
+     * alone**, and deliberately so: it is a contract with the acceptance
+     * sequence and with `StandingActionsNotificationTest`, which asserts that
+     * whatever this logs is one of the app's own sentences and nothing derived
+     * from an Entry.
+     *
+     * The verb is passed in rather than read back off [getIntent], because
+     * [intent] answers with whatever was delivered *most recently* — a second
+     * press arriving while this one is still working would otherwise relabel
+     * this line as the other verb.
      *
      * It names what happened and never what was in the Entry: neither verb has
      * the plaintext to leak — `RecallAttempt` deliberately carries none — and
      * this must stay true of anything added here.
      */
-    private fun report(action: String?, message: String) {
-        Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
-        Log.i(StandingActions.TAG, "$action: $message")
+    private fun report(action: String?, said: Said) {
+        Toast.makeText(
+            applicationContext,
+            "${getString(said.label)}\n${said.sentence}",
+            Toast.LENGTH_LONG,
+        ).show()
+        Log.i(StandingActions.TAG, "$action: ${said.sentence}")
     }
 }
 

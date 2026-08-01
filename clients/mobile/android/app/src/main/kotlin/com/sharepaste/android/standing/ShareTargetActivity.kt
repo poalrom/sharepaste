@@ -10,6 +10,7 @@ import com.sharepaste.android.OfferAttempt
 import com.sharepaste.android.R
 import com.sharepaste.android.SharepasteApplication
 import com.sharepaste.android.SharepasteRepository
+import com.sharepaste.android.ui.offerRefusalLabel
 import com.sharepaste.android.ui.offerRefusalMessage
 import com.sharepaste.core.AppException
 import com.sharepaste.core.OfferOutcome
@@ -85,12 +86,12 @@ class ShareTargetActivity : Activity() {
         working.began()
         scope.launch {
             try {
-                val (message, queuedOn) = offerFrom(shared)
+                val (said, queuedOn) = offerFrom(shared)
                 // Reported first, sent second — see `StandingActionActivity`. A
                 // share is an Offer made by somebody who is standing in another
                 // app waiting to get on with something, so the answer comes now
                 // and the upload happens behind it.
-                report(message)
+                report(said)
                 queuedOn?.let { repository.sendPending(it) }
             } finally {
                 if (working.finished() && !isFinishing) finish()
@@ -110,31 +111,50 @@ class ShareTargetActivity : Activity() {
      * The sentence to show, and — when there is one — the Pairing whose queue
      * now has something in it.
      */
-    private suspend fun offerFrom(intent: Intent?): Pair<String, String?> =
+    private suspend fun offerFrom(intent: Intent?): Pair<Said, String?> =
         when (val shared = sharedFrom(intent)) {
             // Refused before the text is read out of the intent at all, so
             // nothing the sender called sensitive is ever in a local of ours.
-            Shared.Sensitive -> getString(R.string.share_refused_sensitive) to null
-            Shared.NotText -> getString(R.string.share_refused_not_text) to null
+            Shared.Sensitive -> Said(
+                R.string.notice_refused_sensitive,
+                getString(R.string.share_refused_sensitive),
+            ) to null
+
+            Shared.NotText -> Said(
+                R.string.notice_nothing_to_send,
+                getString(R.string.share_refused_not_text),
+            ) to null
+
             is Shared.Text -> offer(shared.text)
         }
 
-    private suspend fun offer(text: String): Pair<String, String?> = try {
+    private suspend fun offer(text: String): Pair<Said, String?> = try {
         when (val attempt = repository.offerText(text)) {
-            OfferAttempt.Unpaired -> getString(R.string.action_unpaired) to null
+            OfferAttempt.Unpaired ->
+                Said(R.string.notice_not_paired, getString(R.string.action_unpaired)) to null
+
             is OfferAttempt.Settled -> when (val outcome = attempt.outcome) {
-                is OfferOutcome.Queued -> getString(R.string.offer_queued) to attempt.userId
-                is OfferOutcome.Rejected -> getString(offerRefusalMessage(outcome.reason)) to null
+                is OfferOutcome.Queued ->
+                    Said(R.string.notice_offered, getString(R.string.offer_queued)) to attempt.userId
+
+                is OfferOutcome.Rejected -> Said(
+                    offerRefusalLabel(outcome.reason),
+                    getString(offerRefusalMessage(outcome.reason)),
+                ) to null
             }
         }
     } catch (e: AppException) {
-        getString(R.string.offer_failed) to null
+        Said(R.string.notice_failed, getString(R.string.offer_failed)) to null
     }
 
-    /** See [StandingActionActivity.report] — same surface, same rule about plaintext. */
-    private fun report(message: String) {
-        Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
-        Log.i(StandingActions.TAG, "share: $message")
+    /** See [StandingActionActivity.report] — same surface, same rules. */
+    private fun report(said: Said) {
+        Toast.makeText(
+            applicationContext,
+            "${getString(said.label)}\n${said.sentence}",
+            Toast.LENGTH_LONG,
+        ).show()
+        Log.i(StandingActions.TAG, "share: ${said.sentence}")
     }
 }
 

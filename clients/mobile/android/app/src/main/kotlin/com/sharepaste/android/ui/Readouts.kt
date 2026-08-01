@@ -1,20 +1,30 @@
 package com.sharepaste.android.ui
 
 import androidx.annotation.StringRes
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.sharepaste.android.R
 
@@ -27,34 +37,59 @@ import com.sharepaste.android.R
  * of contact almost all of the time, because sync is foreground-only (ADR 0007),
  * so the same rule would paint a perfectly healthy phone as permanently broken.
  *
- * Concretely: every phase except [SessionPhase.Refused] renders in the ordinary
- * secondary body colour, with no icon, no badge, no container and no
- * [TAG_FAULT]. A revoked Pairing is the only thing a person has to act on, and it
- * is the only thing that looks like it.
+ * The redesign inverts the desktop's rule rather than copying it: the readout is
+ * **permanent chrome**, one band that is always there, so its appearance carries
+ * no news of its own and only the words inside it change. Every phase except
+ * [SessionPhase.Refused] is a status light in the ordinary voice with no
+ * container and no [TAG_FAULT].
+ *
+ * A revoked Pairing is the one thing a person has to act on, so it is the one
+ * thing that looks like it — and the only one that is a sentence rather than a
+ * readout, because no amount of waiting fixes a revoked token and the band has
+ * to say what to do instead. [onPairAgain] is how; when it is `null` the
+ * sentence stands without its control, which is what a readout rendered outside
+ * the app's navigation gets.
  */
 @Composable
-fun ContactReadout(phase: SessionPhase, modifier: Modifier = Modifier) {
-    val text = phaseMessage(phase)?.let { stringResource(it) } ?: return
+fun ContactReadout(
+    phase: SessionPhase,
+    modifier: Modifier = Modifier,
+    onPairAgain: (() -> Unit)? = null,
+) {
+    val message = phaseMessage(phase) ?: return
 
     when (toneOf(phase)) {
-        Tone.Nominal -> Text(
-            text = text,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Tone.Nominal -> ChromeBand(
+            height = 30.dp,
             modifier = modifier.testTag(TAG_NOMINAL),
-        )
-
-        Tone.Fault -> Surface(
-            color = MaterialTheme.colorScheme.errorContainer,
-            shape = MaterialTheme.shapes.medium,
-            modifier = modifier.testTag(TAG_FAULT),
+            scanlines = true,
         ) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.padding(12.dp),
-            )
+            StatusLight(signalOf(phase), stringResource(message))
+        }
+
+        Tone.Fault -> Column(modifier.fillMaxWidth().testTag(TAG_FAULT)) {
+            ChromeBand(height = 30.dp, background = Fui.AlertA16) {
+                StatusLight(Signal.Alert, stringResource(message))
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Fui.AlertA16)
+                    .padding(Fui.Gutter),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(stringResource(R.string.contact_refused), style = Fui.Prose, color = Fui.TextPrimary)
+                if (onPairAgain != null) {
+                    FuiButton(
+                        text = stringResource(R.string.contact_pair_again),
+                        onClick = onPairAgain,
+                        accent = Accent.Alert,
+                        solid = true,
+                        modifier = Modifier.testTag(TAG_PAIR_AGAIN),
+                    )
+                }
+            }
+            Hairline(color = Fui.AlertA40)
         }
     }
 }
@@ -65,7 +100,8 @@ fun ContactReadout(phase: SessionPhase, modifier: Modifier = Modifier) {
  * Shared by the whole-phone readout above and by a single Pairing's card, so
  * there is one set of words for one set of states rather than two that drift.
  * `null` is "say nothing": an unpaired phone is on the pairing flow, where a
- * status line would be noise.
+ * status line would be noise, and both callers return on it rather than
+ * inventing words for a Pairing that does not exist.
  */
 @StringRes
 private fun phaseMessage(phase: SessionPhase): Int? = when (phase) {
@@ -75,7 +111,35 @@ private fun phaseMessage(phase: SessionPhase): Int? = when (phase) {
     is SessionPhase.OutOfContact -> R.string.contact_offline
     is SessionPhase.Resting -> R.string.contact_resting
     is SessionPhase.NotActive -> R.string.contact_not_active
-    is SessionPhase.Refused -> R.string.contact_refused
+    is SessionPhase.Refused -> R.string.contact_refused_short
+}
+
+/**
+ * Which lamp a phase lights.
+ *
+ * Three of the four states are nominal and only one is green: being *in* contact
+ * is the exceptional state on a phone, and a band that went green whenever
+ * nothing was wrong would be grey almost always and read as a warning. Standby
+ * is the resting colour, caution is work in progress, and alert is only ever the
+ * revoked token.
+ *
+ * Which phases are faults is [toneOf]'s rule and is asked rather than restated,
+ * so a phase cannot be a `Fault` here and a lamp colour there.
+ */
+private fun signalOf(phase: SessionPhase): Signal {
+    if (toneOf(phase) == Tone.Fault) return Signal.Alert
+    return when (phase) {
+        is SessionPhase.InContact -> Signal.Nominal
+        SessionPhase.Looking -> Signal.Caution
+        SessionPhase.Unpaired,
+        is SessionPhase.OutOfContact,
+        is SessionPhase.Resting,
+        is SessionPhase.NotActive,
+        -> Signal.Standby
+        // Answered above. Repeated rather than swept up by an `else`, so a
+        // phase added to the core arrives here as a compile error.
+        is SessionPhase.Refused -> Signal.Alert
+    }
 }
 
 /**
@@ -90,26 +154,29 @@ private fun phaseMessage(phase: SessionPhase): Int? = when (phase) {
  */
 @Composable
 fun PairingStatus(phase: SessionPhase, tag: String, modifier: Modifier = Modifier) {
-    val text = phaseMessage(phase)?.let { stringResource(it) } ?: return
+    val message = phaseMessage(phase) ?: return
 
     when (toneOf(phase)) {
-        Tone.Nominal -> Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Tone.Nominal -> StatusLight(
+            signal = signalOf(phase),
+            label = stringResource(message),
             modifier = modifier.testTag(tag),
         )
 
-        Tone.Fault -> Surface(
-            color = MaterialTheme.colorScheme.errorContainer,
-            shape = MaterialTheme.shapes.medium,
-            modifier = modifier.testTag(TAG_FAULT),
+        Tone.Fault -> Column(
+            modifier = modifier
+                .fillMaxWidth()
+                .background(Fui.AlertA16)
+                .padding(10.dp)
+                .testTag(TAG_FAULT),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            StatusLight(Signal.Alert, stringResource(message))
             Text(
-                text = text,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.padding(12.dp).testTag(tag),
+                text = stringResource(R.string.contact_refused),
+                style = Fui.Prose,
+                color = Fui.TextPrimary,
+                modifier = Modifier.testTag(tag),
             )
         }
     }
@@ -124,8 +191,8 @@ fun PairingStatus(phase: SessionPhase, tag: String, modifier: Modifier = Modifie
  * that resolves the divergence rather than merely reporting it.
  *
  * Nominal in tone, and deliberately so: viewing a Pairing this phone is not
- * syncing is a thing a person chose to do, not a fault. No [TAG_FAULT], no error
- * container.
+ * syncing is a thing a person chose to do, not a fault. It is drawn in the
+ * emitter's own tint rather than in a warning colour — no [TAG_FAULT], no alert.
  */
 @Composable
 fun DivergenceBand(
@@ -134,23 +201,23 @@ fun DivergenceBand(
     onUseViewed: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        modifier = modifier.fillMaxWidth().testTag(TAG_DIVERGED),
-    ) {
+    Column(modifier.fillMaxWidth().testTag(TAG_DIVERGED)) {
         Column(
-            modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxWidth().background(Fui.Active).padding(Fui.Gutter, 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
                 text = stringResource(R.string.pairing_diverged, viewedName, activeName),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                style = Fui.Prose,
+                color = Fui.TextPrimary,
             )
-            TextButton(onClick = onUseViewed, modifier = Modifier.testTag(TAG_DIVERGED_USE)) {
-                Text(stringResource(R.string.pairing_diverged_use))
-            }
+            FuiButton(
+                text = stringResource(R.string.pairing_diverged_use),
+                onClick = onUseViewed,
+                modifier = Modifier.testTag(TAG_DIVERGED_USE),
+            )
         }
+        Hairline(color = Fui.Frame)
     }
 }
 
@@ -158,20 +225,49 @@ fun DivergenceBand(
  * What the last thing the person asked for did.
  *
  * One `when` over [Notice], so an outcome added without words for it does not
- * compile. [Notice.RecalledFromCache] is the only one that gets a container of
- * its own, and that is not decoration: every other notice is a plain statement
- * about something the person just did, while that one is a warning about the
- * content now on their clipboard — it may be yesterday's link. The rest read in
- * the ordinary voice, because being out of contact is nominal on a phone (ADR
- * 0007) and a refusal is a fact, not a fault.
+ * compile. Each carries a label naming the outcome and then the sentence —
+ * **the same four labels the invisible activity shows** over whatever a person
+ * was already doing, because a Standing Action and a press on this screen are
+ * the same operation and reporting it in two idioms would make them look like
+ * two.
  *
- * Lives here rather than on one screen because two screens now raise notices: a
+ * [Notice.RecalledFromCache] is the only one that tints its whole band, and that
+ * is not decoration: every other notice is a statement about something the
+ * person just did, while that one is a warning about the content now on their
+ * clipboard — it may be yesterday's link. A refusal is ruled down its left edge
+ * instead, in the colour of what to do about it: amber for the two that need
+ * something done, inert for `ALREADY HERE`, which is the app working correctly
+ * and costs the person nothing.
+ *
+ * Lives here rather than on one screen because two screens raise notices: a
  * Recall happens on the History and a Pairing is forgotten on the Pairings, and
  * both owe the person the same one sentence in the same place.
  */
 @Composable
 fun NoticeBanner(notice: Notice, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
     val stale = notice is Notice.RecalledFromCache
+    val label = when (notice) {
+        is Notice.Offered -> R.string.notice_offered
+        is Notice.OfferRefused -> offerRefusalLabel(notice.reason)
+        Notice.Recalled -> R.string.notice_recalled
+        Notice.RecalledFromCache -> R.string.recall_from_cache_badge
+        Notice.Unpaired -> R.string.notice_not_paired
+        is Notice.HistoryCleared -> R.string.notice_cleared
+        is Notice.PairingForgotten -> R.string.notice_forgotten
+        is Notice.Failed -> R.string.notice_failed
+    }
+    val accent = when (notice) {
+        Notice.RecalledFromCache -> Accent.Caution
+        is Notice.OfferRefused -> offerRefusalAccent(notice.reason)
+        is Notice.Failed -> Accent.Caution
+
+        is Notice.Offered,
+        Notice.Recalled,
+        Notice.Unpaired,
+        is Notice.HistoryCleared,
+        is Notice.PairingForgotten,
+        -> Accent.Emitter
+    }
     val text = when (notice) {
         is Notice.Offered -> stringResource(R.string.offer_queued)
         is Notice.OfferRefused -> stringResource(offerRefusalMessage(notice.reason))
@@ -188,51 +284,126 @@ fun NoticeBanner(notice: Notice, onDismiss: () -> Unit, modifier: Modifier = Mod
             notice.detail?.let { "$sentence\n$it" } ?: sentence
         }
     }
-    Surface(
-        color = if (stale) {
-            MaterialTheme.colorScheme.tertiaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant
-        },
+    // A refusal is ruled down its left edge in the colour of what to do about
+    // it; an outcome that simply happened is not. Only the stale Recall tints
+    // its whole band, because it is the only notice about *what is now on the
+    // clipboard* rather than about what the app just did.
+    val ruled = notice is Notice.OfferRefused || notice is Notice.Failed
+    Row(
         modifier = modifier
             .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .background(if (stale) Fui.AmberA16 else Fui.Band)
             .testTag(if (stale) TAG_NOTICE_STALE else TAG_NOTICE),
     ) {
-        Row(
-            modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        if (ruled) Box(Modifier.width(2.dp).fillMaxHeight().background(accent.ink))
+        Column(
+            modifier = Modifier.weight(1f).padding(Fui.Gutter, 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            FuiBadge(text = stringResource(label), accent = accent, solid = stale)
             Text(
                 text = text,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.weight(1f),
+                style = Fui.Prose,
+                color = if (stale) Fui.TextPrimary else Fui.TextBody,
             )
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.notice_dismiss)) }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                FuiButton(
+                    text = stringResource(R.string.notice_dismiss),
+                    onClick = onDismiss,
+                    accent = accent,
+                    height = Fui.TargetSmall,
+                )
+            }
         }
     }
+    Hairline(color = if (stale) Fui.AmberA40 else Fui.Hairline)
 }
 
 /**
- * The one surprising thing about how this app works, said out loud.
+ * The one surprising thing about how this app works, pinned where it cannot
+ * scroll away.
  *
  * Sync is foreground only, so something copied on the laptop does not reach the
  * phone until Sharepaste is opened. Left unsaid, that reads as a bug — a person
- * copies a link, picks up their phone, and the history is empty. Said here, it
- * reads as a decision, which is what it is.
+ * copies a link, picks up their phone, and the History is empty.
+ *
+ * **It used to be the first item in the list, which meant it was the first thing
+ * to leave.** Now it is chrome: one clipped line above the Entries, always
+ * there, with the verbatim sentence and the four things that are *not* happening
+ * one tap behind [TAG_FOREGROUND_WHY]. A band that is always present says
+ * nothing by appearing, which is what lets it be permanent without becoming a
+ * warning.
+ *
+ * The open/closed choice is `rememberSaveable` rather than a field on [UiState]:
+ * it changes nothing about the phone, survives a rotation, and putting it in the
+ * snapshot would mean the state holder owned a fact about a disclosure triangle.
  */
 @Composable
 fun ForegroundOnlyNote(modifier: Modifier = Modifier) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = MaterialTheme.shapes.medium,
-        modifier = modifier.fillMaxWidth().testTag(TAG_FOREGROUND_NOTE),
-    ) {
-        Column(Modifier.padding(16.dp)) {
+    var open by rememberSaveable { mutableStateOf(false) }
+
+    Column(modifier.fillMaxWidth().testTag(TAG_FOREGROUND_NOTE)) {
+        // The whole band is the control, not the chip inside it. A 22dp chip in
+        // a 30dp band is half of `Fui.TargetSmall`, and the band's argument —
+        // that the fact is one tap from anywhere — rests on that tap landing.
+        // `FuiButton` is a `Box` and a `clickable`, so nothing hands it
+        // Material's minimum interactive size; the band has to be the size.
+        ChromeBand(
+            height = Fui.TargetSmall,
+            background = Fui.Recess,
+            modifier = Modifier
+                .clickable(
+                    onClickLabel = stringResource(R.string.foreground_only_why_action),
+                    role = Role.Button,
+                    onClick = { open = !open },
+                )
+                .testTag(TAG_FOREGROUND_WHY),
+        ) {
+            Text("⌾", style = Fui.Micro, color = Fui.Amber400)
             Text(
-                text = stringResource(R.string.foreground_only_note),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = stringResource(R.string.foreground_only_pinned),
+                style = Fui.Micro,
+                color = Fui.Amber400,
+                maxLines = 1,
+                modifier = Modifier.weight(1f).padding(start = 8.dp),
             )
+            // The affordance, not the target. Bordered so it reads as pressable,
+            // and inert so there is one clickable node in this band rather than
+            // two with different sizes.
+            Text(
+                text = stringResource(
+                    if (open) R.string.foreground_only_close else R.string.foreground_only_why,
+                ),
+                style = Fui.Micro,
+                color = Fui.TextEmitter,
+                modifier = Modifier.border(1.dp, Fui.Frame).padding(horizontal = 6.dp, vertical = 3.dp),
+            )
+        }
+        if (open) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Fui.Band)
+                    .padding(Fui.Gutter),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.foreground_only_note),
+                    style = Fui.Prose,
+                    color = Fui.TextBody,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    FuiTag(stringResource(R.string.foreground_only_tag_sync))
+                    FuiTag(stringResource(R.string.foreground_only_tag_notification))
+                    FuiTag(stringResource(R.string.foreground_only_tag_watching))
+                    FuiTag(stringResource(R.string.foreground_only_tag_counterparty))
+                }
+            }
+            Hairline()
         }
     }
 }
@@ -241,14 +412,14 @@ fun ForegroundOnlyNote(modifier: Modifier = Modifier) {
  * Why the Standing Actions notification is not there.
  *
  * Shown only when the platform is refusing to display it. Deliberately in the
- * **ordinary** voice with no [TAG_FAULT] and no error container: nothing is
- * broken. `POST_NOTIFICATIONS` is a runtime grant from API 33 and implicit
- * below it, and on any version a person can switch notifications off in
- * Settings — all of which are choices they are entitled to make. What they are
- * not entitled to is a feature that vanishes without a word, because a
- * notification that never appears looks exactly like one that was never built,
- * and `NotificationManager.notify` reports nothing at all when the permission
- * is denied.
+ * **ordinary** voice with no [TAG_FAULT] and no alert colour: nothing is broken.
+ * `POST_NOTIFICATIONS` is a runtime grant from API 33 and implicit below it, and
+ * on any version a person can switch notifications off in Settings — all of
+ * which are choices they are entitled to make. What they are not entitled to is
+ * a feature that vanishes without a word, because a notification that never
+ * appears looks exactly like one that was never built, and
+ * `NotificationManager.notify` reports nothing at all when the permission is
+ * denied.
  *
  * The sentence says the two verbs still work from this screen, because that is
  * the part a person cannot see for themselves and the part that decides whether
@@ -256,23 +427,44 @@ fun ForegroundOnlyNote(modifier: Modifier = Modifier) {
  */
 @Composable
 fun StandingActionsBlockedNote(onEnable: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = MaterialTheme.shapes.medium,
-        modifier = modifier.fillMaxWidth().testTag(TAG_STANDING_ACTIONS_BLOCKED),
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(Fui.Band)
+            .padding(Fui.Gutter)
+            .testTag(TAG_STANDING_ACTIONS_BLOCKED),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 16.dp, bottom = 8.dp)) {
-            Text(
-                text = stringResource(R.string.standing_actions_blocked),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            TextButton(onClick = onEnable, modifier = Modifier.testTag(TAG_STANDING_ACTIONS_ENABLE)) {
-                Text(stringResource(R.string.standing_actions_enable))
-            }
-        }
+        Text(
+            text = stringResource(R.string.standing_actions_blocked_heading),
+            style = Fui.Micro,
+            color = Fui.TextMuted,
+        )
+        Text(
+            text = stringResource(R.string.standing_actions_blocked),
+            style = Fui.Prose,
+            color = Fui.TextBody,
+        )
+        FuiButton(
+            text = stringResource(R.string.standing_actions_enable),
+            onClick = onEnable,
+            height = Fui.TargetSmall,
+            modifier = Modifier.testTag(TAG_STANDING_ACTIONS_ENABLE),
+        )
     }
 }
+
+/**
+ * A section heading on a screen that has no cards to head.
+ *
+ * The emitter's label voice: small, tracked, and never competing with the
+ * sentence it introduces.
+ */
+@Composable
+fun SectionHeading(text: String, modifier: Modifier = Modifier) {
+    Text(text, style = Fui.Micro, color = Fui.TextEmitter, modifier = modifier)
+}
+
 
 /** The readout in its ordinary voice. Present for every nominal phase. */
 const val TAG_NOMINAL = "contact-nominal"
@@ -288,7 +480,20 @@ const val TAG_NOMINAL = "contact-nominal"
  */
 const val TAG_FAULT = "contact-fault"
 
+/** The one control a revoked Pairing offers: start over. */
+const val TAG_PAIR_AGAIN = "contact-pair-again"
+
 const val TAG_FOREGROUND_NOTE = "foreground-only-note"
+
+/**
+ * The disclosure that opens the pinned fact in full.
+ *
+ * Its own tag because the band's whole argument is that the sentence is
+ * *reachable without scrolling* — one tap, from chrome, on any screenful of
+ * Entries. A test presses this rather than scrolling to a list item, which is
+ * the difference the redesign made.
+ */
+const val TAG_FOREGROUND_WHY = "foreground-only-why"
 
 const val TAG_NOTICE = "notice"
 
