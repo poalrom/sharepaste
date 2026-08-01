@@ -163,20 +163,65 @@ describe("PairingFlow", () => {
   });
 
   /*
-   * A QR outliving its slot is worse than a stale typed code: nobody reads it
-   * before pointing a camera at it, and the countdown it contradicts is off to
-   * one side. Same `codeWindow` and same tick as the countdown, so it goes when
-   * the bar empties; the typed code and its expiry message are untouched.
+   * The dead code used to stay on screen under an alert strip, with closing and
+   * reopening the panel as the only way back to a live one. It is the one thing
+   * on the panel a person acts on, so expiry takes it — QR, digits and clock —
+   * and puts the way out in its place.
    */
-  it("withdraws the QR once the code's window closes", async () => {
-    render(<PairingFlow />);
-    await waitFor(() => expect(ipc.handlers.get("pair-shortcode")).toHaveLength(1));
+  it("replaces the code with its own expiry and a way to a new one", async () => {
+    render(<PairingFlow forUserId="u-other" />);
+    expect(await screen.findByTestId("shortcode")).toHaveTextContent("ABCDE FGHIJ");
 
     act(() => ipc.emit("pair-shortcode", { code: GROUPED_CODE, expires_at: Date.now() + 200 }));
     expect(await screen.findByTestId("shortcode-qr")).toBeInTheDocument();
 
-    await waitFor(() => expect(screen.queryByTestId("shortcode-qr")).toBeNull(), { timeout: 3000 });
-    expect(screen.getByTestId("shortcode")).toHaveTextContent(GROUPED_CODE);
-    expect(screen.getByTestId("countdown")).toHaveTextContent("EXPIRES IN 0:00");
+    const dead = await screen.findByTestId("code-expired", undefined, { timeout: 3000 });
+    // Names the code that died, not pairing in general.
+    expect(dead).toHaveTextContent(`CODE ${GROUPED_CODE.split(" ")[0]}… EXPIRED`);
+    expect(screen.queryByTestId("shortcode")).toBeNull();
+    expect(screen.queryByTestId("shortcode-qr")).toBeNull();
+    expect(screen.queryByTestId("countdown")).toBeNull();
+
+    ipc.invoke.mockClear();
+    fireEvent.click(screen.getByTestId("new-code"));
+
+    await waitFor(() =>
+      expect(ipc.invoke).toHaveBeenCalledWith("pair_start", { args: { user_id: "u-other" } }),
+    );
+    expect(await screen.findByTestId("shortcode")).toHaveTextContent("ABCDE FGHIJ");
+    expect(screen.queryByTestId("code-expired")).toBeNull();
+  });
+
+  /*
+   * The relay is allowed to close a slot before the deadline the pane is
+   * counting down to — a code claimed by nobody but purged, or a clock that
+   * disagrees. `pair-expired` is that second path, and it has to kill the code
+   * rather than paint a strip over a code the person can still read.
+   */
+  it("kills the code on the relay's word, before its own clock runs out", async () => {
+    render(<PairingFlow forUserId="u-other" />);
+    expect(await screen.findByTestId("shortcode")).toHaveTextContent("ABCDE FGHIJ");
+
+    act(() => ipc.emit("pair-expired", null));
+
+    expect(await screen.findByTestId("code-expired")).toHaveTextContent("CODE ABCDE… EXPIRED");
+    expect(screen.queryByTestId("shortcode")).toBeNull();
+  });
+
+  /*
+   * A code belongs to a pairing, and the standalone flow was handed one by the
+   * event rather than by a `pair_start` of its own: it has no user id to ask
+   * for a replacement with, so it says so and offers the chooser instead.
+   */
+  it("offers no new code where the flow does not know whose code it was", async () => {
+    render(<PairingFlow />);
+    await waitFor(() => expect(ipc.handlers.get("pair-shortcode")).toHaveLength(1));
+
+    act(() => ipc.emit("pair-shortcode", { code: GROUPED_CODE, expires_at: Date.now() + 200 }));
+    await screen.findByTestId("code-expired", undefined, { timeout: 3000 });
+
+    expect(screen.queryByTestId("new-code")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "‹ BACK" }));
+    expect(screen.getByText("How are you pairing?")).toBeInTheDocument();
   });
 });

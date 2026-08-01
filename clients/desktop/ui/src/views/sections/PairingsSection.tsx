@@ -259,7 +259,13 @@ export default function PairingsSection() {
               type="button"
               data-testid="add-pairing-row"
               className="flex w-full items-center justify-between gap-3.5 px-3 py-2.5 text-left text-text-body transition-colors duration-fast hover:text-cyan-300"
-              onClick={() => setPairingFlowOpen(true)}
+              onClick={() => {
+                // The mirror of `+ DEVICE` closing this box. Both flows listen
+                // for `pair-shortcode`, so two of them open at once would show
+                // one card's code twice, once under a heading naming no pairing.
+                setDeviceFlowUserId(undefined);
+                setPairingFlowOpen(true);
+              }}
             >
               <span className="flex min-w-0 flex-col gap-1">
                 <span className="font-display text-sm font-medium tracking-phrase">Add a pairing</span>

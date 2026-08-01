@@ -49,6 +49,9 @@ export default function PairingFlow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [codeWindow, setCodeWindow] = useState<CodeWindow>();
+  // Set by the relay's word that the slot is gone, which can land before the
+  // window on screen has run out. Cleared by whatever code arrives next.
+  const [slotClosed, setSlotClosed] = useState(false);
   const [pairedDeviceLabel, setPairedDeviceLabel] = useState<string>();
 
   /*
@@ -60,7 +63,13 @@ export default function PairingFlow({
   useEffect(() => {
     if (codeWindow === undefined) return;
     setNow(Date.now());
-    const i = setInterval(() => setNow(Date.now()), 1000);
+    const i = setInterval(() => {
+      const t = Date.now();
+      setNow(t);
+      // Nothing downstream of the deadline moves again, so stop the pane
+      // re-rendering once the code it is timing is dead.
+      if (t >= codeWindow.expires) clearInterval(i);
+    }, 1000);
     return () => clearInterval(i);
   }, [codeWindow]);
 
@@ -68,6 +77,8 @@ export default function PairingFlow({
     const unsubs: Array<() => void> = [];
     (async () => {
       unsubs.push(await events.onPairShortcode((issued) => {
+        setError(undefined);
+        setSlotClosed(false);
         setCodeWindow({ code: issued.code, issued: Date.now(), expires: issued.expires_at });
         setStep("show-code");
       }));
@@ -76,7 +87,12 @@ export default function PairingFlow({
         setPairedDeviceLabel(device_label ?? undefined);
         setStep("paired");
       }));
-      unsubs.push(await events.onPairExpired(() => setError("Pair code expired or already used. Generate a new one.")));
+      /*
+       * A second expiry path rather than a duplicate of the countdown: the relay
+       * can close a slot before the deadline the pane is counting down to, and
+       * the code dies on whichever of the two arrives first.
+       */
+      unsubs.push(await events.onPairExpired(() => setSlotClosed(true)));
     })();
     return () => unsubs.forEach((u) => u());
   }, []);
@@ -106,8 +122,34 @@ export default function PairingFlow({
     finally { setBusy(false); }
   };
 
+  /*
+   * The dead code's replacement, asked for by the button that replaced it.
+   *
+   * Only the card-owned panel can ask: a code belongs to a pairing, and the
+   * standalone flow was handed its code by the event rather than by a
+   * `pair_start` of its own, so it has no user id to name. The window is left
+   * standing until the new one lands — clearing it first would flash
+   * "REQUESTING…" across the round trip for no news.
+   */
+  const regenerate = (user_id: string) =>
+    handle(async () => {
+      const started = await cmd.pairStart({ user_id });
+      setSlotClosed(false);
+      setCodeWindow({ code: started.code, issued: Date.now(), expires: started.expires_at });
+    });
+
   const insecure = /^http:\/\/(?!localhost|127\.0\.0\.1)/i.test(serverUrl);
   const codeIsValid = /^[A-Z2-7\s\-]+$/i.test(code.trim()) && code.replace(/\s|-/g, "").length >= 80;
+
+  /*
+   * The code in whichever of its two states the pane is in. A code is dead when
+   * its own window closes or when the relay says the slot is gone, whichever
+   * comes first, and everything it is shown through hangs off that one split:
+   * the QR, the countdown, and the panel that takes their place.
+   */
+  const expiredCode =
+    codeWindow !== undefined && (slotClosed || now >= codeWindow.expires) ? codeWindow.code : undefined;
+  const liveCode = expiredCode === undefined ? codeWindow : undefined;
 
   /*
    * The QR's payload, and nothing at all once the slot is spent.
@@ -115,13 +157,9 @@ export default function PairingFlow({
    * `group_for_display` spaces the code in fives so a person can retype it, and
    * `shortcode::decode` strips whitespace, dashes and case before base32 — so
    * the camera is handed the compact form instead: a quarter shorter, and a
-   * denser symbol scans faster in poor light. It reads the same `codeWindow` and
-   * the same tick as the countdown, so expiry takes the code and the QR at once.
+   * denser symbol scans faster in poor light.
    */
-  const qrPayload =
-    codeWindow !== undefined && now < codeWindow.expires
-      ? codeWindow.code.replace(/[\s-]/g, "")
-      : undefined;
+  const qrPayload = liveCode?.code.replace(/[\s-]/g, "");
 
   return (
     <div className="flex min-w-0 flex-col">
@@ -131,7 +169,12 @@ export default function PairingFlow({
         <div className="fui-group-head">
           <span>PAIR A DEVICE</span>
           <span className="flex items-center gap-2.5">
-            <span className="font-mono text-chrome tracking-phrase text-text-dim">{STEP_LABEL[step]}</span>
+            {/* A dead code is a step of its own as far as the band is concerned:
+                "SHOW CODE" over a panel with no code on it is the lie that made
+                closing and reopening look like the only way forward. */}
+            <span className="font-mono text-chrome tracking-phrase text-text-dim">
+              {expiredCode !== undefined && step === "show-code" ? "EXPIRED" : STEP_LABEL[step]}
+            </span>
             <IconButton
               label="Close the pairing panel"
               testId={`pair-panel-close-${forUserId}`}
@@ -263,44 +306,81 @@ export default function PairingFlow({
 
         {step === "show-code" && (
           <>
-            <p className="m-0 text-label uppercase tracking-word text-text-muted">
-              Show this code on the new device
-            </p>
-            <div className="flex flex-wrap items-start gap-3">
-              {/*
-               * A white plate and the spec's four-module quiet zone whatever the
-               * palette is doing: the void ramp is exactly what a camera fails
-               * on, and this is the one surface in the app a lens has to read
-               * rather than a person. The frame keeps it in the pane's language.
-               */}
-              {qrPayload !== undefined && (
-                <div
-                  data-testid="shortcode-qr"
-                  className="shrink-0 border border-emitter bg-white p-2 leading-none"
-                >
-                  <QRCodeSVG
-                    value={qrPayload}
-                    size={168}
-                    level="M"
-                    marginSize={4}
-                    bgColor="#ffffff"
-                    fgColor="#04080c"
-                    title="Pair code as a QR the new device can scan"
-                  />
-                </div>
-              )}
-              {/* Beside the QR, never instead of it: the typed form is the way in
-                  when the camera is refused or absent. */}
-              <pre
-                data-testid="shortcode"
-                className={`m-0 min-w-[18rem] flex-1 whitespace-pre-wrap break-words border border-emitter bg-void-1000 px-3 py-4 text-center font-mono text-2xl tracking-[0.18em] ${
-                  codeWindow ? "text-cyan-300" : "text-text-dim"
-                }`}
+            {expiredCode !== undefined ? (
+              /*
+               * The dead code goes rather than staying on screen under an alert
+               * strip. It is the one thing on this panel a person acts on, and
+               * leaving it up asks them to retype something no relay will take —
+               * with no way back to a live code but closing the panel. Its first
+               * group stays in the sentence so this names the code that died and
+               * not pairing in general.
+               */
+              <div
+                data-testid="code-expired"
+                className="flex min-w-0 flex-col items-start gap-3 border border-alert-400 bg-void-1000 px-3 py-4"
               >
-                {codeWindow?.code ?? "REQUESTING…"}
-              </pre>
-            </div>
-            <Countdown codeWindow={codeWindow} now={now} />
+                <p className="m-0 font-mono text-chrome uppercase tracking-word text-alert-400">
+                  {`CODE ${expiredCode.split(" ")[0]}… EXPIRED`}
+                </p>
+                <p className="m-0 text-data tracking-phrase text-text-dim">
+                  It went unclaimed inside its two-minute window. Nothing was paired.
+                </p>
+                {forUserId !== undefined && (
+                  <button
+                    type="button"
+                    data-testid="new-code"
+                    disabled={busy}
+                    className="fui-action disabled:cursor-not-allowed disabled:opacity-50"
+                    data-variant="solid"
+                    onClick={() => void regenerate(forUserId)}
+                  >
+                    NEW CODE
+                  </button>
+                )}
+              </div>
+            ) : (
+              <>
+                <p className="m-0 text-label uppercase tracking-word text-text-muted">
+                  Show this code on the new device
+                </p>
+                <div className="flex flex-wrap items-start gap-3">
+                  {/*
+                   * A white plate and the spec's four-module quiet zone whatever
+                   * the palette is doing: the void ramp is exactly what a camera
+                   * fails on, and this is the one surface in the app a lens has to
+                   * read rather than a person. The frame keeps it in the pane's
+                   * language.
+                   */}
+                  {qrPayload !== undefined && (
+                    <div
+                      data-testid="shortcode-qr"
+                      className="shrink-0 border border-emitter bg-white p-2 leading-none"
+                    >
+                      <QRCodeSVG
+                        value={qrPayload}
+                        size={168}
+                        level="M"
+                        marginSize={4}
+                        bgColor="#ffffff"
+                        fgColor="#04080c"
+                        title="Pair code as a QR the new device can scan"
+                      />
+                    </div>
+                  )}
+                  {/* Beside the QR, never instead of it: the typed form is the way
+                      in when the camera is refused or absent. */}
+                  <pre
+                    data-testid="shortcode"
+                    className={`m-0 min-w-[18rem] flex-1 whitespace-pre-wrap break-words border border-emitter bg-void-1000 px-3 py-4 text-center font-mono text-2xl tracking-[0.18em] ${
+                      liveCode ? "text-cyan-300" : "text-text-dim"
+                    }`}
+                  >
+                    {liveCode?.code ?? "REQUESTING…"}
+                  </pre>
+                </div>
+                <Countdown codeWindow={liveCode} now={now} />
+              </>
+            )}
             {/* No chooser behind a card-owned panel: its header band holds the way out. */}
             {forUserId === undefined && (
               <div className="flex items-center gap-2">
@@ -351,8 +431,9 @@ export default function PairingFlow({
  * code to retype it, not at the digits beside it; the drain from cyan through
  * amber to alert is legible without being read.
  *
- * `now` arrives from the pane rather than an interval of its own: the QR is
- * withdrawn off the same tick, and a second clock would let the two disagree.
+ * `now` arrives from the pane rather than an interval of its own: the code, the
+ * QR and this clock are all withdrawn off the same tick, and a second clock
+ * would let them disagree about which tick that was.
  */
 function Countdown({ codeWindow, now }: { codeWindow: CodeWindow | undefined; now: number }) {
   if (!codeWindow) return null;
