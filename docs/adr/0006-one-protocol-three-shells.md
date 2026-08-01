@@ -31,9 +31,12 @@ Four claims below also need correcting rather than re-arguing:
   Preview, the Origin label and the readable Relay host, because each is a rule two shells
   could get *differently* wrong — which is the same argument this record makes about the
   protocol, applied one layer up. Layout stayed in the shells.
-- **The third shell does not exist.** Android got Compose; there is no SwiftUI client and
-  no Xcode project. See the deferral note in
-  [ADR 0008](0008-sideloaded-and-not-self-updating.md).
+- **The third shell is being built, and it has no Xcode project.** Android got Compose.
+  The SwiftUI client is a SwiftPM package plus an `xtool.yml`, built and signed from WSL
+  by [xtool](https://github.com/xtool-org/xtool) and on `macos-latest` in CI — there is
+  no `.xcodeproj` at any point, by choice rather than by omission. What the three shells
+  owe each other visually is [ADR 0010](0010-one-language-three-copies.md); what they
+  owe each other structurally is this record.
 
 An Android and iOS client has to come from somewhere, and the honest choice was
 between reimplementing the protocol in Kotlin — where Compose Multiplatform would

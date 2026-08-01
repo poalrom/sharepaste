@@ -125,8 +125,10 @@ itself rather than of any one pairing. Reached only from the History Screen.
 _Avoid_: settings menu, preferences, pairings screen, about
 
 **Standing Actions**:
-The verbs a device exposes without being opened: offer the clipboard, recall the
-latest entry. Unlike the popover they show nothing and pick nothing.
+The verbs a device performs without its own surface being opened: offer the
+clipboard, recall the latest entry. They show nothing and pick nothing. How a
+device presents them is the platform's business — it may post them itself, or
+expose them for the person to bind.
 _Avoid_: quick actions, shortcuts, widget, tile
 
 **Receipt**:

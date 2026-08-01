@@ -72,16 +72,23 @@ IDs a week — which is one reason [ADR 0007](0007-a-phone-only-acts-when-you-ac
 ships no Share Extension, since an extension would consume a second slot before its
 missing entitlements even mattered.
 
-**Free-team signing cannot live in CI.** It is interactive, tied to an Apple ID in
-Xcode, and there is no App Store Connect API key for a free account. So the macOS
+**Free-team signing cannot live in CI.** It is interactive — Apple's 2FA stands in
+the way — and there is no App Store Connect API key for a free account. So the macOS
 runner builds an unsigned IPA and signing happens on the device or the PC — which
 means the iOS path can never be dry-run in CI, and iOS build health has to be
 verified locally.
 
+> **Corrected, 2026-08-01.** This paragraph originally read "tied to an Apple ID in
+> Xcode". That is false, and it mattered: it implied a Mac was required and was one
+> reason the iOS half was deferred. [xtool](https://github.com/xtool-org/xtool) signs
+> with a free Personal Team from Linux or WSL with no Xcode involved, so the PC in
+> "the device or the PC" can be the Windows box. The conclusion survives on the
+> remaining two clauses.
+
 **One version, one Release, four artifacts.** `tauri.conf.json` remains
 authoritative and `check-versions.mjs` grows to assert the Gradle `versionName` and
-the Xcode `MARKETING_VERSION` agree with it, extending a mechanism that already works
-rather than inventing a second one. A single Release carries the `.dmg`, the NSIS
+the iOS `CFBundleShortVersionString` agree with it, extending a mechanism that already
+works rather than inventing a second one. A single Release carries the `.dmg`, the NSIS
 `.exe`, the universal `.apk`, the unsigned `.ipa`, `latest.json` and the SideStore
 source JSON, so the two manifests pin tag URLs into the same release and cannot
 disagree. Because the core is shared ([ADR 0006](0006-one-protocol-three-shells.md)),
