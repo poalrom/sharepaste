@@ -89,8 +89,10 @@ The device an entry was captured on, as distinct from the device viewing it.
 _Avoid_: source, sender, author
 
 **Pending**:
-Captured entries queued on this device because the relay could not be reached.
-_Avoid_: outbox, backlog, unsent
+A capture this device holds but has not yet placed on the relay, because the
+relay could not be reached. Not an Entry: it carries no relay-assigned id, and
+no other device knows of it. It becomes an Entry when the relay takes it.
+_Avoid_: outbox, backlog, unsent, pending entry
 
 **Contact**:
 The most recent moment a device had a live connection to the relay, evidenced
