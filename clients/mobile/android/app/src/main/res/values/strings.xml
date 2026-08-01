@@ -46,6 +46,13 @@
     <string name="pair_viewfinder_code">BACK CAMERA</string>
     <string name="pair_viewfinder_hint">POINT AT THE SQUARE ON THE PAIR A DEVICE SCREEN</string>
     <!--
+      What the viewfinder says once it has done its job. A scan fills the code
+      field rather than pairing, so this has to point at the field and say what
+      is still missing — the name — and how to get the camera back.
+    -->
+    <string name="pair_code_scanned">Code read. It is in the field below — name this phone, then
+        Pair. Clear the field to point the camera at another code.</string>
+    <!--
       The Relay gives a pairing slot 120 seconds (`serve.ts`), which is a fact
       about the code and not a countdown this phone could run: nothing here
       knows when the computer printed it. Worded as the rule rather than as a
@@ -63,6 +70,12 @@
     <string name="camera_permission_refused">Sharepaste cannot use the camera, so it cannot read
         the square code. You can turn camera access on in Settings, or type the code
         underneath the square instead — that works just as well.</string>
+    <!--
+      Beside the refusal, because the app notices a grant on its own: it re-reads
+      the permission whenever it comes back to the front and while this sentence
+      is on screen. The control is for the person who would rather not trust that.
+    -->
+    <string name="camera_recheck">CHECK AGAIN</string>
     <string name="camera_absent">This phone has no camera Sharepaste can use, so there is nothing
         to point at the square code. Type the code printed underneath it instead.</string>
     <string name="pair_code_expired">That code has already expired. A pairing code is only good

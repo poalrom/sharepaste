@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,9 +34,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
@@ -50,45 +52,57 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.sharepaste.android.R
 import com.sharepaste.android.scan.CameraProblem
 import com.sharepaste.android.scan.QrCodeAnalyser
+import com.sharepaste.android.scan.cameraPermissionGranted
 import com.sharepaste.android.scan.cameraProblem
 import com.sharepaste.android.scan.deviceHasCamera
+import kotlinx.coroutines.delay
 import java.util.concurrent.Executors
 
 /**
  * Pairing this phone to a User that already exists.
  *
- * Two paths to the same call. Scanning the square on the computer's pairing pane
- * is the practical one; typing the code underneath it is the fallback, and it is
- * load-bearing rather than decorative — it is the only way in when the camera is
- * refused or absent, which is why each of those has its own message rather than
- * a shared shrug, and why the typed field is on screen either way rather than
- * behind a camera failure.
+ * Two ways of filling one field, and then one button. Scanning the square on the
+ * computer's pairing pane is the practical one; typing the code printed
+ * underneath it is the fallback, and it is load-bearing rather than decorative —
+ * it is the only way in when the camera is refused or absent, which is why each of
+ * those has its own message rather than a shared shrug, and why the field is on
+ * screen either way rather than behind a camera failure.
  *
- * **The name is the person's, and it comes first.** The field starts empty and
- * pairing is blocked until it is not. The desktop's flow hard-codes a default; a
- * machine's guess at what someone calls their own phone is not a default, it is
- * a thing they have to notice and correct in a list they read later. Name before
- * code, because the code expires after two minutes and the name does not.
+ * **A scan fills that field. It does not pair.** Somebody who opens this screen
+ * points it at the square before reading a word, because the square is the only
+ * thing here that looks like an instruction — and the name the Pairing has to
+ * carry comes after. So the viewfinder hands its code down to the field and stands
+ * down, which leaves one thing left to do and a button that says what it is. See
+ * [PairingState.scanned].
+ *
+ * **The name is the person's, and pairing waits for it.** The field starts empty
+ * and the button is dead until it is not. The desktop's flow hard-codes a default;
+ * a machine's guess at what someone calls their own phone is not a default, it is
+ * a thing they have to notice and correct in a list they read later.
  *
  * The footer states the two facts a phone cannot discover for itself: the cipher
  * — ADR 0002 puts disclosure beside pairing, where the choice to trust a Relay
  * is being made — and this build's refusal of a cleartext Relay.
  *
- * The camera arrives through [scanner] rather than being reached for here. The
- * screen's job is layout and wording, and it must be renderable from a
- * [PairingState] alone — a screen that binds a camera as a side effect of being
- * composed cannot be asserted about without one, which is precisely the case
- * where the three failure messages matter.
+ * The camera arrives through [scanner] rather than being reached for here, and the
+ * permission it needs is watched further out still — see [rememberCameraAccess].
+ * The screen's job is layout and wording, and it must be renderable from a
+ * [PairingState] alone: a screen that binds a camera as a side effect of being
+ * composed cannot be asserted about without one, which is precisely the case where
+ * the failure messages matter.
  */
 @Composable
 fun PairingScreen(
     state: PairingState,
     onLabelChange: (String) -> Unit,
-    onCode: (String) -> Unit,
+    onCodeChange: (String) -> Unit,
+    onPair: () -> Unit,
     onDismissFailure: () -> Unit,
     modifier: Modifier = Modifier,
     /**
@@ -100,10 +114,16 @@ fun PairingScreen(
      * able to leave without force-quitting.
      */
     onBack: (() -> Unit)? = null,
+    /**
+     * Read the camera permission again, now, because somebody asked.
+     *
+     * The flow already notices a grant on its own. This is the control beside the
+     * refusal for the person who has just come back from Settings and would rather
+     * press something than trust that it noticed.
+     */
+    onRecheckCamera: () -> Unit = {},
     scanner: @Composable () -> Unit = {},
 ) {
-    var typedCode by remember { mutableStateOf("") }
-
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -152,12 +172,29 @@ fun PairingScreen(
                     // Caution for the permission, because there is something to
                     // turn on; muted for the hardware, because there is not.
                     CameraProblem.NoCamera ->
-                        Explanation(R.string.camera_absent, TAG_CAMERA_ABSENT, Fui.TextMuted)
+                        ViewfinderNote(R.string.camera_absent, TAG_CAMERA_ABSENT, Fui.TextMuted)
 
-                    CameraProblem.PermissionRefused ->
-                        Explanation(R.string.camera_permission_refused, TAG_CAMERA_REFUSED, Fui.Amber400)
+                    CameraProblem.PermissionRefused -> ViewfinderNote(
+                        message = R.string.camera_permission_refused,
+                        tag = TAG_CAMERA_REFUSED,
+                        mark = Fui.Amber400,
+                    ) {
+                        FuiButton(
+                            text = stringResource(R.string.camera_recheck),
+                            onClick = onRecheckCamera,
+                            height = Fui.TargetSmall,
+                            modifier = Modifier.testTag(TAG_CAMERA_RECHECK),
+                        )
+                    }
 
-                    null -> Viewfinder(scanner)
+                    // A code already read is the viewfinder's whole job done. The
+                    // note is what tells a camera that has stood down apart from a
+                    // camera that has failed, and says where the code went.
+                    null -> if (state.scanned) {
+                        ViewfinderNote(R.string.pair_code_scanned, TAG_CODE_SCANNED, Fui.Cyan400, glyph = "✓")
+                    } else {
+                        Viewfinder(scanner)
+                    }
                 }
             }
 
@@ -169,8 +206,8 @@ fun PairingScreen(
                 explainer = stringResource(R.string.pair_typed_explainer),
             ) {
                 FuiTextField(
-                    value = typedCode,
-                    onValueChange = { typedCode = it },
+                    value = state.code,
+                    onValueChange = onCodeChange,
                     label = stringResource(R.string.pair_typed_field),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                     modifier = Modifier.testTag(TAG_CODE_FIELD),
@@ -179,9 +216,9 @@ fun PairingScreen(
                     text = stringResource(
                         if (state.attempt is PairAttempt.Working) R.string.pair_working else R.string.pair_button,
                     ),
-                    onClick = { onCode(typedCode) },
+                    onClick = onPair,
                     solid = true,
-                    enabled = state.canPair && typedCode.isNotBlank(),
+                    enabled = state.canPair,
                     modifier = Modifier.fillMaxWidth().testTag(TAG_PAIR_BUTTON),
                 )
             }
@@ -293,8 +330,20 @@ private fun Viewfinder(scanner: @Composable () -> Unit) {
     FuiPanel(
         title = stringResource(R.string.pair_viewfinder_title),
         code = stringResource(R.string.pair_viewfinder_code),
+        modifier = Modifier.testTag(TAG_VIEWFINDER),
     ) {
-        Box(Modifier.fillMaxWidth().height(220.dp).background(Fui.Void1000)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                // The sensor's shape, not a height in dp: a ratio against the
+                // width lands the same frame on any phone, and it is the box the
+                // preview is cropped *into* — so it has to be a shape somebody can
+                // aim a square at. `clipToBounds` is the belt to the TextureView's
+                // braces; [CameraPreview] says what happens without either.
+                .aspectRatio(4f / 3f)
+                .clipToBounds()
+                .background(Fui.Void1000),
+        ) {
             scanner()
             Text(
                 text = stringResource(R.string.pair_viewfinder_hint),
@@ -354,53 +403,96 @@ private fun Failure(failed: PairAttempt.Failed, onDismiss: () -> Unit) {
 }
 
 /**
- * The camera itself: ask for it, then bind it.
+ * The camera permission, watched from outside the thing it decides.
  *
- * Separate from [PairingScreen] because it is the one part that touches hardware.
- * It reports what it found through [onProblem] and renders a preview only when
- * there is nothing to report; the screen above renders the two problems, so the
- * wording stays with the layout and the device stays here.
+ * **This shape is the fix for a bug worth naming**, because the one it replaces is
+ * easy to write twice. The permission used to be remembered by a composable that
+ * existed only while the permission was granted: it reported "refused", the screen
+ * swapped the viewfinder for the refusal, the reporter left the composition — and
+ * the grant it had just asked for arrived at a `remember` nothing was reading any
+ * more. Granting camera access left the refusal on screen until the app was closed
+ * and reopened. So the holder lives *beside* the screen instead of inside the
+ * branch it steers, and it is composed for as long as the pairing flow is.
  *
- * The permission is asked for once, and only for hardware that exists — see
- * [com.sharepaste.android.scan.cameraProblem]. Re-asking on every recomposition is
- * how an app ends up permanently denied by the platform's "don't ask again".
+ * Three things move it, in order of how much they are relied on. The request's own
+ * result, for the dialog this puts up on first sight. `ON_RESUME`, for the person
+ * who went to Settings — every route to granting a permission ends with this app
+ * coming back to the front, so this is the one that has to work. And a one-second
+ * poll while the answer is still no: a belt for those braces, bounded to the
+ * refusal it is watching, and it stops the moment there is nothing left to watch.
+ *
+ * Returns the manual re-check that the refusal offers as a button.
  */
 @Composable
-fun CameraScanner(onProblem: (CameraProblem?) -> Unit, onCode: (String) -> Unit) {
+fun rememberCameraAccess(onProblem: (CameraProblem?) -> Unit): () -> Unit {
     val context = LocalContext.current
     val hasCamera = remember { deviceHasCamera(context.packageManager) }
-    var granted by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-                android.content.pm.PackageManager.PERMISSION_GRANTED,
-        )
+    val granted = remember { mutableStateOf(cameraPermissionGranted(context)) }
+    // Read through the latest lambda rather than keyed on it: an action bag
+    // rebuilt during recomposition would otherwise re-run the ask below.
+    val report by rememberUpdatedState(onProblem)
+
+    LaunchedEffect(hasCamera, granted.value) { report(cameraProblem(hasCamera, granted.value)) }
+
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        granted.value = it
     }
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
-        granted = allowed
-        onProblem(cameraProblem(hasCamera, allowed))
+    // Once per visit to this screen, and only for hardware that exists. Asking on
+    // every recomposition is how an app ends up permanently denied by the
+    // platform's "don't ask again".
+    LaunchedEffect(hasCamera) {
+        if (hasCamera && !granted.value) ask.launch(Manifest.permission.CAMERA)
     }
 
-    LaunchedEffect(hasCamera, granted) {
-        val current = cameraProblem(hasCamera, granted)
-        onProblem(current)
-        if (current == CameraProblem.PermissionRefused && hasCamera) {
-            ask.launch(Manifest.permission.CAMERA)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) granted.value = cameraPermissionGranted(context)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(hasCamera, granted.value) {
+        // A read that agrees with the state leaves it untouched, so this loop runs
+        // until the answer changes and is then cancelled by its own key.
+        while (hasCamera && !granted.value) {
+            delay(CAMERA_POLL_MS)
+            granted.value = cameraPermissionGranted(context)
         }
     }
 
-    // Only ever the preview. The problems are the screen's to word.
-    if (cameraProblem(hasCamera, granted) == null) CameraPreview(onCode)
+    return remember(hasCamera) {
+        {
+            granted.value = cameraPermissionGranted(context)
+            // A second dialog, if the platform will still show one. On a
+            // permission refused twice this returns denied without showing
+            // anything, which is why the sentence above the button names Settings.
+            if (hasCamera && !granted.value) ask.launch(Manifest.permission.CAMERA)
+        }
+    }
 }
 
+/** How often a refused camera permission is read again. */
+private const val CAMERA_POLL_MS = 1_000L
+
 /**
- * A camera failure, in a slot that is dashed rather than framed.
+ * A note in the viewfinder's place, in a slot that is dashed rather than framed.
  *
- * Dashed because the viewfinder is *missing*, not broken: the typed path is
- * already on screen underneath and works just as well, so a solid alert frame
- * would overstate what has gone wrong.
+ * Dashed because the viewfinder is *absent* rather than broken — the field it
+ * feeds is already on screen underneath and works just as well, so a solid alert
+ * frame would overstate every one of the three things this says. Two of them are
+ * camera failures and the third is a scan that succeeded, which is why the glyph
+ * and its colour are the caller's to choose.
  */
 @Composable
-private fun Explanation(@StringRes message: Int, tag: String, mark: Color) {
+private fun ViewfinderNote(
+    @StringRes message: Int,
+    tag: String,
+    mark: Color,
+    glyph: String = "⊘",
+    action: (@Composable () -> Unit)? = null,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -409,8 +501,11 @@ private fun Explanation(@StringRes message: Int, tag: String, mark: Color) {
             .testTag(tag),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("⊘", style = Fui.Glyph, color = mark)
-        Text(stringResource(message), style = Fui.Prose, color = Fui.TextBody)
+        Text(glyph, style = Fui.Glyph, color = mark)
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(stringResource(message), style = Fui.Prose, color = Fui.TextBody)
+            action?.invoke()
+        }
     }
 }
 
@@ -421,16 +516,35 @@ private fun Explanation(@StringRes message: Int, tag: String, mark: Color) {
  * artifact whose version has to be kept in lockstep with `camera-core`, and the
  * viewfinder is not the interesting part of this screen.
  *
+ * **`COMPATIBLE`, not the default.** `PERFORMANCE` gives `PreviewView` a
+ * `SurfaceView`, which the system composites rather than the view hierarchy: it
+ * honours neither the bounds Compose measured for it nor the order Compose drew
+ * in, and `FILL_CENTER` scales its child past those bounds by design. On this
+ * screen that painted the camera across the step above it and the code field
+ * below. `COMPATIBLE` is a `TextureView` — one texture copy per frame, drawn in
+ * place and clipped like any other view.
+ *
  * The analyser runs on its own single thread. `KEEP_ONLY_LATEST` means a slow
  * decode drops frames instead of queueing them, which is what keeps the preview
  * from lagging behind the phone.
+ *
+ * The unbind on disposal is load-bearing rather than tidy: the camera is bound to
+ * the *activity's* lifecycle, which outlives this composable, and a scan takes the
+ * preview off a screen that stays. Without it the sensor would keep running behind
+ * a viewfinder that had already stood down.
  */
 @Composable
-private fun CameraPreview(onCode: (String) -> Unit) {
+fun CameraPreview(onCode: (String) -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val executor = remember { Executors.newSingleThreadExecutor() }
-    DisposableEffect(Unit) { onDispose { executor.shutdown() } }
+    val providerFuture = remember { ProcessCameraProvider.getInstance(context) }
+    DisposableEffect(Unit) {
+        onDispose {
+            if (providerFuture.isDone) providerFuture.get().unbindAll()
+            executor.shutdown()
+        }
+    }
 
     Box(
         modifier = Modifier.fillMaxSize().testTag(TAG_CAMERA_PREVIEW),
@@ -441,7 +555,7 @@ private fun CameraPreview(onCode: (String) -> Unit) {
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
                 PreviewView(viewContext).also { view ->
-                    val providerFuture = ProcessCameraProvider.getInstance(viewContext)
+                    view.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                     providerFuture.addListener({
                         val provider = providerFuture.get()
                         val preview = Preview.Builder().build().also {
@@ -506,12 +620,15 @@ private fun FuiTextField(
 }
 
 const val TAG_PAIRING_SCREEN = "pairing-screen"
+const val TAG_PAIRING_BACK = "pairing-back"
 const val TAG_LABEL_FIELD = "pairing-label"
 const val TAG_CODE_FIELD = "pairing-code"
+const val TAG_CODE_SCANNED = "pairing-code-scanned"
 const val TAG_PAIR_BUTTON = "pairing-button"
 const val TAG_FAILURE = "pairing-failure"
 const val TAG_FAILURE_DETAIL = "pairing-failure-detail"
+const val TAG_VIEWFINDER = "pairing-viewfinder"
 const val TAG_CAMERA_PREVIEW = "camera-preview"
 const val TAG_CAMERA_ABSENT = "camera-absent"
 const val TAG_CAMERA_REFUSED = "camera-refused"
-const val TAG_PAIRING_BACK = "pairing-back"
+const val TAG_CAMERA_RECHECK = "camera-recheck"

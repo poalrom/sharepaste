@@ -1,5 +1,7 @@
 package com.sharepaste.android.scan
 
+import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -42,6 +44,17 @@ fun cameraProblem(hasCamera: Boolean, permissionGranted: Boolean): CameraProblem
 /** Whether this device has any camera at all, front or back. */
 fun deviceHasCamera(packageManager: PackageManager): Boolean =
     packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+
+/**
+ * Whether this app may use the camera, right now.
+ *
+ * A function rather than a remembered flag on purpose: the answer changes while
+ * the app is running — a grant from the platform's own dialog, or from Settings
+ * with the app still in the back stack — and every caller here is somewhere that
+ * has just been told to ask again.
+ */
+fun cameraPermissionGranted(context: Context): Boolean =
+    context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
 /**
  * Reads the pairing code out of camera frames.

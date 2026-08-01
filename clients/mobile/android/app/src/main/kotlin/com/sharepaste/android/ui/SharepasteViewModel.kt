@@ -172,24 +172,70 @@ class SharepasteViewModel(private val repo: SharepasteRepository) : ViewModel() 
         _state.update { it.copy(pairing = it.pairing.copy(camera = problem)) }
     }
 
+    /**
+     * The code field, as somebody types in it.
+     *
+     * Emptying it clears [PairingState.scanned], which is what puts the
+     * viewfinder back on screen. A field left holding a scanned code keeps the
+     * camera stood down, including while it is being edited — resurrecting a
+     * preview under a cursor because a character was deleted would be worse than
+     * either state.
+     */
+    fun setPairingCode(code: String) {
+        _state.update {
+            it.copy(
+                pairing = it.pairing.copy(
+                    code = code,
+                    scanned = it.pairing.scanned && code.isNotBlank(),
+                ),
+            )
+        }
+    }
+
+    /**
+     * A code the camera read. It fills the field and stands the viewfinder down.
+     *
+     * **It does not pair**, and that is the point rather than an omission. A scan
+     * is the first thing a person does on this screen — the square is the only
+     * part of it that looks like an instruction — and it arrives before the name
+     * the Pairing has to carry. Pairing on it would spend a code with a two-minute
+     * life on a message asking for the name.
+     *
+     * The analyser fires on every frame a code stays in view, so the first one
+     * wins: [PairingState.scanned] is the gate that turns a stream of identical
+     * decodes into one field. It also clears a failure, because the code that
+     * failed is no longer the code in the field.
+     */
+    fun codeScanned(code: String) {
+        _state.update {
+            if (it.pairing.scanned) {
+                it
+            } else {
+                it.copy(pairing = it.pairing.copy(code = code, scanned = true, attempt = PairAttempt.Idle))
+            }
+        }
+    }
+
     fun dismissPairFailure() {
         _state.update { it.copy(pairing = it.pairing.copy(attempt = PairAttempt.Idle)) }
     }
 
     /**
-     * Pair with a code, scanned or typed. The two paths are the same path.
+     * Pair with the code in the field, however it got there.
      *
      * The code goes to the core exactly as it arrived: `decode` already strips
      * whitespace and dashes and upper-cases, so the desktop's compact QR payload
      * and a code someone typed in groups of four are both simply codes.
      *
-     * Ignored while an attempt is already in flight or the phone has no name yet.
-     * The analyser fires on every frame a code stays in view, so this is the
-     * gate that turns a stream of identical decodes into one pairing.
+     * Ignored while an attempt is already in flight. The two other refusals —
+     * no code, no name — are what [PairingState.canPair] disables the button
+     * over, and they are re-checked here because a state holder that trusts a
+     * screen to have disabled something is a state holder with a hole in it.
      */
-    fun pairWithCode(code: String) {
+    fun pairWithCode() {
         val pairing = _state.value.pairing
         if (pairing.attempt is PairAttempt.Working) return
+        if (pairing.code.isBlank()) return
         if (pairing.deviceLabel.isBlank()) {
             _state.update {
                 it.copy(
@@ -203,7 +249,7 @@ class SharepasteViewModel(private val repo: SharepasteRepository) : ViewModel() 
         _state.update { it.copy(pairing = it.pairing.copy(attempt = PairAttempt.Working)) }
         viewModelScope.launch {
             try {
-                val paired = repo.pairWithCode(code, pairing.deviceLabel.trim())
+                val paired = repo.pairWithCode(pairing.code, pairing.deviceLabel.trim())
                 repo.setActivePairing(paired.userId)
                 _state.update {
                     it.copy(
@@ -213,7 +259,9 @@ class SharepasteViewModel(private val repo: SharepasteRepository) : ViewModel() 
                         // A Pairing just added is the one to look at, whatever was
                         // being looked at before.
                         viewedUserId = null,
-                        pairing = it.pairing.copy(attempt = PairAttempt.Idle),
+                        // The flow is spent: nothing here should be able to offer
+                        // this code a second time.
+                        pairing = it.pairing.restarted(),
                     )
                 }
                 refreshPairings()
@@ -362,8 +410,18 @@ class SharepasteViewModel(private val repo: SharepasteRepository) : ViewModel() 
         _state.update { it.copy(screen = Screen.History, confirming = null) }
     }
 
+    /**
+     * Show the pairing flow, from the top.
+     *
+     * The flow is restarted rather than resumed. Its state outlives the screen —
+     * the code field is [PairingState]'s, so that a scan can fill it — and a
+     * second visit that opened holding the code from an abandoned first one would
+     * offer to send a code minted minutes ago for somebody else's slot.
+     */
     fun openAddPairing() {
-        _state.update { it.copy(screen = Screen.Pairing, confirming = null) }
+        _state.update {
+            it.copy(screen = Screen.Pairing, confirming = null, pairing = it.pairing.restarted())
+        }
     }
 
     /**

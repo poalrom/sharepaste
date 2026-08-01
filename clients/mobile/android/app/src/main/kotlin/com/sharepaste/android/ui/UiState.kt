@@ -456,14 +456,41 @@ fun pairingPhase(pairing: PairingSummary, foreground: Boolean): SessionPhase {
  * guess on a person's own device, in a list they have to read later. Pairing is
  * blocked while it is blank, which is what makes the choice theirs rather than a
  * suggestion they can walk past.
+ *
+ * **[code] is one field with two ways of filling it, and a scan is one of them.**
+ * It lives here rather than inside the screen because the camera and the keyboard
+ * write to the same place: a scan puts the code it read into the field and stops
+ * there. It does *not* pair. Somebody who opens this screen scans before they
+ * read anything — the square is the only thing on it that looks like an
+ * instruction — and a scan that paired would fail on the empty name and throw the
+ * code away, which is a two-minute code spent on a message.
+ *
+ * [scanned] says the code in the field came off the camera, which is why the
+ * viewfinder is no longer on screen. Emptying the field brings it back: that is
+ * the way to scan a second code, and it is the only way, because a control for it
+ * would sit beside the field it duplicates.
  */
 data class PairingState(
     val deviceLabel: String = "",
+    val code: String = "",
+    val scanned: Boolean = false,
     val camera: CameraProblem? = null,
     val attempt: PairAttempt = PairAttempt.Idle,
 ) {
     /** Whether the code is worth sending. Ticket 09's one gate on the label. */
-    val canPair: Boolean get() = deviceLabel.isNotBlank() && attempt !is PairAttempt.Working
+    val canPair: Boolean
+        get() = deviceLabel.isNotBlank() && code.isNotBlank() && attempt !is PairAttempt.Working
+
+    /**
+     * The flow as it should be arrived at: this phone's name, and nothing else.
+     *
+     * The name outlives one pairing because it names the phone rather than the
+     * Pairing; a code, a scan and a failure do not, and a screen that opened
+     * holding a spent code would offer to send it again. The camera goes too:
+     * whichever of the three states applies is re-read the moment the screen is
+     * composed, and a remembered one would be a guess with a head start.
+     */
+    fun restarted() = PairingState(deviceLabel = deviceLabel)
 }
 
 sealed interface PairAttempt {

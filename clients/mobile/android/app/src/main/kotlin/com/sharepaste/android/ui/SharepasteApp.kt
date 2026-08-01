@@ -28,7 +28,19 @@ import com.sharepaste.core.Entry
  */
 class AppActions(
     val setDeviceLabel: (String) -> Unit,
-    val pairWithCode: (String) -> Unit,
+    /** The pairing code field, as somebody types in it. */
+    val setPairingCode: (String) -> Unit,
+    /**
+     * A code the camera read.
+     *
+     * Separate from [setPairingCode] because it means more: it also stands the
+     * viewfinder down, and it is the one write to that field that is not a
+     * keystroke. See [SharepasteViewModel.codeScanned] for why it stops at the
+     * field instead of pairing.
+     */
+    val codeScanned: (String) -> Unit,
+    /** Pair with the code the field holds, whichever of the two put it there. */
+    val pairWithCode: () -> Unit,
     val setCameraProblem: (CameraProblem?) -> Unit,
     val dismissPairFailure: () -> Unit,
     val offerClipboard: () -> Unit,
@@ -74,6 +86,8 @@ fun appActions(
     enableStandingActions: () -> Unit = {},
 ) = AppActions(
     setDeviceLabel = model::setDeviceLabel,
+    setPairingCode = model::setPairingCode,
+    codeScanned = model::codeScanned,
     pairWithCode = model::pairWithCode,
     setCameraProblem = model::setCameraProblem,
     dismissPairFailure = model::dismissPairFailure,
@@ -116,23 +130,27 @@ fun SharepasteApp(state: UiState, actions: AppActions, modifier: Modifier = Modi
     SharepasteTheme {
         Surface(modifier = modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             when (state.screen) {
-                Screen.Pairing -> PairingScreen(
-                    state = state.pairing,
-                    onLabelChange = actions.setDeviceLabel,
-                    onCode = actions.pairWithCode,
-                    onDismissFailure = actions.dismissPairFailure,
-                    // A way out only when there is somewhere to go. On a fresh
-                    // install this screen is the whole app, and a back control
-                    // that led to an empty History would be a dead end wearing a
-                    // door's clothes.
-                    onBack = if (state.activeUserId == null) null else actions.openPairings,
-                    scanner = {
-                        CameraScanner(
-                            onProblem = actions.setCameraProblem,
-                            onCode = actions.pairWithCode,
-                        )
-                    },
-                )
+                Screen.Pairing -> {
+                    // Owned here, outside the branch that renders the refusal.
+                    // A holder that lived inside the viewfinder was torn down by
+                    // its own first report, so the grant it had just asked for
+                    // arrived nowhere — see [rememberCameraAccess].
+                    val recheckCamera = rememberCameraAccess(onProblem = actions.setCameraProblem)
+                    PairingScreen(
+                        state = state.pairing,
+                        onLabelChange = actions.setDeviceLabel,
+                        onCodeChange = actions.setPairingCode,
+                        onPair = actions.pairWithCode,
+                        onDismissFailure = actions.dismissPairFailure,
+                        // A way out only when there is somewhere to go. On a fresh
+                        // install this screen is the whole app, and a back control
+                        // that led to an empty History would be a dead end wearing
+                        // a door's clothes.
+                        onBack = if (state.activeUserId == null) null else actions.openPairings,
+                        onRecheckCamera = recheckCamera,
+                        scanner = { CameraPreview(onCode = actions.codeScanned) },
+                    )
+                }
 
                 Screen.History -> HistoryScreen(state = state, actions = actions)
 

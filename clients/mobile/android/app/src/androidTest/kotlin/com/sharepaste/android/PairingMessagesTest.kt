@@ -1,10 +1,13 @@
 package com.sharepaste.android
 
-import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -16,11 +19,15 @@ import com.sharepaste.android.ui.PairingState
 import com.sharepaste.android.ui.PairingScreen
 import com.sharepaste.android.ui.SharepasteTheme
 import com.sharepaste.android.ui.TAG_CAMERA_ABSENT
+import com.sharepaste.android.ui.TAG_CAMERA_RECHECK
 import com.sharepaste.android.ui.TAG_CAMERA_REFUSED
 import com.sharepaste.android.ui.TAG_CODE_FIELD
+import com.sharepaste.android.ui.TAG_CODE_SCANNED
 import com.sharepaste.android.ui.TAG_FAILURE
 import com.sharepaste.android.ui.TAG_FAILURE_DETAIL
 import com.sharepaste.android.ui.TAG_LABEL_FIELD
+import com.sharepaste.android.ui.TAG_PAIR_BUTTON
+import com.sharepaste.android.ui.TAG_VIEWFINDER
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -39,6 +46,11 @@ import org.junit.runner.RunWith
  * The expired-code path is the third one, and it is proven end to end against the
  * live relay in [ExpiredCodeTest] — a real 120-second slot really expiring —
  * rather than by handing this screen a state and taking its word for it.
+ *
+ * **The slot those two camera failures share is also where a scan reports.** Which
+ * of the three things occupies it — no camera, no permission, or a code already
+ * read — is the whole of what this screen says about the camera, so the states that
+ * hide the viewfinder are asserted here beside the words that replace it.
  */
 @RunWith(AndroidJUnit4::class)
 class PairingMessagesTest {
@@ -50,7 +62,19 @@ class PairingMessagesTest {
 
     @Test
     fun a_refused_camera_permission_says_the_permission_is_off_and_offers_the_other_way_in() {
-        showPairing(PairingState(camera = CameraProblem.PermissionRefused))
+        var rechecks = 0
+        compose.setContent {
+            SharepasteTheme {
+                PairingScreen(
+                    state = PairingState(camera = CameraProblem.PermissionRefused),
+                    onLabelChange = {},
+                    onCodeChange = {},
+                    onPair = {},
+                    onDismissFailure = {},
+                    onRecheckCamera = { rechecks += 1 },
+                )
+            }
+        }
 
         compose.onNodeWithTag(TAG_CAMERA_REFUSED).assertIsDisplayed()
         val message = resources.getString(R.string.camera_permission_refused)
@@ -59,6 +83,12 @@ class PairingMessagesTest {
         // The fallback has to be present *on the same screen*, not behind a
         // retry: with the camera off it is the only way in.
         compose.onNodeWithTag(TAG_CODE_FIELD).assertIsDisplayed()
+
+        // And beside the refusal, the way back from it. The flow notices a grant
+        // on its own, but the control is what somebody who has just come back from
+        // Settings can press instead of trusting that.
+        compose.onNodeWithTag(TAG_CAMERA_RECHECK).performScrollTo().assertIsDisplayed().performClick()
+        assertEquals("the re-check control must reach the permission", 1, rechecks)
         Evidence.log("camera off    = $message")
     }
 
@@ -127,32 +157,68 @@ class PairingMessagesTest {
     }
 
     /**
-     * The name is the person's, and pairing waits for it.
+     * A scan fills the code field and takes the viewfinder away.
      *
-     * The desktop's flow hard-codes a default. This one starts empty, and typing
-     * a code before a name gets a message asking for the name rather than a
-     * Pairing labelled with somebody else's guess.
+     * **The fault this pins.** A scan used to pair, so on a fresh install — where
+     * the square is the first thing anybody points the phone at, before reading a
+     * word — it failed on the empty name and spent a code with a two-minute life on
+     * a message. The camera now hands its code down to the field and stops there,
+     * which leaves the name as the only thing still missing.
+     *
+     * The viewfinder going is the other half: a camera left running over a code it
+     * has already read would keep reporting it, and there is nothing left to point
+     * it at.
      */
     @Test
-    fun pairing_is_blocked_until_the_person_names_the_phone() {
-        var codes = mutableListOf<String>()
+    fun a_scanned_code_lands_in_the_field_and_the_viewfinder_stands_down() {
+        val scanned = "ABCD2345EFGH"
+        showPairing(PairingState(code = scanned, scanned = true))
+
+        compose.onNodeWithText(scanned).assertIsDisplayed()
+        compose.onNodeWithTag(TAG_CODE_SCANNED).assertIsDisplayed()
+        compose.onNodeWithTag(TAG_VIEWFINDER).assertDoesNotExist()
+        Evidence.log("scanned code  = $scanned in the field, viewfinder stood down")
+    }
+
+    /** Before that, the viewfinder is what occupies the slot. */
+    @Test
+    fun an_unscanned_flow_shows_the_viewfinder() {
+        showPairing(PairingState())
+
+        compose.onNodeWithTag(TAG_VIEWFINDER).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag(TAG_CODE_SCANNED).assertDoesNotExist()
+    }
+
+    /**
+     * The name is the person's, and pairing waits for it — and for a code.
+     *
+     * The desktop's flow hard-codes a default name. This one starts empty, and a
+     * code on its own does not make the button pressable: the name is what the
+     * computer lists beside every Entry that comes from this phone, and it is the
+     * half a scan cannot supply.
+     */
+    @Test
+    fun pairing_waits_for_both_the_name_and_the_code() {
+        val state = mutableStateOf(PairingState(camera = CameraProblem.NoCamera))
         compose.setContent {
             SharepasteTheme {
                 PairingScreen(
-                    state = PairingState(camera = CameraProblem.NoCamera),
-                    onLabelChange = {},
-                    onCode = { codes += it },
+                    state = state.value,
+                    onLabelChange = { state.value = state.value.copy(deviceLabel = it) },
+                    onCodeChange = { state.value = state.value.copy(code = it) },
+                    onPair = {},
                     onDismissFailure = {},
                 )
             }
         }
-        // No name yet: the field is empty by default and `canPair` is false, so
-        // the button cannot be pressed at all.
+        compose.onNodeWithTag(TAG_PAIR_BUTTON).assertIsNotEnabled()
+
         compose.onNodeWithTag(TAG_CODE_FIELD).performTextInput("SOMECODE")
-        compose.onNodeWithTag(com.sharepaste.android.ui.TAG_PAIR_BUTTON)
-            .assertIsDisplayed()
-            .assertIsNotEnabled()
-        Evidence.log("label gate    = the pair button is disabled while the name is empty")
+        compose.onNodeWithTag(TAG_PAIR_BUTTON).assertIsNotEnabled()
+
+        compose.onNodeWithTag(TAG_LABEL_FIELD).performTextInput("named at last")
+        compose.onNodeWithTag(TAG_PAIR_BUTTON).assertIsEnabled()
+        Evidence.log("pair gate     = a code alone is not enough; the name and the code both are")
     }
 
     private fun showPairing(state: PairingState) {
@@ -161,7 +227,8 @@ class PairingMessagesTest {
                 PairingScreen(
                     state = state,
                     onLabelChange = {},
-                    onCode = {},
+                    onCodeChange = {},
+                    onPair = {},
                     onDismissFailure = {},
                 )
             }

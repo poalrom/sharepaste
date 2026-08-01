@@ -35,6 +35,8 @@ fun noActions(
     enableStandingActions: () -> Unit = {},
 ) = AppActions(
     setDeviceLabel = {},
+    setPairingCode = {},
+    codeScanned = {},
     pairWithCode = {},
     setCameraProblem = {},
     dismissPairFailure = {},
