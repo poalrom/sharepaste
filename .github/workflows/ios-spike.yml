@@ -34,18 +34,30 @@ jobs:
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
+      # A spike is iterated on. Three minutes of vendored SQLite per attempt is
+      # the difference between finding all five answers today and finding one.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients
+
       - name: Show the toolchain this runner actually has
         run: |
           set -euo pipefail
           sw_vers
           xcodebuild -version
           swift --version
-          cc --version | head -1
+          cc --version | head -1 || true
 
       # Link 1. The risk is `rusqlite`'s `bundled` feature: `libsqlite3-sys`
       # compiles vendored C SQLite through `cc`, so this needs a working C
       # toolchain and sysroot for the target and not merely a Rust one.
       - name: Link 1 — build the static library for both slices
+        env:
+          # rustc otherwise takes the deployment target from the SDK, which put
+          # `minos 26.5` on the device slice — an app nothing in anyone's hands
+          # could run. The floor is iOS 16, carried from the mobile-client
+          # ledger, and it has to be said out loud for both slices.
+          IPHONEOS_DEPLOYMENT_TARGET: "16.0"
         run: |
           set -euo pipefail
           for target in aarch64-apple-ios aarch64-apple-ios-sim; do
@@ -68,8 +80,9 @@ jobs:
             lipo -info "$lib"
             # The platform a slice was built for is not in `lipo -info`, and it
             # is what decides whether a simulator will load it: 2 is iOS, 7 is
-            # the iOS simulator.
-            otool -l "$lib" | grep -A3 LC_BUILD_VERSION | head -8
+            # the iOS simulator. `minos` is the deployment floor above.
+            build_version=$(otool -l "$lib" | grep -A3 LC_BUILD_VERSION | head -8) || true
+            echo "$build_version"
           done
 
       # Link 2. From the *built library*, never from the sources, which is what
