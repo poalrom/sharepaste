@@ -69,11 +69,12 @@ not.
 Releases live at <https://github.com/poalrom/sharepaste/releases/latest>. One version, one
 Release: every client on a Release is built from the same commit.
 
-The Android artifact joins the desktop bundles on the same Release from the next published
-version onward. **No Release carrying it has been published yet**, so the Obtainium
-instructions below are written from the pipeline and from a locally built, signed APK — the
-in-place update was verified for real with `adb install -r`, but "Obtainium finds this
-release" has not been, because that needs a published release to find.
+The Android artifact rides the same Release as the desktop bundles, and has since
+**0.3.0** — `sharepaste-<version>-universal.apk` is on every Release from that one onward.
+The Obtainium instructions below are written from the pipeline and from that published
+Release, and the in-place update was verified for real with `adb install -r`; the one step
+nobody here has run end to end is Obtainium's own "check for updates" finding a *new*
+release and installing over an existing copy.
 
 ### macOS — `.dmg`
 
