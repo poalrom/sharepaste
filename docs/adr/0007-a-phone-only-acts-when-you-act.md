@@ -1,10 +1,28 @@
 # A phone only acts when you act
 
-**Deferred, 2026-07-29 — the iOS half is not shipped.** Every constraint recorded here
-holds, and the Android client was built against it. But there is no iOS client, so the iOS
-surfaces below — App Intents driven by Shortcuts, the Share Extension that cannot exist,
-the iCloud backup exclusion — are the intended shape rather than shipped code. See the
-deferral note in [ADR 0008](0008-sideloaded-and-not-self-updating.md).
+**Shipped, 2026-08-02 — the iOS half is built.** This record was marked deferred on
+2026-07-29, when the effort it belonged to delivered the Android client only. That note is
+spent: the SwiftUI client lives at `clients/mobile/ios/`, and the iOS surfaces below — App
+Intents driven by Shortcuts, the Share Extension that still cannot exist, the backup
+exclusion — are shipped code rather than an intended shape. Three things are worth naming
+rather than quietly inheriting:
+
+- **The two shortcuts are assembled by the person, and a fresh install has neither.** This
+  record describes the chaining without saying what that costs on first run: until the
+  person builds them, both verbs are unreachable outside the app. The Settings Screen
+  carries a section explaining which two to build — a section, and deliberately not a
+  **Notice**, because "you have not written a shortcut yet" is the normal state of a new
+  install rather than something that needs acting on. Android's
+  `StandingActionsBlockedNote` warns about a state that went wrong; this is not that.
+- **The backup exclusion has a name now.** `SharepasteKit/AppContainer.swift` sets
+  `isExcludedFromBackup` on the cache directory and re-asserts it on every launch rather
+  than trusting the launch that created it, and files the directory under Data Protection
+  at `completeUntilFirstUserAuthentication` — not `complete`, because a Standing Action
+  fired from a locked device must still be able to open the database, and a control that
+  reported a paired phone as unpaired would be worse than the exposure it closes.
+- **There is still no Share Extension**, for exactly the reason argued below; nothing about
+  a free Personal Team changed. The third app slot it would have burned is spent instead on
+  the copy an `xtool dev` build installs beside the SideStore one.
 
 The desktop client's core loop is **Watched Capture**: a background thread notices
 every clipboard change and turns it into an entry. No mobile OS permits this, and

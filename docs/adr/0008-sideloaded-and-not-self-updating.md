@@ -1,28 +1,40 @@
 # Sideloaded, and not self-updating
 
-**Deferred, 2026-07-29 — iOS is not shipped.** The decision below stands as written and
-nothing in it was overturned; the effort it was written for delivered the Android half
-only. It is left intact because its reasoning still holds, but a reader should not infer
-any of the following from it:
+**Shipped, 2026-08-02 — the iOS half exists, and three of these four caveats are spent.**
+Written as a deferral on 2026-07-29, when the effort this record belonged to delivered the
+Android half only. Nothing in the decision was overturned, so the correction is confined to
+what that note told a reader not to infer:
 
-- **A Release carries three client artifacts, not four**: the macOS `.dmg`, the Windows
-  NSIS `.exe` and the universal `.apk`, beside `latest.json`. There is **no `.ipa` and no
-  SideStore source JSON**, and nothing in this repository generates either. There is no
-  Xcode project at all.
-- **`check-versions.mjs` asserts no `MARKETING_VERSION`**, there being nothing to read one
-  from. What it does check, with `clients/desktop/src-tauri/tauri.conf.json` still
-  authoritative, is `clients/desktop/package.json`,
+- **A Release carries four client artifacts**, which is what the Consequences below always
+  said it would: the macOS `.dmg`, the Windows NSIS `.exe`, the universal `.apk` and an
+  unsigned `sharepaste-<version>.ipa`, beside `latest.json` and the SideStore source JSON
+  kept at `.github/sidestore-source.json`. There is still **no Xcode project**, and that
+  clause survives as a decision rather than an absence: the client is a SwiftPM package
+  plus an `xtool.yml`, built and signed by `xtool`
+  ([ADR 0006](0006-one-protocol-three-shells.md)).
+- **`check-versions.mjs` asserts a seventh version**, and it is the iOS one: the
+  `CFBundleShortVersionString` in the hand-written `clients/mobile/ios/Info.plist`. It
+  joins the six it already reads, with `clients/desktop/src-tauri/tauri.conf.json` still
+  authoritative — `clients/desktop/package.json`,
   `clients/desktop/src-tauri/Cargo.toml`, `clients/core/Cargo.toml`,
   `clients/mobile/ffi/Cargo.toml` and the `versionName` in
-  `clients/mobile/android/app/build.gradle.kts` — the two Rust manifests because their
-  crates compile into `libsharepaste_ffi.so` and ride inside the APK.
-- **No publish has exercised any of this.** The Android pipeline was built and verified
-  locally — a signed universal APK, an in-place update over `adb install -r`, a
-  differently-signed APK refused — but no Release carrying an APK has been published, so
-  "Obtainium finds it" is reasoned from Obtainium's own source rather than observed.
-- The iOS consequences below — the seven-day Personal Team certificate, the three-app cap,
-  free-team signing that cannot live in CI — describe the expected shape of an iOS client
-  whenever one is built. They describe no code that exists.
+  `clients/mobile/android/app/build.gradle.kts`, the two shared Rust manifests because
+  their crates compile into the binary each phone carries. The plist entry is tighter than
+  the `MARKETING_VERSION` this record promised, and it is tighter *because* there is no
+  Xcode project to hold one: the plist string is the literal value SideStore compares an
+  installed app against, so a version that drifts does not merely look untidy — SideStore
+  stops seeing an update and offers a fresh install beside the real app, with an empty
+  database.
+- **The publish caveat splits in two, and only the Android half has expired.** An APK has
+  ridden every Release since 0.3.0, published on 2026-07-29, so "a Release carries one" is
+  now observed. What is still reasoned rather than watched, on both phones, is the update
+  channel: nobody here has seen Obtainium find a *new* Release and install it over an
+  existing copy, and on iOS nothing at all has been published — no Release has carried an
+  `.ipa`, and SideStore has not been watched taking one version over another **in place**
+  with the pairing intact. The iOS work does not close until it has.
+- **The iOS consequences below describe shipped code.** The seven-day Personal Team
+  certificate, the three-app cap and free-team signing that cannot live in CI are the terms
+  this client runs under today, not the expected shape of one that might be built.
 
 Neither mobile store is in play: there is no Google Play account and no Apple
 Developer Program membership, and we declined to buy either. Android is signed with
