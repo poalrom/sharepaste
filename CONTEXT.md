@@ -55,8 +55,22 @@ The decrypted, single-line rendering of an entry as shown in a list.
 _Avoid_: excerpt, summary
 
 **History**:
-A user's entries, newest first, as held by the relay and mirrored locally.
+A user's entries ordered by last use, newest first, as held by the relay and
+mirrored locally. Not capture order: an entry recalled today leads a history of
+entries captured since.
 _Avoid_: log, feed, buffer
+
+**Last Use**:
+The moment an entry was last captured or recalled, on whichever device. It
+orders the history and measures how long the entry is kept, so an entry in
+regular use is never the one dropped to make room.
+_Avoid_: bumped at, updated at, modified, sort key, last accessed
+
+**Filter**:
+A narrowing of the history on screen to the entries whose text contains what
+was typed. Never asks the relay: it hides rows a device already holds, so it can
+only ever find what has already reached that device.
+_Avoid_: search, query, find, lookup
 
 **Capture**:
 The act of a device turning local content into an entry. How the device comes by
@@ -76,7 +90,8 @@ _Avoid_: manual capture, import, paste
 **Recall**:
 Placing an entry's plaintext back onto this device's clipboard, the reverse of
 capture. Distinct from reading an entry, which shows it without touching the
-clipboard.
+clipboard. A recall is a use, so the entry leads the history on every device
+afterwards; reading it changes nothing.
 _Avoid_: copy, restore, paste, retrieve
 
 **Undecryptable**:
