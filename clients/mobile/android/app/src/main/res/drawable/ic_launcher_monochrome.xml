@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The themed-icon layer, for a launcher on Android 13+ that recolours every icon
+  into the wallpaper's scheme.
+
+  The platform keeps one colour and the alpha channel, so hue cannot carry
+  anything here — the ramp would flatten into three identical bars and the stack
+  would stop reading as a stack. Depth moves to opacity instead, which is the
+  same trade `icons/tray-template.svg` makes for the macOS menu bar, at the same
+  three values: 1, 0.72, 0.45.
+
+  Geometry is `ic_launcher_foreground.xml` unchanged, including the scale — see
+  there for why 2.35 and not the SVG sources' 87.5%.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="16.5"
+        android:pivotY="16"
+        android:scaleX="2.35"
+        android:scaleY="2.35"
+        android:translateX="37.5"
+        android:translateY="38">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M13,5 L27,5 L27,8 L24,11 L10,11 L10,8 Z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillAlpha="0.72"
+            android:pathData="M11,13 L25,13 L25,16 L22,19 L8,19 L8,16 Z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillAlpha="0.45"
+            android:pathData="M9,21 L23,21 L23,24 L20,27 L6,27 L6,24 Z" />
+    </group>
+</vector>

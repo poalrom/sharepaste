@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The foreground layer of the launcher icon.
+
+  The ribbon stack from `clients/desktop/src-tauri/icons/icon.svg`: the same
+  three chamfered ribbons on the same 32-unit grid, in the same three steps of
+  the cyan ramp (cyan-300 newest, cyan-600, cyan-800 oldest), so brightness
+  still encodes recency and the phone wears the product's mark rather than the
+  platform's robot. The paths below are that file's polygons transcribed point
+  for point; only the enclosing transform is new, because an adaptive icon has a
+  canvas the desktop sources do not.
+
+  That canvas is 108dp and only its inner 72dp is guaranteed to survive the
+  launcher's mask. The mask can be a circle, so what has to fit is not the
+  bounding box but the diagonal: the mark is 21 by 22 grid units, its half
+  diagonal is 15.207 units, and 2.35 puts its four extreme corners 35.74dp from
+  the centre — inside the 36dp radius with a quarter of a dp to spare. That is
+  as large as this shape goes before a circular mask bites the corner off the
+  top or the bottom ribbon, and it is why the scale is not the 87.5% of canvas
+  height both SVG sources use. Centring is `translate = 54 - pivot`, with the
+  pivot on the mark's own centre (16.5, 16) rather than the grid's.
+
+  There is no plate in this layer. The void behind it is the `background` layer
+  of `mipmap-anydpi-v26/ic_launcher.xml`, and the ramp's contrast figures — 15.1,
+  8.3 and 2.3 to 1 — are measured against exactly that colour.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="16.5"
+        android:pivotY="16"
+        android:scaleX="2.35"
+        android:scaleY="2.35"
+        android:translateX="37.5"
+        android:translateY="38">
+        <path
+            android:fillColor="#FF7FF3FF"
+            android:pathData="M13,5 L27,5 L27,8 L24,11 L10,11 L10,8 Z" />
+        <path
+            android:fillColor="#FF1FB9C9"
+            android:pathData="M11,13 L25,13 L25,16 L22,19 L8,19 L8,16 Z" />
+        <path
+            android:fillColor="#FF0F5560"
+            android:pathData="M9,21 L23,21 L23,24 L20,27 L6,27 L6,24 Z" />
+    </group>
+</vector>

@@ -200,4 +200,42 @@ class MergedManifestTest {
             }
         }
     }
+
+    /**
+     * The launcher shows the product's mark, not the platform's robot.
+     *
+     * `android:icon` is optional. An application without one builds, installs
+     * and runs, and the only symptom is the default green Android silhouette on
+     * the home screen — which is what this app shipped with until it was
+     * noticed by eye. Silent by construction, like everything else in this file.
+     *
+     * The layers are asserted as well as the attribute. An `<adaptive-icon>`
+     * that lost its `background` draws the ribbons on black or on nothing
+     * depending on the launcher, and one that lost its `monochrome` opts out of
+     * themed icons on Android 13+ without failing anything.
+     */
+    @Test
+    fun the_launcher_wears_the_products_mark() {
+        val application = Regex("""<application\b[^>]*?>""", RegexOption.DOT_MATCHES_ALL)
+            .find(manifest)
+            ?.value
+        val declared = requireNotNull(application) {
+            "the merged manifest declares no <application> at all:\n$manifest"
+        }
+        assertTrue(
+            "<application> carries no android:icon, so the launcher falls back to the " +
+                "platform's default robot. Declared as: $declared",
+            declared.contains("""android:icon="@mipmap/ic_launcher""""),
+        )
+
+        val icon = File("src/main/res/mipmap-anydpi-v26/ic_launcher.xml")
+        require(icon.isFile) { "android:icon names a resource that is not there: ${icon.absolutePath}" }
+        val layers = icon.readText()
+        listOf("background", "foreground", "monochrome").forEach { layer ->
+            assertTrue(
+                "the adaptive icon declares no <$layer> layer",
+                layers.contains(Regex("""<$layer\s+android:drawable="@[^"]+"\s*/>""")),
+            )
+        }
+    }
 }

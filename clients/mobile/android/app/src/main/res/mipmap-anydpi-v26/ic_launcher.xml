@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The launcher icon.
+
+  Adaptive and nothing else: `minSdk` is 29, so every device that can install
+  this app understands `<adaptive-icon>`, and the density-bucketed PNG fallbacks
+  an Android Studio template ships exist only for API 25 and below. Nothing here
+  is rasterised — the mark is three flat polygons, which is precisely the case a
+  vector renders better than a pyramid of PNGs. For the same reason there is no
+  `android:roundIcon`: a round launcher takes the circular mask to the layers
+  below, and a second icon resource would only be a second thing to forget.
+
+  The plate is `window_void`, the colour `themes.xml` paints the window with
+  before Compose draws. Shared rather than re-declared because it is the same
+  void, and because the icon ramp's contrast was measured against it.
+
+  The `-v26` qualifier is convention, not a floor: it is the API this element
+  arrived in, and there is no unqualified variant to fall back to.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/window_void" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+</adaptive-icon>
