@@ -6,11 +6,12 @@
     grid so every edge lands on a pixel boundary: 4px slab chamfered 2px, 1px
     gaps, filling y=1..15 of the canvas.
 
-    The oldest ribbon is lifted from #0a6b47 to #0f8a5b: with no plate behind
-    it the slab sits directly on the taskbar, where the reference green is too
-    close to a dark background to separate at 3px tall.
+    The oldest ribbon is lifted one ramp step, cyan-800 #0f5560 to cyan-700
+    #167f8c: with no plate behind it the slab sits directly on the taskbar,
+    where the reference tone is too close to a dark background to separate at
+    3px tall.
   -->
-  <polygon points="7,1 14,1 14,3 12,5 5,5 5,3" fill="#3dffa4"/>
-  <polygon points="6,6 13,6 13,8 11,10 4,10 4,8" fill="#12c47a"/>
-  <polygon points="5,11 12,11 12,13 10,15 3,15 3,13" fill="#0f8a5b"/>
+  <polygon points="7,1 14,1 14,3 12,5 5,5 5,3" fill="#7ff3ff"/>
+  <polygon points="6,6 13,6 13,8 11,10 4,10 4,8" fill="#1fb9c9"/>
+  <polygon points="5,11 12,11 12,13 10,15 3,15 3,13" fill="#167f8c"/>
 </svg>

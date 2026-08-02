@@ -3,17 +3,22 @@
   <!--
     Master app icon: three chamfered ribbons on a transparent canvas, a
     clipboard stack with the newest sheet on top. Brightness encodes recency
-    (#3dffa4 -> #0a6b47) and the fold on each ribbon's lower-right corner reads
+    (#7ff3ff -> #0f5560) and the fold on each ribbon's lower-right corner reads
     as one sheet lying on the next. Geometry lives on a 32-unit grid; each
     ribbon is the one above it translated by (-2, +8).
+
+    Every fill is a step of the cyan ramp in clients/desktop/ui/src/styles.css
+    (cyan-300 / cyan-600 / cyan-800). The mark carries the product's emitter
+    colour; green in this palette is nominal-400, a status signal, and an icon
+    painted in it would spend the signal on the identity.
 
     The stack is scaled to 87.5% of the canvas height, the same proportion
     icon-small.svg uses, so the 48 -> 64 px handoff between the two sources
     does not jump. Sizes <=48px render from icon-small.svg instead.
   -->
   <g transform="translate(512 512) scale(40.7) translate(-16.5 -16)">
-    <polygon points="13,5 27,5 27,8 24,11 10,11 10,8" fill="#3dffa4"/>
-    <polygon points="11,13 25,13 25,16 22,19 8,19 8,16" fill="#12c47a"/>
-    <polygon points="9,21 23,21 23,24 20,27 6,27 6,24" fill="#0a6b47"/>
+    <polygon points="13,5 27,5 27,8 24,11 10,11 10,8" fill="#7ff3ff"/>
+    <polygon points="11,13 25,13 25,16 22,19 8,19 8,16" fill="#1fb9c9"/>
+    <polygon points="9,21 23,21 23,24 20,27 6,27 6,24" fill="#0f5560"/>
   </g>
 </svg>

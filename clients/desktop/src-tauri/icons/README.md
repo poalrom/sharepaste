@@ -13,12 +13,17 @@ The SVGs are the source of truth; the PNG/ICO next to them are generated.
 Every icon is a transparent glyph — no plate, no background — so it sits
 directly on the dock, taskbar, menu bar or browser tab.
 
+The ramp is the cyan one from `../../ui/src/styles.css`: `--cyan-300` newest,
+`--cyan-600`, `--cyan-800` oldest. Brightness encodes recency, and the hue is
+the product's emitter colour rather than `--nominal-400` — green in this
+palette is a status signal, and the icon must not spend it on identity.
+
 Two sources rather than one because the glyph is only a few pixels tall below
 48 px: `icon-small.svg` re-draws it on a 16-unit grid so every edge lands on a
-pixel boundary, and lifts the oldest ribbon from `#0a6b47` to `#0f8a5b`, which
-is otherwise too close to a dark taskbar to separate at 3 px tall. Both sources
-size the stack to ~87.5% of the canvas height so the 48 -> 64 px handoff
-between them does not jump.
+pixel boundary, and lifts the oldest ribbon one ramp step — `--cyan-800`
+`#0f5560` to `--cyan-700` `#167f8c` — which is otherwise too close to a dark
+taskbar to separate at 3 px tall. Both sources size the stack to ~87.5% of the
+canvas height so the 48 -> 64 px handoff between them does not jump.
 
 ## Tray icons, one per platform
 
@@ -31,7 +36,7 @@ the ribbon stack's depth is carried by opacity, not hue. It stays 16×16 —
 `let _ = is_template` everywhere else), so on Windows the template's black
 pixels would be drawn literally and vanish into a dark taskbar.
 `tauri.windows.conf.json` therefore points the tray at `tray.png` — the small
-variant at 32×32, whose greens read on a light or dark taskbar and survive
+variant at 32×32, whose tones read on a light or dark taskbar and survive
 Windows downscaling them to the 16/24 px tray slot.
 
 ## The macOS icns slot sizes are not free choices
