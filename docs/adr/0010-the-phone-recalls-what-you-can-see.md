@@ -1,5 +1,17 @@
 # The phone recalls what you can see
 
+> **Amended 2026-08-02, after [ADR 0011](0011-the-history-is-ordered-by-last-use.md) landed
+> the same day.** The decision stands and the reasoning below is unchanged, but three of its
+> sentences were written against capture ordering and are now imprecise. **One:** the first row
+> never meant "the newest **Entry**" once the **History** is ordered by **Last Use** — it means
+> the last one *used*, and the Filter breaks the marker's agreement with the button just the
+> same. **Two:** `RECALL FIRST` performs no *fetch*, but it is no longer inert — `recall()`
+> spawns a **Use** after the clipboard write (`facade.rs:810`), which is what puts the recalled
+> row at the head. **Three:** unfiltered, `RECALL FIRST` and the notification's `RECALL LATEST`
+> now select the *same* **Entry**, so the two verbs diverge only by the fetch rather than by
+> which row they take. That narrows the last consequence below; it does not weaken the decision,
+> because a fetch can still swap in an Entry the person never saw.
+
 **Decided 2026-08-02.** The History Screen gained a **Filter**, and with it the first row of
 the list stopped meaning "the newest **Entry**". That broke an agreement the screen had been
 keeping since it was built: the row it marks — emitter bar, tint, a named button instead of a
