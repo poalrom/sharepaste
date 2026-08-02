@@ -238,6 +238,71 @@ class RoundTripTest {
         awaitRelayNewest("an Offer made with capture disabled must still reach the Relay", offered)
     }
 
+    /**
+     * ADR 0011, across the two devices that make it a decision at all: a Recall
+     * of a buried Entry puts it at the head of the History here **and** there.
+     *
+     * The other device is asked with `recall_latest`, which always performs the
+     * round trip, so what it hands back is what the Relay considers the head
+     * *now* rather than anything it had cached. Ordering that agrees across
+     * devices is the whole point; a phone that reordered only its own list
+     * would pass a weaker version of this test and ship the wrong feature.
+     *
+     * Nothing about the Entry itself moves — same id, same plaintext — which is
+     * what "nothing is created and nothing is duplicated" means in practice.
+     */
+    @Test
+    fun recalling_a_buried_entry_puts_it_at_the_head_on_both_devices() {
+        val stamp = System.currentTimeMillis()
+        val buried = "buried-entry-$stamp"
+        val newer = "captured-since-$stamp"
+        val buriedId = other.offerAndWaitForUpload(buried)
+        other.offerAndWaitForUpload(newer)
+
+        phone.enterForeground()
+        phone.await("in contact") { it.session is SessionPhase.InContact }
+        val onScreen = phone.awaitEntry("the buried Entry must be cached") { it.preview == buried }
+        phone.awaitEntry("and the one captured after it") { it.preview == newer }
+        assertEquals("the phone holds it under the Relay's own id", buriedId, onScreen.id)
+        assertEquals(
+            "precondition: the Entry captured last leads the History until something is used",
+            newer,
+            runBlocking { phone.repo.listHistory(phone.userId!!) }.first().preview,
+        )
+        Evidence.log("before recall = head is $newer, $buried is buried below it")
+
+        phone.scrollTo(entryRecallTag(onScreen.id))
+        compose.onNodeWithTag(entryRecallTag(onScreen.id)).performClick()
+        phone.awaitReceipt("the Recall must report itself") { it is Receipt.Recalled }
+
+        awaitHistoryHead("the recalled Entry must lead this phone's History", buried)
+        Evidence.log("after recall  = this phone's head is $buried")
+        awaitRelayNewest("and the Relay's, so every other device reorders with it", buried)
+        Evidence.log("other device  = the Relay hands back $buried as its head too")
+
+        // Counted rather than sized: the run's one inviting User is shared, so
+        // another test's Entries may sit in this History too. What a use must
+        // never do is *add* one.
+        val after = runBlocking { phone.repo.listHistory(phone.userId!!) }
+        assertEquals(
+            "a use creates nothing, so the recalled text appears once and not twice",
+            1,
+            after.count { it.preview == buried },
+        )
+        assertEquals("and the Entry at the head is the one that was always there", buriedId, after.first().id)
+    }
+
+    /** Poll this phone's own History until [expected] is its head. */
+    private fun awaitHistoryHead(what: String, expected: String) {
+        val deadline = System.nanoTime() + PhoneUnderTest.TIMEOUT_SECONDS * 1_000_000_000L
+        while (System.nanoTime() < deadline) {
+            val head = runBlocking { phone.repo.listHistory(phone.userId!!) }.firstOrNull()?.preview
+            if (head == expected) return
+            Thread.sleep(250)
+        }
+        throw AssertionError("$what: it never reached the head")
+    }
+
     /** Poll the other device until the Relay's newest Entry is [expected]. */
     private fun awaitRelayNewest(what: String, expected: String) {
         val deadline = System.nanoTime() + PhoneUnderTest.TIMEOUT_SECONDS * 1_000_000_000L
