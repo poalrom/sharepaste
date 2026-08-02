@@ -54,13 +54,23 @@ help:
 # built library rather than from the sources, which is what makes a
 # bindings/library mismatch impossible — so they travel together, from the same
 # CI run, and are fetched together here.
+#
+# `gh -R`, rather than letting it infer the repository from the git remote. The
+# inference reads `.git`, and in a worktree that is a *file* holding an absolute
+# path to the main checkout — a Windows path, if the worktree was made from
+# Windows, which WSL cannot follow. `gh` then fails with "not a git repository"
+# while standing inside one. Naming the repo skips the question, and there is no
+# second repository this could mean. No run id: `gh` takes the most recent run
+# carrying the artifact, which is the newest build of whatever last landed.
 # -----------------------------------------------------------------------------
+IOS_REPO := poalrom/sharepaste
+
 ios-vendor:
 	@command -v gh >/dev/null || { echo "gh is not installed; it is how the CI artifact is fetched"; exit 1; }
 	@case "$(IOS_SLICE)" in device|simulator) ;; *) echo "IOS_SLICE must be device or simulator, got '$(IOS_SLICE)'"; exit 1 ;; esac
 	@rm -rf $(IOS_DIR)/.vendor-download
 	@mkdir -p $(IOS_DIR)/.vendor-download
-	gh run download --name $(IOS_ARTIFACT) --dir $(IOS_DIR)/.vendor-download
+	gh run download -R $(IOS_REPO) --name $(IOS_ARTIFACT) --dir $(IOS_DIR)/.vendor-download
 	@mkdir -p $(IOS_DIR)/Vendor $(IOS_DIR)/Sources/sharepaste_ffiFFI $(IOS_DIR)/Sources/SharepasteCore
 	@cp $(IOS_DIR)/.vendor-download/$(IOS_SLICE)/libsharepaste_ffi.a $(IOS_DIR)/Vendor/
 	@cp $(IOS_DIR)/.vendor-download/generated/sharepaste_ffi.swift $(IOS_DIR)/Sources/SharepasteCore/
