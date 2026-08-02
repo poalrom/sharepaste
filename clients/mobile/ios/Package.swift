@@ -81,7 +81,22 @@ let package = Package(
         .testTarget(
             name: "SharepasteFacadeTests",
             dependencies: ["SharepasteKit"],
-            path: "Tests/SharepasteFacadeTests"
+            path: "Tests/SharepasteFacadeTests",
+            // The relay address and the run's invite tokens, baked into the
+            // bundle rather than passed in the environment.
+            //
+            // `xcodebuild`'s `TEST_RUNNER_`-prefixed build settings are the
+            // documented route into a test process's environment, and they do
+            // not arrive in a bundle with no host application: measured twice
+            // on CI, where every token the job minted was present in the step's
+            // own environment and the suite read an empty list. A resource is
+            // not a route with semantics — it is a file in the bundle the tests
+            // already are.
+            //
+            // `.copy` and not `.process`, so the path inside the bundle is the
+            // path in the tree and the lookup cannot be surprised by a
+            // processing rule for a file type nobody thought about.
+            resources: [.copy("Resources")]
         ),
     ]
 )

@@ -59,7 +59,7 @@ final class PhoneUnderTest {
     ) throws -> PhoneUnderTest {
         let directory = try fresh
             ? freshDatabase(named: databaseName)
-            : AppContainer.databaseDirectory()
+            : existingDatabase(named: databaseName)
         let pasteboard = TestPasteboard()
         return PhoneUnderTest(
             repo: SharepasteRepository(

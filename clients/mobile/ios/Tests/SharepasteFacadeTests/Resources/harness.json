@@ -1,0 +1,5 @@
+{
+  "_comment": "What the suite needs from whoever is running it. CI overwrites this file before it builds the bundle; the committed copy is the shape, and an empty invite list is what a developer's machine has until they mint some. See Suite.swift.",
+  "relayURL": "http://127.0.0.1:8443",
+  "invites": []
+}

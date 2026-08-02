@@ -782,7 +782,34 @@ jobs:
               | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).invite_token")"
             tokens="${tokens:+$tokens,}$token"
           done
-          echo "SHAREPASTE_INVITES=$tokens" >> "$GITHUB_ENV"
+
+          # Written into the test bundle's own resources, NOT passed as an
+          # environment variable.
+          #
+          # `TEST_RUNNER_`-prefixed build settings are the documented route into
+          # a test process's environment and they do not arrive in a bundle with
+          # no host application. Measured twice: on both runs this step held
+          # every token it had minted and the suite read an empty list. It went
+          # unnoticed for a whole run because the relay address has a correct
+          # default and the invite list cannot have one, so only the invites
+          # ever reported it — the first run's "out of invite tokens" was the
+          # *first* claim failing, not the fifth.
+          #
+          # A resource has no semantics to get wrong: it is a file, in the
+          # bundle, that `Bundle.module` finds. The tree carries a copy with an
+          # empty list so the manifest is always valid; this overwrites it
+          # before anything is built.
+          node -e '
+            const fs = require("node:fs");
+            const path = "clients/mobile/ios/Tests/SharepasteFacadeTests/Resources/harness.json";
+            const invites = process.argv[1].split(",").filter(Boolean);
+            fs.writeFileSync(path, JSON.stringify({
+              _comment: "Written by the ios-facade-tests job. The committed copy carries an empty invite list.",
+              relayURL: process.argv[2],
+              invites,
+            }, null, 2) + "\n");
+            console.log(`baked ${invites.length} invite tokens into ${path}`);
+          ' "$tokens" "$SHAREPASTE_RELAY_URL"
 
       # The runtime is pinned; the device model is not, because the model is
       # cosmetic and the runtime is what disappears. Picking from the runtime's
@@ -823,11 +850,12 @@ jobs:
           xcrun simctl bootstatus "$udid" -b
           echo "SIMULATOR_UDID=$udid" >> "$GITHUB_ENV"
 
-      # `TEST_RUNNER_`-prefixed build settings are how xcodebuild puts a value
-      # into the test process's environment, and the only route there is: the
-      # environment normally comes from a scheme, and this repository has no
-      # `.xcodeproj` to hold one. The prefix is stripped on the way in, so the
-      # suite reads `SHAREPASTE_RELAY_URL` and `SHAREPASTE_INVITES`.
+      # No `TEST_RUNNER_` settings here any more. They are the documented route
+      # into a test process's environment and they do not reach a bundle with no
+      # host application — see the mint step, which now bakes the relay address
+      # and the tokens into the bundle's own resources instead. A route that
+      # silently delivers nothing is worse than no route, so it is gone rather
+      # than kept as a belt.
       #
       # `ARCHS=arm64`, because `Vendor/` holds exactly one slice and it is the
       # arm64 simulator one. On an Intel runner this fails at the link with
@@ -867,9 +895,7 @@ jobs:
             -default-test-execution-time-allowance 120 \
             -maximum-test-execution-time-allowance 300 \
             ARCHS=arm64 \
-            CODE_SIGNING_ALLOWED=NO \
-            TEST_RUNNER_SHAREPASTE_RELAY_URL="$SHAREPASTE_RELAY_URL" \
-            TEST_RUNNER_SHAREPASTE_INVITES="$SHAREPASTE_INVITES"
+            CODE_SIGNING_ALLOWED=NO
 
       # The console prints the failing assertion and none of its context, and
       # for a suite talking to a live relay the context is most of the finding.

@@ -28,7 +28,7 @@ final class ExpiredCodeTest: SlowTestCase {
     }
 
     override func tearDown() async throws {
-        await phone.close()
+        await phone?.close()
         phone = nil
     }
 

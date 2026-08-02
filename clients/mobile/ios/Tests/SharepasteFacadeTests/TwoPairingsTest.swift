@@ -39,7 +39,7 @@ final class TwoPairingsTest: XCTestCase {
     }
 
     override func tearDown() async throws {
-        await phone.close()
+        await phone?.close()
         phone = nil
     }
 

@@ -41,12 +41,19 @@ import XCTest
 /// Values every test in the suite shares, and the two things the runner has to
 /// be told.
 ///
-/// Handed in through the environment rather than compiled in: the relay is
-/// started by the CI job on the host, and an invite is minted by the operator
-/// CLI seconds before the run. `xcodebuild` passes any build setting prefixed
-/// `TEST_RUNNER_` into the test process's environment with the prefix stripped,
-/// which is the only supported route into an XCTest bundle's environment when
-/// there is no scheme in the repository to hold one.
+/// **Both arrive as a file in the bundle, not as an environment variable.** The
+/// documented route into a test process's environment is a `TEST_RUNNER_`-
+/// prefixed build setting, and it does not arrive in a bundle with no host
+/// application. That was measured rather than guessed: two CI runs where the
+/// job's own step held all twenty-four minted tokens and the suite read an
+/// empty list. It was invisible for a whole run because the relay address has a
+/// correct default and the invite list has none, so only the invites ever
+/// reported it.
+///
+/// `Resources/harness.json` is written by the CI job before the bundle is
+/// built, and the copy in the tree carries the shape and an empty invite list.
+/// The environment is still read first, because that is the one route that
+/// works when somebody runs this from a shell with tokens of their own.
 enum Suite {
 
     /// How long anything that has to cross the network is given.
@@ -82,23 +89,52 @@ enum Suite {
     /// network stack, so the host's loopback is the loopback. This is the one
     /// place the iOS arrangement is simpler than Android's rather than harder.
     static let relayURL: String = {
-        ProcessInfo.processInfo.environment["SHAREPASTE_RELAY_URL"] ?? "http://127.0.0.1:8443"
+        ProcessInfo.processInfo.environment["SHAREPASTE_RELAY_URL"] ?? harness.relayURL
     }()
 
-    /// The invite tokens the runner was given, handed out one at a time.
+    /// The invite tokens the run was given, handed out one at a time.
     ///
     /// An invite is **single use** — the relay answers a second claim with `409
-    /// Conflict` — so every claim spends one, and a comma-separated list is how
-    /// the host supplies them. The job mints far more than a run needs; see the
-    /// reasoning at that step, and at ``InviterFailure/outOfInvites(claiming:taken:)``
-    /// for why running out must not be a crash.
+    /// Conflict` — so every claim spends one. The job mints far more than a run
+    /// needs; see the reasoning at that step, and at
+    /// ``InviterFailure/outOfInvites(claiming:taken:)`` for why running out must
+    /// not be a crash.
     static func nextInvite(claiming label: String) throws -> String {
         try invites.next(claiming: label)
     }
 
     private static let invites = Invites(
-        ProcessInfo.processInfo.environment["SHAREPASTE_INVITES"] ?? ""
+        ProcessInfo.processInfo.environment["SHAREPASTE_INVITES"].map {
+            $0.split(separator: ",").map(String.init)
+        } ?? harness.invites
     )
+
+    /// What the job baked into the bundle.
+    ///
+    /// A missing or unreadable file is not survivable and does not pretend to
+    /// be: every claiming test would fail one after another with a message
+    /// about invites, and the cause would be a resource that never got copied.
+    /// This says so once, at the top, in the terms that would fix it.
+    private static let harness: Harness = {
+        guard let url = Bundle.module.url(
+            forResource: "harness",
+            withExtension: "json",
+            subdirectory: "Resources"
+        ) else {
+            fatalError(
+                """
+                Resources/harness.json is not in the test bundle. It is declared in \
+                Package.swift as `.copy("Resources")`; if that declaration is gone, so is \
+                every invite token and the relay address with it.
+                """
+            )
+        }
+        do {
+            return try JSONDecoder().decode(Harness.self, from: Data(contentsOf: url))
+        } catch {
+            fatalError("Resources/harness.json is in the bundle and does not parse: \(error)")
+        }
+    }()
 
     /// A plain TCP connect before the protocol is asked to do anything.
     ///
@@ -123,6 +159,12 @@ enum Suite {
     }
 }
 
+/// `Resources/harness.json`, as the job writes it.
+private struct Harness: Decodable {
+    let relayURL: String
+    let invites: [String]
+}
+
 /// The run's invite tokens.
 ///
 /// A class with a lock rather than a `static var`: the suite is one process,
@@ -135,9 +177,8 @@ private final class Invites: @unchecked Sendable {
     private var remaining: [String]
     private var taken = 0
 
-    init(_ list: String) {
-        remaining = list
-            .split(separator: ",")
+    init(_ tokens: [String]) {
+        remaining = tokens
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
     }
@@ -258,22 +299,41 @@ enum SuiteFailure: Error {
     case timedOut(String)
 }
 
-/// A database file this test owns, inside the app container the shipped app
-/// uses.
+/// A directory this test's database has to itself, inside the app container the
+/// shipped app uses.
 ///
 /// `AppContainer.databaseDirectory()` and not a temporary directory, because
 /// that call is itself part of what these tests cover: it is where the backup
 /// exclusion and the file-protection class are applied, and a suite that wrote
 /// somewhere else would prove the facade over a directory the app never uses.
 ///
-/// The three files are deleted first — SQLite's `-wal` and `-shm` outlive a
-/// process that did not close cleanly, and a test that starts from nothing means
-/// all three.
+/// **A directory per test, removed whole.** The first version deleted three
+/// named files — the database and SQLite's `-wal` and `-shm` — and the two
+/// sidecars exist only while a connection is open in WAL mode, so on every run
+/// where the facade had closed cleanly the removal was of something that was not
+/// there. Removing a directory that may not exist is one `try?` instead of
+/// three, and it takes with it whatever SQLite invented that this list did not
+/// know about. Set-up must not be able to fail a test that would have passed.
+///
+/// It also ends a hazard that had nothing to do with the sidecars: every test
+/// was writing into one directory, so a name collision between two classes was
+/// a shared database and a test order nobody had chosen.
 func freshDatabase(named name: String) throws -> URL {
     let directory = try AppContainer.databaseDirectory()
-    for suffix in ["", "-wal", "-shm"] {
-        try? FileManager.default.removeItem(at: directory.appendingPathComponent(name + suffix))
-    }
+        .appendingPathComponent(name, isDirectory: true)
+    try? FileManager.default.removeItem(at: directory)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    return directory
+}
+
+/// The same directory, without emptying it.
+///
+/// For the one test that has to write a Settings row through a facade of its
+/// own before the phone opens over the same file.
+func existingDatabase(named name: String) throws -> URL {
+    let directory = try AppContainer.databaseDirectory()
+        .appendingPathComponent(name, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory
 }
 

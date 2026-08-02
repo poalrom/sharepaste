@@ -42,16 +42,29 @@ final class PendingOnANonActivePairingTest: XCTestCase {
         try await phone.makeActive(queued)
     }
 
+    /// Teardown runs after a set-up that threw, so nothing here may assume
+    /// set-up finished.
+    ///
+    /// It did not, once: the invite claim failed, `movedTo` was still nil, and
+    /// unwrapping it trapped — which takes the process down and makes
+    /// `xcodebuild` relaunch the bundle and re-run what had not finished. That
+    /// is the same amplification the invite pool had, arriving by a different
+    /// door: one red test became a crash, a relaunch, and a report naming a
+    /// signal.
     override func tearDown() async throws {
         // The Pairing made through the proxy is deliberately **not** forgotten:
         // forgetting reaches the relay, the relay is behind a port this test has
         // just closed, and a teardown that hung for a timeout would charge every
         // run for the tidiness. The relay's database is a CI artefact that goes
         // with the runner.
-        try? await phone.repo.stopAllSessions()
-        try? await phone.repo.forgetPairing(userId: movedTo)
+        if let phone {
+            try? await phone.repo.stopAllSessions()
+            if let movedTo {
+                try? await phone.repo.forgetPairing(userId: movedTo)
+            }
+        }
         phone = nil
-        proxy.close()
+        proxy?.close()
         proxy = nil
     }
 
