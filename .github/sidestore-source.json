@@ -1,0 +1,40 @@
+{
+  "_comment": {
+    "what": "The SideStore source for the iOS client. Paste https://github.com/poalrom/sharepaste/releases/latest/download/sidestore-source.json into SideStore's Sources tab; that URL always redirects to the newest published Release, so the source keeps working without being re-added.",
+    "why it lives in .github": "It is release machinery, beside release-body-header.md and scripts/build-latest-json.mjs. Nobody types this path: `publish` uploads the file to the Release under the plain name sidestore-source.json, and that is the copy SideStore reads.",
+    "bundleIdentifier": "PLACEHOLDER, and the ticket that owns this file does not close until it is replaced. The identifier below must be the one actually installed on the device, which is NOT com.sharepaste.ios: xtool prefixes its team (XTL-1234.com.sharepaste.ios) and SideStore applies its own scheme. Read it off the device with `ideviceinstaller -l` after SideStore has installed the app once, and commit that value. Get it wrong and SideStore does not offer an update; it offers a fresh install, which lands beside the real app with an empty database while the Pairings sit in the old one.",
+    "why no pipeline check": "Comparing this identifier against Info.plist was considered and rejected. The plist holds com.sharepaste.ios and the device holds the rewritten form, so such a check would go green while the real path was broken — it would test that two strings nobody installs agree with each other. What is checked in CI instead is `version` and both downloadURLs against the Release being published, in the `publish` job; the identifier is proved by watching a real v1 to v2 update land in place with the Pairing intact.",
+    "two downloadURLs": "ADR 0008 §100-103: SideStore needs the app-level downloadURL/version/size as well as the ones inside versions[]. A file carrying only versions[] is accepted by AltStore and rejected by SideStore.",
+    "size": "Bytes of the .ipa, used for the download progress display only. Left at 0 because the value is not known until the artifact is built, and a wrong one costs a progress bar rather than an install."
+  },
+  "name": "Sharepaste",
+  "identifier": "com.sharepaste.source",
+  "sourceURL": "https://github.com/poalrom/sharepaste/releases/latest/download/sidestore-source.json",
+  "apps": [
+    {
+      "name": "Sharepaste",
+      "bundleIdentifier": "REPLACE-WITH-THE-INSTALLED-IDENTIFIER.com.sharepaste.ios",
+      "developerName": "poalrom",
+      "subtitle": "End-to-end encrypted clipboard sync with your own machines.",
+      "localizedDescription": "Self-hosted, end-to-end encrypted clipboard sync between a person's own machines. A Relay you run yourself stores and fans out ciphertext it can never read; this phone decrypts locally with a key the relay never sees.\n\nSync is foreground-only: nothing runs while the app is closed. Two Shortcuts actions — Offer and Recall Latest — are the way to use it without opening it.\n\nUnsigned, and signed on your own device by a free Apple Personal Team, which means the installation expires every seven days and SideStore refreshes it.",
+      "iconURL": "https://raw.githubusercontent.com/poalrom/sharepaste/main/clients/mobile/ios/Resources/AppIcon.png",
+      "tintColor": "35E6F6",
+      "screenshotURLs": [],
+      "version": "0.5.0",
+      "versionDate": "2026-08-02T00:00:00Z",
+      "versionDescription": "The first iOS release. Pair with a short code, see the History, Offer and Recall, and drive both verbs from Shortcuts.",
+      "downloadURL": "https://github.com/poalrom/sharepaste/releases/download/v0.5.0/sharepaste-0.5.0.ipa",
+      "size": 0,
+      "versions": [
+        {
+          "version": "0.5.0",
+          "date": "2026-08-02T00:00:00Z",
+          "localizedDescription": "The first iOS release. Pair with a short code, see the History, Offer and Recall, and drive both verbs from Shortcuts.",
+          "downloadURL": "https://github.com/poalrom/sharepaste/releases/download/v0.5.0/sharepaste-0.5.0.ipa",
+          "size": 0,
+          "minOSVersion": "16.0"
+        }
+      ]
+    }
+  ]
+}

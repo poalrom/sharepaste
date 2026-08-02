@@ -19,6 +19,7 @@ const DESKTOP = ["clients", "desktop"];
 const CORE = ["clients", "core"];
 const FFI = ["clients", "mobile", "ffi"];
 const ANDROID = ["clients", "mobile", "android", "app", "build.gradle.kts"];
+const IOS = ["clients", "mobile", "ios", "Info.plist"];
 
 /**
  * The `version` of the `[package]` table.
@@ -55,6 +56,37 @@ function gradleVersionName(kts) {
   const matches = [...kts.matchAll(/^\s*versionName\s*=\s*"([^"]+)"/gm)];
   if (matches.length !== 1) return null;
   return matches[0][1];
+}
+
+/**
+ * The iOS `CFBundleShortVersionString`, read out of the hand-written plist.
+ *
+ * A regex rather than a plist parser, and the same shape as
+ * [gradleVersionName] above for the same reasons: the file is edited by hand,
+ * and a gate that needed `npm install` before it could decide whether to
+ * publish is a gate that fails for a new reason.
+ *
+ * A plist is `<key>` followed by its value element, so the key and the string
+ * after it are matched as one pattern — searching for a bare `<string>` would
+ * find whichever happened to come first, and `CFBundleVersion` sits directly
+ * beneath this one carrying the same number today and not necessarily
+ * tomorrow. Two matches is as fatal as none, again for the Gradle reason: a
+ * second declaration means the value this gate reads is a coin toss.
+ *
+ * ADR 0008 originally promised the Xcode `MARKETING_VERSION`. There is no
+ * Xcode project — ledger row 3 — and the plist is strictly better than one
+ * would have been: it is the literal string SideStore compares one release
+ * against the next, so this checks the thing that actually breaks rather than
+ * something an indirection away from it.
+ */
+function plistShortVersionString(xml) {
+  const matches = [
+    ...xml.matchAll(
+      /<key>\s*CFBundleShortVersionString\s*<\/key>\s*<string>([^<]+)<\/string>/g,
+    ),
+  ];
+  if (matches.length !== 1) return null;
+  return matches[0][1].trim();
 }
 
 /**
@@ -98,6 +130,12 @@ function collectVersions(root) {
     // The Android artifact's own version, and the one a phone shows in Settings
     // and Obtainium compares against a release tag.
     "clients/mobile/android/app/build.gradle.kts": gradleVersionName(read(...ANDROID)),
+    // The iOS artifact's own version. It is the one SideStore compares against
+    // the `version` in the source JSON, case-sensitively, and a disagreement
+    // there is not a cosmetic one: SideStore stops offering an update and
+    // offers a fresh install instead, which lands beside the real app with an
+    // empty database while the Pairings sit in the old one.
+    "clients/mobile/ios/Info.plist": plistShortVersionString(read(...IOS)),
   };
 }
 

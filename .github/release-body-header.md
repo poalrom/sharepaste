@@ -1,6 +1,6 @@
-Desktop app for macOS (Apple Silicon) and Windows (x64), and an Android app as
-one universal `.apk`. The relay is not released as a binary — operators build it
-from `docker compose`.
+Desktop app for macOS (Apple Silicon) and Windows (x64), an Android app as one
+universal `.apk`, and an iOS app as an unsigned `.ipa`. The relay is not released
+as a binary — operators build it from `docker compose`.
 
 **These bundles are not signed or notarized.** macOS quarantines anything a
 browser downloaded, so a fresh install needs one command before it will launch:
@@ -49,5 +49,31 @@ them by hand.
 
 Downloading the APK from this page and tapping it works too — you just have to
 come back here yourself for the next version.
+
+## iOS — `sharepaste-<version>.ipa`
+
+iPhone and iPad, iOS 16 or later. The `.ipa` is **unsigned**, and tapping it here
+installs nothing: there is no Apple Developer Program membership behind this
+project, so the app is signed on the device itself by a free Apple Personal Team.
+That is what makes the next sentence true, and it is Apple's limit on free
+signing rather than a defect: **the app stops launching after seven days unless
+something re-signs it.**
+
+[SideStore](https://sidestore.io) is what re-signs it, on the phone and without a
+computer, and it is also what installs updates from this page. Add one source to
+it:
+
+```
+https://github.com/poalrom/sharepaste/releases/latest/download/sidestore-source.json
+```
+
+That URL always resolves to the newest Release, so it keeps working without being
+re-added. Getting SideStore itself onto the phone needs a computer once, plus the
+pairing file and on-device helper that are its own setup
+(<https://docs.sidestore.io>). Like the APK, **the app contains no update code and
+never contacts this page** — SideStore does — and its only network counterparty is
+your relay. Two shortcuts have to be assembled by hand in the Shortcuts app before
+the Standing Actions do anything; the app's Settings Screen says which two. See
+[ADR 0008](https://github.com/poalrom/sharepaste/blob/main/docs/adr/0008-sideloaded-and-not-self-updating.md).
 
 ---

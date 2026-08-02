@@ -65,5 +65,20 @@ let package = Package(
         ),
         .target(name: "SharepasteKit", dependencies: ["SharepasteCore"]),
         .target(name: "Sharepaste", dependencies: ["SharepasteKit"]),
+        // The only automated defence this client has (spec row 10), and it
+        // depends on `SharepasteKit` alone. Not on `Sharepaste`: everything in
+        // that target is a screen or an intent, the ~11 classes ported here are
+        // the ones that exercise the facade rather than the UI, and a test
+        // target that could reach a `View` is a test target somebody will
+        // eventually put a snapshot assertion in.
+        //
+        // It runs on a simulator under `xcodebuild test`, never on the device
+        // and never from `swift test`: an XCTest bundle needs a host to be
+        // installed into, and SwiftPM has no way to do that on this platform.
+        .testTarget(
+            name: "SharepasteFacadeTests",
+            dependencies: ["SharepasteKit"],
+            path: "Tests/SharepasteFacadeTests"
+        ),
     ]
 )

@@ -13,12 +13,14 @@ on:
       - .github/workflows/desktop-build.yml
       - .github/scripts/**
       - .github/release-body-header.md
+      - .github/sidestore-source.json
   pull_request:
     paths:
       - clients/**
       - .github/workflows/desktop-build.yml
       - .github/scripts/**
       - .github/release-body-header.md
+      - .github/sidestore-source.json
   workflow_dispatch:
 
 permissions:
@@ -71,6 +73,17 @@ jobs:
         id: versions
         if: github.event_name == 'push'
         run: node .github/scripts/check-versions.mjs .
+
+      # On every event, unlike the version check above, and the difference is
+      # not an oversight. A changelog that has not been bumped yet is not a
+      # broken release, it is a pull request; three FUI palettes that disagree
+      # are a bug on whichever client is wrong, and the moment to say so is
+      # while somebody is looking at the diff that caused it.
+      #
+      # Colours only. The script's own failure output says what that leaves
+      # uncovered, because that is where the claim will be read.
+      - name: Check the FUI palettes agree
+        run: node .github/scripts/check-tokens.mjs .
 
       - name: Decide
         id: decide
@@ -564,6 +577,391 @@ jobs:
           path: android-artifact/*.apk
           if-no-files-found: error
 
+  # The iOS guards, and the only job that compiles Swift.
+  #
+  # It is `android-guards`' opposite number in intent and nothing like it in
+  # shape, because the two platforms give away different things for free.
+  # Android's instrumented suite cannot run in CI at all — an emulator on a
+  # Linux runner is the flakiest thing available — so that job compiles the
+  # instrumented sources and runs the JVM tests. Here the simulator *is* the
+  # runner's own machine, and the relay is a Node process beside it, so the
+  # dozen facade classes spec row 10 buys actually execute.
+  #
+  # macOS on purpose, and expensively: cross-compiling `rusqlite`'s vendored C
+  # SQLite for an Apple target needs Apple's own clang and sysroot, and the
+  # simulator needs a Mac by definition.
+  #
+  # `xcodebuild` appears here and nowhere else. Ticket 01 forbade it for the
+  # *artifact shape* — no `.xcodeproj`, no xcframework, nothing generated that
+  # the two build paths would then have to agree about — and this is neither:
+  # the package is still built by SwiftPM from the one committed manifest.
+  # There is simply no supported way to install and run an XCTest bundle on a
+  # simulator from SwiftPM alone; `swift test` builds for the host.
+  ios-facade-tests:
+    name: iOS facade tests (simulator)
+    runs-on: macos-latest
+    # The tests are minutes, but `ExpiredCodeTest` waits out a real 120-second
+    # pairing slot and the Rust cross-compile is two targets from cold.
+    timeout-minutes: 45
+
+    env:
+      SHAREPASTE_TEST_DB: ${{ github.workspace }}/ios-ci-server.sqlite
+      # The simulator shares the host's network stack, so the host's loopback
+      # is the loopback. There is no emulator alias to special-case, which is
+      # the one place this arrangement is simpler than Android's.
+      SHAREPASTE_RELAY_URL: http://127.0.0.1:8443
+      # Pinned, not floated. `actions/runner-images#13853` shows simulator
+      # runtimes occasionally lagging a new Xcode by weeks, and a job that
+      # silently stops running is worse than one that fails. When this stops
+      # matching the image, bump it here deliberately.
+      IOS_RUNTIME: "26.5"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 25
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Both slices from one job: the simulator one is linked into the
+          # tests below, and the device one is what `xtool dev` links on the
+          # desk and what `build-ios` ships. They are built together because
+          # the bindings are generated once and have to match both.
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      # Three minutes of vendored SQLite per run, twice over, is worth a cache.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients
+
+      - name: Build the static library for both slices
+        env:
+          # Without this rustc takes the deployment target from the SDK, which
+          # stamped `minos 26.5` on the device slice during the spike — an app
+          # nothing in anyone's hands could run. The floor is iOS 16, carried
+          # from the mobile-client ledger, and it has to be said out loud.
+          IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        run: |
+          set -euo pipefail
+          for target in aarch64-apple-ios aarch64-apple-ios-sim; do
+            cargo build \
+              --manifest-path clients/Cargo.toml \
+              -p sharepaste-ffi \
+              --release \
+              --features testing \
+              --target "$target"
+          done
+
+      # From the *built archive*, never from the sources, which is what makes a
+      # bindings/library mismatch impossible. The Android build follows the same
+      # rule with `generateUniffiBindingsDebug`.
+      - name: Generate the Swift bindings from the built archive
+        # `cargo metadata` resolves against the working directory and the
+        # workspace is `clients/`, not the repository root. The Android build
+        # says the same thing as `workingDir = rustWorkspace`.
+        working-directory: clients
+        run: |
+          set -euo pipefail
+          mkdir -p ../ios-artifact/generated
+          cargo run \
+            --quiet \
+            -p sharepaste-ffi --features cli --bin uniffi-bindgen \
+            -- generate --language swift --no-format \
+            --out-dir ../ios-artifact/generated \
+            target/aarch64-apple-ios-sim/release/libsharepaste_ffi.a
+
+      # Uploaded before the tests run rather than after them. The desk fetches
+      # this artifact with `make ios-vendor` and a failing test must still leave
+      # something to build against — otherwise the one way to reproduce the
+      # failure locally is the thing the failure takes away.
+      - name: Publish both slices and the bindings
+        run: |
+          set -euo pipefail
+          mkdir -p ios-artifact/device ios-artifact/simulator
+          cp clients/target/aarch64-apple-ios/release/libsharepaste_ffi.a ios-artifact/device/
+          cp clients/target/aarch64-apple-ios-sim/release/libsharepaste_ffi.a ios-artifact/simulator/
+          ls -l ios-artifact/device ios-artifact/simulator ios-artifact/generated
+
+      - name: Upload the iOS static library
+        uses: actions/upload-artifact@v7
+        with:
+          # The batch contract, and the layout `make ios-vendor` copies from.
+          # Not prefixed `sharepaste-`: `publish` downloads that pattern, and a
+          # 40 MB archive of build inputs is not a release asset.
+          name: ios-static-library
+          path: |
+            ios-artifact/device/libsharepaste_ffi.a
+            ios-artifact/simulator/libsharepaste_ffi.a
+            ios-artifact/generated/
+          if-no-files-found: error
+
+      # What `make ios-vendor IOS_SLICE=simulator` does, without the round trip
+      # through the artifact store. `Package.swift` knows nothing about which
+      # slice it got — that is the entire mechanism spec row 6 buys, and it is
+      # why no xcframework is needed to test on a simulator and ship to a device
+      # from one manifest.
+      - name: Vendor the simulator slice into the package
+        run: |
+          set -euo pipefail
+          ios=clients/mobile/ios
+          mkdir -p "$ios/Vendor" "$ios/Sources/sharepaste_ffiFFI" "$ios/Sources/SharepasteCore"
+          cp ios-artifact/simulator/libsharepaste_ffi.a "$ios/Vendor/"
+          cp ios-artifact/generated/sharepaste_ffi.swift "$ios/Sources/SharepasteCore/"
+          cp ios-artifact/generated/sharepaste_ffiFFI.h "$ios/Sources/sharepaste_ffiFFI/"
+          cp ios-artifact/generated/sharepaste_ffiFFI.modulemap \
+            "$ios/Sources/sharepaste_ffiFFI/module.modulemap"
+
+      # Natively, not in docker: macOS runners cannot run Linux containers,
+      # which the `integration` job below already records as the reason it is
+      # shaped the way it is. `server/` is Node, so the runner starts it
+      # directly.
+      - name: Build the relay
+        run: npm --prefix server ci && npm --prefix server run build
+
+      - name: Start the relay
+        run: |
+          DB_PATH="$SHAREPASTE_TEST_DB" PORT=8443 \
+            node server/dist/index.js serve > "$RUNNER_TEMP/server.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/server.pid"
+
+      - name: Wait for the relay to become healthy
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$SHAREPASTE_RELAY_URL/healthz" >/dev/null 2>&1; then
+              echo "relay healthy after ${attempt}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the relay never answered /healthz within 60s" >&2
+          exit 1
+
+      - name: Mint one invite per claiming test
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Four, and no spare. An invite is single-use — the relay answers a
+          # second claim with 409 — and the four tests that claim one are named
+          # here so that adding a fifth fails loudly, with the message in
+          # `Suite.nextInvite`, rather than stealing another test's token:
+          #
+          #   1. the run's one inviting device        (`Inviter.shared`)
+          #   2. the second User, for TwoPairingsTest (`Inviter.second`)
+          #   3. SessionEventsTest, which pairs a facade of its own
+          #   4. PendingOnANonActivePairingTest, whose inviter sits behind the
+          #      proxy so that the phone's Pairing has a relay it can take away
+          tokens=""
+          for n in 1 2 3 4; do
+            token="$(node server/dist/index.js user create "ios-ci-$n" --db "$SHAREPASTE_TEST_DB" \
+              | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).invite_token")"
+            tokens="${tokens:+$tokens,}$token"
+          done
+          echo "SHAREPASTE_INVITES=$tokens" >> "$GITHUB_ENV"
+
+      # The runtime is pinned; the device model is not, because the model is
+      # cosmetic and the runtime is what disappears. Picking from the runtime's
+      # own `supportedDeviceTypes` is what keeps the two from contradicting each
+      # other after an image bump.
+      - name: Boot a simulator on the pinned runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun simctl list runtimes
+          # Both halves come out of the same JSON: reconstructing the runtime
+          # identifier from the version string would be a second opinion about
+          # Apple's naming, and the newest iPhone the runtime itself declares
+          # support for cannot contradict it.
+          read -r device_type runtime_id < <(xcrun simctl list runtimes -j | python3 -c '
+          import json, sys, os
+          wanted = os.environ["IOS_RUNTIME"]
+          runtimes = json.load(sys.stdin)["runtimes"]
+          available = [
+              r for r in runtimes
+              if r["platform"] == "iOS" and r["version"] == wanted and r["isAvailable"]
+          ]
+          phones = [
+              d for r in available for d in r["supportedDeviceTypes"] if "iPhone" in d["identifier"]
+          ]
+          if not available or not phones:
+              have = ", ".join(sorted(r["version"] for r in runtimes if r["platform"] == "iOS"))
+              sys.exit(
+                  f"no usable iOS {wanted} simulator runtime on this image (it has: {have}).\n"
+                  "The pin is IOS_RUNTIME in this job. Runtimes lag a new Xcode "
+                  "(actions/runner-images#13853), so bump it deliberately rather than floating it."
+              )
+          print(phones[-1]["identifier"], available[0]["identifier"])
+          ')
+          echo "booting $device_type on $runtime_id"
+          udid="$(xcrun simctl create sharepaste-tests "$device_type" "$runtime_id")"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          echo "SIMULATOR_UDID=$udid" >> "$GITHUB_ENV"
+
+      # `TEST_RUNNER_`-prefixed build settings are how xcodebuild puts a value
+      # into the test process's environment, and the only route there is: the
+      # environment normally comes from a scheme, and this repository has no
+      # `.xcodeproj` to hold one. The prefix is stripped on the way in, so the
+      # suite reads `SHAREPASTE_RELAY_URL` and `SHAREPASTE_INVITES`.
+      #
+      # `ARCHS=arm64`, because `Vendor/` holds exactly one slice and it is the
+      # arm64 simulator one. On an Intel runner this fails at the link with
+      # undefined symbols rather than building something that cannot run.
+      - name: Run the facade tests
+        working-directory: clients/mobile/ios
+        shell: bash
+        run: |
+          set -euo pipefail
+          scheme="$(xcodebuild -list -json | python3 -c '
+          import json, sys
+          listing = json.load(sys.stdin)
+          schemes = (listing.get("workspace") or listing.get("project"))["schemes"]
+          print(next((s for s in schemes if s.endswith("-Package")), schemes[0]))
+          ')"
+          echo "scheme: $scheme"
+          xcodebuild test \
+            -scheme "$scheme" \
+            -destination "id=$SIMULATOR_UDID" \
+            -only-testing:SharepasteFacadeTests \
+            -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \
+            ARCHS=arm64 \
+            CODE_SIGNING_ALLOWED=NO \
+            TEST_RUNNER_SHAREPASTE_RELAY_URL="$SHAREPASTE_RELAY_URL" \
+            TEST_RUNNER_SHAREPASTE_INVITES="$SHAREPASTE_INVITES"
+
+      # The console prints the failing assertion and none of its context, and
+      # for a suite talking to a live relay the context is most of the finding.
+      # `warn`, not `error`: a failure in the Swift compile produces no result
+      # bundle at all, and that must not be reported as a missing artifact.
+      - name: Upload the test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-facade-test-results
+          path: ${{ runner.temp }}/ios-tests.xcresult
+          if-no-files-found: warn
+
+      - name: Dump the relay log on failure
+        if: failure()
+        run: cat "$RUNNER_TEMP/server.log" || true
+
+  # The iOS artifact: one unsigned `.ipa`, built by the same tool the desk uses
+  # so that CI and the local loop cannot drift apart.
+  #
+  # **No signing happens here, and none can.** It is interactive because of
+  # Apple's 2FA, and a free account has no App Store Connect API key (ADR 0008).
+  # `xtool dev build` signs nothing unless a product declares entitlements, and
+  # none does.
+  #
+  # `needs: ios-facade-tests`, which is the opposite of what `build-android`
+  # does, and the reason is the artifact rather than the guard: that job already
+  # publishes the device slice and the bindings under the batch contract, so
+  # this one consumes them exactly as `make ios-vendor` does on the desk. A
+  # second cross-compile here would produce a *different* archive from the one
+  # the tests linked, for nine more minutes of macOS time.
+  build-ios:
+    name: Build iOS IPA
+    runs-on: macos-latest
+    needs: ios-facade-tests
+    # Same reasoning as `build` and `build-android`: an artifact nobody consumes
+    # from a pull request.
+    if: github.event_name != 'pull_request'
+
+    env:
+      # Pinned, and installed from the release rather than from the Homebrew
+      # cask: the cask is `version :latest` and cannot be pinned at all, and
+      # this tool decides the shape of the artifact that ships.
+      XTOOL_VERSION: "1.17.0"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 25
+
+      - name: Download the iOS static library
+        uses: actions/download-artifact@v7
+        with:
+          name: ios-static-library
+          path: ios-artifact
+
+      # `make ios-vendor` without the `gh run download`, and with the *device*
+      # slice: this is what goes on the iPad. The manifest is unconditional and
+      # links whatever is at this path, which is the whole reason there is no
+      # xcframework anywhere in this repository.
+      - name: Vendor the device slice into the package
+        run: |
+          set -euo pipefail
+          ios=clients/mobile/ios
+          mkdir -p "$ios/Vendor" "$ios/Sources/sharepaste_ffiFFI" "$ios/Sources/SharepasteCore"
+          cp ios-artifact/device/libsharepaste_ffi.a "$ios/Vendor/"
+          cp ios-artifact/generated/sharepaste_ffi.swift "$ios/Sources/SharepasteCore/"
+          cp ios-artifact/generated/sharepaste_ffiFFI.h "$ios/Sources/sharepaste_ffiFFI/"
+          cp ios-artifact/generated/sharepaste_ffiFFI.modulemap \
+            "$ios/Sources/sharepaste_ffiFFI/module.modulemap"
+
+      # The binary lives inside the app bundle, at the path the cask symlinks:
+      # `xtool.app/Contents/Resources/bin/xtool`.
+      - name: Install xtool
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/xtool.app.zip" \
+            "https://github.com/xtool-org/xtool/releases/download/$XTOOL_VERSION/xtool.app.zip"
+          unzip -q "$RUNNER_TEMP/xtool.app.zip" -d "$RUNNER_TEMP/xtool"
+          echo "$RUNNER_TEMP/xtool/xtool.app/Contents/Resources/bin" >> "$GITHUB_PATH"
+
+      - name: Show what will build it
+        run: |
+          xtool --version || true
+          swift --version
+          xcrun -sdk iphoneos --show-sdk-path
+
+      # `--ipa` is xtool's own packaging: the `.app` under `Payload/`, zipped.
+      # Hand-rolling that zip was considered and is strictly worse — it is the
+      # same bytes with a second opinion about the layout, and the second
+      # opinion is the one nobody tests.
+      - name: Build the unsigned IPA
+        working-directory: clients/mobile/ios
+        run: xtool dev build --configuration release --ipa
+
+      # `Sharepaste.ipa` is not a name to put on a Release page beside five
+      # desktop bundles and an APK. The version comes from `tauri.conf.json` —
+      # the authority `check-versions.mjs` has already proved the plist's
+      # `CFBundleShortVersionString` agrees with — so this cannot name the `.ipa`
+      # a version it is not, and SideStore compares that string exactly.
+      - name: Name the artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./clients/desktop/src-tauri/tauri.conf.json').version")"
+          shopt -s globstar nullglob
+          built=(clients/mobile/ios/**/*.ipa)
+          if [ "${#built[@]}" -ne 1 ]; then
+            printf 'expected exactly one .ipa, found %d: %s\n' "${#built[@]}" "${built[*]:-none}" >&2
+            exit 1
+          fi
+          mkdir -p ios-release
+          cp "${built[0]}" "ios-release/sharepaste-$version.ipa"
+          unzip -l "ios-release/sharepaste-$version.ipa" | head -20
+
+      - name: Upload the iOS artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sharepaste-ios
+          path: ios-release/*.ipa
+          if-no-files-found: error
+
   # Opt-in: the live-server tests need a relay to talk to, so they run on
   # workflow_dispatch and on pushes that touch the client's HTTP or pairing
   # code. A release commit runs them whatever it touched, because `publish`
@@ -694,11 +1092,15 @@ jobs:
   #
   # `android-guards` is in that list rather than in `build-android`'s: it runs
   # concurrently with every other dependency here, so it refuses the release
-  # without adding a minute to the path that produces it.
+  # without adding a minute to the path that produces it. `ios-facade-tests` is
+  # in it for the same reason and one more: `build-ios` already needs that job
+  # for its artifact, so naming it here changes no timing at all and states the
+  # gate where the gate is read.
   publish:
     name: Publish v${{ needs.release-gate.outputs.version }}
     runs-on: ubuntu-latest
-    needs: [release-gate, build, build-android, android-guards, integration]
+    needs:
+      [release-gate, build, build-android, android-guards, build-ios, ios-facade-tests, integration]
     if: needs.release-gate.outputs.publish == 'true'
 
     # Scoped to this job alone; the workflow default stays `contents: read`.
@@ -742,6 +1144,50 @@ jobs:
             --artifacts artifacts \
             --out latest.json
 
+      # The SideStore source is committed and hand-edited, so the one thing a
+      # pipeline *can* check about it is checked here: that it names the release
+      # being published rather than the one before it. SideStore compares
+      # `version` against `CFBundleShortVersionString` case-sensitively, and a
+      # source still pointing at the previous tag offers an update that installs
+      # the old build over the new one.
+      #
+      # This is **not** the bundle-identifier check ADR 0008 rejected. That one
+      # would compare the identifier in this file against `Info.plist`, and both
+      # sides of that comparison are strings nobody installs: the plist holds
+      # `com.sharepaste.ios` and the device holds the form xtool and SideStore
+      # rewrote it into, so the check would go green while the update path was
+      # broken. The identifier is proved by watching an update land, and by
+      # nothing else.
+      - name: Check the SideStore source names this release
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const version = process.env.VERSION;
+            const expected =
+              `https://github.com/${process.env.REPO}/releases/download/v${version}/sharepaste-${version}.ipa`;
+            const app = JSON.parse(fs.readFileSync(".github/sidestore-source.json", "utf8")).apps[0];
+            const newest = app.versions[0];
+            const wrong = Object.entries({
+              "apps[0].version": [app.version, version],
+              "apps[0].versions[0].version": [newest.version, version],
+              "apps[0].downloadURL": [app.downloadURL, expected],
+              "apps[0].versions[0].downloadURL": [newest.downloadURL, expected],
+            }).filter(([, [was, wanted]]) => was !== wanted);
+            if (wrong.length === 0) process.exit(0);
+            console.error(".github/sidestore-source.json does not name this release:");
+            for (const [field, [was, wanted]] of wrong) {
+              console.error(`  ${field}\n    is     ${was}\n    should ${wanted}`);
+            }
+            console.error("");
+            console.error("Both downloadURLs and both versions are load-bearing: SideStore reads the");
+            console.error("app-level pair and AltStore reads versions[]. Edit the file and re-run.");
+            process.exit(1);
+          '
+        env:
+          REPO: ${{ github.repository }}
+
       # Draft first. `releases/latest/download/latest.json` is polled
       # continuously by every device, so a manifest that becomes reachable
       # before the bundles it names is a manifest pointing at 404s.
@@ -765,14 +1211,20 @@ jobs:
           # and this is the only step that would notice. It has already earned
           # its keep once, on exactly that mistake.
           #
-          # `*.apk` is the Android artifact, and it belongs in this list rather
-          # than in a separate `gh release upload` beside it: a phone missing
-          # from a Release that names it is the same failure as a missing
-          # desktop bundle, and routing around the check is how it would stop
-          # being caught.
+          # `*.apk` and `*.ipa` are the two phones, and they belong in this list
+          # rather than in a separate `gh release upload` beside it: a phone
+          # missing from a Release that names it is the same failure as a
+          # missing desktop bundle, and routing around the check is how it would
+          # stop being caught.
+          #
+          # `latest.json` is *not* in the list and is uploaded below unchecked,
+          # because it is written by this job rather than downloaded. It names
+          # two platform keys and neither is a phone: the desktop updater is the
+          # only thing that reads it, and Obtainium and SideStore read the
+          # Release itself.
           assets=()
           for pattern in '*.dmg' '*.app.tar.gz' '*.app.tar.gz.sig' \
-                         '*.exe' '*.exe.sig' '*.apk'; do
+                         '*.exe' '*.exe.sig' '*.apk' '*.ipa'; do
             # shellcheck disable=SC2206 # $pattern is a glob; expanding it is the point.
             matches=(artifacts/**/$pattern)
             if [ "${#matches[@]}" -ne 1 ]; then
@@ -781,7 +1233,12 @@ jobs:
             fi
             assets+=("${matches[0]}")
           done
-          gh release upload "v$VERSION" latest.json "${assets[@]}"
+          # The SideStore source travels with the Release rather than being read
+          # off `raw.githubusercontent.com`, so that the URL a person pastes into
+          # SideStore once —
+          # `releases/latest/download/sidestore-source.json` — keeps resolving to
+          # the newest published version without them re-adding it.
+          gh release upload "v$VERSION" latest.json .github/sidestore-source.json "${assets[@]}"
 
       # Not a prerelease, even at 0.x: the `releases/latest/download` redirect
       # resolves only to non-draft, non-prerelease releases, so flagging 0.x
