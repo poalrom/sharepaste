@@ -109,6 +109,7 @@ class BackNavigationTest {
             SharepasteApp(
                 state = shown.value,
                 actions = noActions(
+                    setFilter = { shown.value = shown.value.copy(filter = it) },
                     openPairings = { shown.value = shown.value.copy(screen = Screen.Pairings) },
                     openHistory = { shown.value = shown.value.copy(screen = Screen.History) },
                 ),
@@ -393,6 +394,45 @@ class BackNavigationTest {
             shown.value.screen,
         )
         Evidence.log("back/History  = unhandled, activity finishing, screen unchanged")
+    }
+
+    /**
+     * A Filter is the one thing on the History that back may take back.
+     *
+     * The gesture answers with what the band's own `✕` does, which is the rule
+     * every other screen here follows: the two ways out of a state must not
+     * drift apart. Only while there is one to clear — with an empty field this
+     * is still the root and the test above still holds, which is what makes the
+     * pair worth having. A handler that were unconditional would strand the
+     * person in an app they cannot leave.
+     *
+     * The Activity staying alive is half the assertion. "The filter is empty"
+     * on its own would also be true of a handler that cleared it *and* let the
+     * press through.
+     */
+    @Test
+    fun back_on_the_history_clears_a_filter_before_it_exits() {
+        open(
+            UiState(
+                screen = Screen.History,
+                pairings = listOf(holder),
+                activeUserId = holder.userId,
+                foreground = true,
+                filter = "ssh",
+            ),
+        )
+        compose.onNodeWithTag(TAG_HISTORY_LIST).assertIsDisplayed()
+
+        pressBack()
+
+        compose.waitForIdle()
+        assertEquals("back has to empty the Filter, which is what the ✕ does", "", shown.value.filter)
+        assertFalse("a Filter was cleared, so the press may not also leave the app", activity.isFinishing)
+
+        // And with nothing left to clear it is the root again.
+        pressBack()
+        assertTrue("back on an unfiltered History has to leave the app", awaitFinishing())
+        Evidence.log("back/filter   = the first press emptied \"ssh\", the second left the app")
     }
 
     private companion object {

@@ -59,7 +59,7 @@ beforeEach(() => {
   useHistoryStore.setState({ entries: [] });
   useStatusStore.setState({ byUser: {} });
   useContactStore.setState({ lastContactByUser: {} });
-  useUiStore.setState({ search: "", selectedIndex: 0, mainSection: "history" });
+  useUiStore.setState({ filter: "", selectedIndex: 0, mainSection: "history" });
   useUiStore.getState().dismissToast();
 });
 
@@ -182,9 +182,9 @@ describe("Popover event subscriptions", () => {
   // once per window lifetime. Reopening used to leave focus on whatever was
   // last clicked - and because HistoryList ignores keydown while a button holds
   // focus, that made the reopened popover keyboard-dead.
-  it("returns focus to the search box each time the popover is shown", async () => {
+  it("returns focus to the Filter box each time the popover is shown", async () => {
     const { findByPlaceholderText, getByRole } = render(<Popover />);
-    const input = await findByPlaceholderText("Search history…");
+    const input = await findByPlaceholderText("Filter history…");
     expect(document.activeElement).toBe(input);
 
     // Simulate the reported sequence: click a footer button, which opens the
@@ -203,7 +203,7 @@ describe("Popover event subscriptions", () => {
 
   it("selects any leftover query so typing replaces it", async () => {
     const { findByPlaceholderText } = render(<Popover />);
-    const input = (await findByPlaceholderText("Search history…")) as HTMLInputElement;
+    const input = (await findByPlaceholderText("Filter history…")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "old query" } });
     input.blur();
 
@@ -218,11 +218,11 @@ describe("Popover event subscriptions", () => {
 
   // The sweep has to be able to replay, which means remounting whatever carries
   // it. It rides an overlay rather than the panel element precisely so that
-  // restarting it cannot tear the search box out from under the focus the same
+  // restarting it cannot tear the Filter box out from under the focus the same
   // `focus` event just restored - hence both halves of this assertion.
   it("replays the sweep on every show without remounting the panel", async () => {
     const view = render(<Popover />);
-    await view.findByPlaceholderText("Search history…");
+    await view.findByPlaceholderText("Filter history…");
     const panel = view.container.firstElementChild!;
     const first = panel.querySelector(".fui-sweep");
     expect(first).not.toBeNull();
@@ -274,7 +274,7 @@ describe("Popover degraded strip", () => {
     serveState("Connecting");
 
     const view = render(<Popover />);
-    await view.findByPlaceholderText("Search history…");
+    await view.findByPlaceholderText("Filter history…");
     expect(view.queryByTestId("degraded-strip")).toBeNull();
     expect(view.getByTestId("status")).toHaveTextContent("CONNECTING");
   });
@@ -287,14 +287,14 @@ describe("Popover degraded strip", () => {
     serveState("Online");
 
     const view = render(<Popover />);
-    await view.findByPlaceholderText("Search history…");
+    await view.findByPlaceholderText("Filter history…");
     await waitFor(() => expect(view.getByTestId("status")).toHaveTextContent("ONLINE"));
     expect(view.queryByTestId("degraded-strip")).toBeNull();
   });
 
   it("carries last_error when the relay rejected this device", async () => {
     const view = render(<Popover />);
-    await view.findByPlaceholderText("Search history…");
+    await view.findByPlaceholderText("Filter history…");
 
     act(() =>
       ipc.emit("connection-state", {
@@ -320,7 +320,7 @@ describe("Popover footer", () => {
     usePairingsStore.setState({ pairings: [], active: undefined });
     servedAccounts = [{ ...accounts[1]!, username: "alice" }];
     const one = render(<Popover />);
-    await one.findByPlaceholderText("Search history…");
+    await one.findByPlaceholderText("Filter history…");
     expect(one.queryByText("ALICE")).toBeNull();
   });
 });
@@ -328,7 +328,7 @@ describe("Popover footer", () => {
 describe("Popover toast", () => {
   it("clears a toast once its window elapses", async () => {
     const view = render(<Popover />);
-    await view.findByPlaceholderText("Search history…");
+    await view.findByPlaceholderText("Filter history…");
 
     vi.useFakeTimers();
     try {
@@ -350,8 +350,8 @@ describe("Popover toast", () => {
   });
 });
 
-// These two only mean anything with Search and HistoryList composed together:
-// the whole justification for the modifier is that the search input holds
+// These two only mean anything with Filter and HistoryList composed together:
+// the whole justification for the modifier is that the Filter input holds
 // focus, and the row's explanation is only real once a strip renders it.
 describe("Popover keyboard and row surfaces", () => {
   const capturedAt = Date.now();
@@ -368,10 +368,10 @@ describe("Popover keyboard and row surfaces", () => {
     ...over,
   });
 
-  it("deletes on ⌘⌫ while the search input holds focus", async () => {
+  it("deletes on ⌘⌫ while the Filter input holds focus", async () => {
     servedHistory = [entry()];
     const view = render(<Popover />);
-    const input = await view.findByPlaceholderText("Search history…");
+    const input = await view.findByPlaceholderText("Filter history…");
     expect(document.activeElement).toBe(input);
 
     fireEvent.keyDown(input, { key: "Backspace", metaKey: true });
@@ -383,10 +383,10 @@ describe("Popover keyboard and row surfaces", () => {
     );
   });
 
-  it("leaves the entry alone on a bare Backspace in the search box", async () => {
+  it("leaves the entry alone on a bare Backspace in the Filter box", async () => {
     servedHistory = [entry()];
     const view = render(<Popover />);
-    const input = await view.findByPlaceholderText("Search history…");
+    const input = await view.findByPlaceholderText("Filter history…");
 
     fireEvent.keyDown(input, { key: "Backspace" });
 

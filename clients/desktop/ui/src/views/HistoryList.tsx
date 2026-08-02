@@ -10,8 +10,8 @@ const CACHE_CAP = 100;
 export default function HistoryList() {
   const entries = useHistoryStore((s) => s.entries);
   const filtered = useFilteredEntries();
-  const search = useUiStore((s) => s.search);
-  const setSearch = useUiStore((s) => s.setSearch);
+  const filter = useUiStore((s) => s.filter);
+  const setFilter = useUiStore((s) => s.setFilter);
   const selectedIndex = useUiStore((s) => s.selectedIndex);
   const setSelectedIndex = useUiStore((s) => s.setSelectedIndex);
   const activePairing = useActivePairing();
@@ -46,7 +46,7 @@ export default function HistoryList() {
       } else if (e.key === "Enter" && target) {
         await copyEntry(target, { keepOpen: e.metaKey || e.ctrlKey });
       } else if (e.key === "Backspace" && (e.metaKey || e.ctrlKey)) {
-        // Modified, because Search keeps the input focused essentially always:
+        // Modified, because Filter keeps the input focused essentially always:
         // a bare Backspace would collide with editing the query (plan §6).
         e.preventDefault();
         if (target) await deleteEntry(target);
@@ -61,8 +61,8 @@ export default function HistoryList() {
     return (
       <PanelMessage
         title="NO MATCHES"
-        detail={`Nothing matches "${search}"`}
-        action={{ label: "⌫ CLEAR FILTER", onClick: () => setSearch(""), variant: "outline" }}
+        detail={`Nothing matches "${filter}"`}
+        action={{ label: "⌫ CLEAR FILTER", onClick: () => setFilter(""), variant: "outline" }}
       />
     );
   }
@@ -81,7 +81,7 @@ export default function HistoryList() {
           ref={i === selectedIndex ? selectedRef : undefined}
         />
       ))}
-      {!search.trim() && entries.length >= CACHE_CAP && (
+      {!filter.trim() && entries.length >= CACHE_CAP && (
         <li className="px-3 py-2 text-center text-chrome tracking-phrase text-text-dim">
           — OLDEST OF {CACHE_CAP} CACHED —
         </li>

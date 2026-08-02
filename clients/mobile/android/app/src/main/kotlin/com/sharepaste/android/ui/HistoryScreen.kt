@@ -1,5 +1,8 @@
 package com.sharepaste.android.ui
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,15 +20,17 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,14 +39,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sharepaste.android.R
 import com.sharepaste.core.Entry
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 /**
  * The Entries of the Viewed Pairing, and the two verbs that need no row.
@@ -54,10 +67,16 @@ import com.sharepaste.core.Entry
  * the previous arrangement looked identical until you scrolled: the Contact
  * readout and the foreground-only note were the first two items *in* the list,
  * so the two facts a puzzled person most needs were the first two to leave the
- * screen. Now the identity, Contact and the background policy are three fixed
- * bands — 112dp of them — and the eleventh row peeks under the verb bar instead.
- * The third of them is the only one a person can be rid of, and only by
- * acknowledging it: see [ForegroundOnlyNote].
+ * screen. Now the identity, Contact, the Filter and the background policy are
+ * four fixed bands — 168dp of them — and the rows peek under the verb bar
+ * instead. The last of them is the only one a person can be rid of, and only by
+ * acknowledging it: see [ForegroundOnlyNote]; 138dp is what is left once they
+ * have.
+ *
+ * The Filter sits third, directly under [ContactReadout] and above every
+ * transient band, because a control has to be in the same place every time it
+ * is reached for. Below the four bands that come and go its Y would swing by
+ * some 200dp depending on the news.
  *
  * Contact is permanent rather than degraded-only, inverting the desktop's rule
  * (ADR 0002) rather than copying it: a phone is out of contact almost always, so
@@ -70,9 +89,23 @@ import com.sharepaste.core.Entry
  * behind it.
  */
 @Composable
-fun HistoryScreen(state: UiState, actions: AppActions, modifier: Modifier = Modifier) {
+fun HistoryScreen(
+    state: UiState,
+    actions: AppActions,
+    modifier: Modifier = Modifier,
+    headMoves: Flow<Long> = emptyFlow(),
+) {
     val rows = rememberLazyListState()
-    NewestEntryStaysInView(entries = state.entries, rows = rows)
+    TheNewHeadStaysInView(headMoves, rows)
+    // A reorder is legible only if it moves; a re-filter is legible only if it
+    // does not. Both re-lay-out the same keyed list, so the difference has to be
+    // stated: `shown` answering a different needle than it did last frame is a
+    // re-layout the person caused by typing, and a hundred rows sliding to new
+    // slots per character is a mess. Anything else is a Use, and a row that
+    // teleports while the viewport holds still is a move nobody was shown.
+    var answered by remember { mutableStateOf(state.shown.needle) }
+    val settled = answered == state.shown.needle
+    SideEffect { answered = state.shown.needle }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -84,6 +117,7 @@ fun HistoryScreen(state: UiState, actions: AppActions, modifier: Modifier = Modi
         // Permanent, in every phase. A revoked token is the one that grows a
         // sentence and a way out of it.
         ContactReadout(state.session, onPairAgain = actions.openAddPairing)
+        FilterBand(state, actions.setFilter)
         // The one band here a person can be rid of, and only by acknowledging
         // it. Gone entirely rather than drawn empty, and nothing is lost with
         // it: the sentence keeps its full length on the Settings Screen, so
@@ -115,56 +149,56 @@ fun HistoryScreen(state: UiState, actions: AppActions, modifier: Modifier = Modi
             state = rows,
             modifier = Modifier.weight(1f).testTag(TAG_HISTORY_LIST),
         ) {
-            if (state.entries.isEmpty()) {
-                item { EmptyHistory() }
-            } else {
-                entryRows(state.entries, state.ownDeviceId, actions.recall, actions.deleteEntry)
+            // Three states in this order, and the order is the decision. An
+            // empty History is a fact about the Pairing and outranks anything a
+            // needle has to say about it: `NO MATCHES` on a phone holding no
+            // Entries at all would send somebody looking for a query to fix.
+            when {
+                state.entries.isEmpty() -> item { EmptyHistory() }
+                state.shown.entries.isEmpty() -> item { NoMatches(state.entries.size >= CACHE_CAP) }
+                else -> entryRows(
+                    entries = state.shown.entries,
+                    ownDeviceId = state.ownDeviceId,
+                    animatePlacement = settled,
+                    onRecall = actions.recall,
+                    onDelete = actions.deleteEntry,
+                )
             }
         }
-        VerbBar(actions)
+        VerbBar(state.shown.entries.firstOrNull(), actions)
     }
 }
 
 /**
- * The newest Entry is where it can be seen, the moment it arrives.
+ * The row that has just taken the head is where it can be seen.
  *
- * Entries are prepended, so the newest is index 0 and the destination never
- * changes — but the distance to it does. Everything above the list is chrome
- * and four of those bands come and go: a pending queue, a divergence, a blocked
- * notification and a notice can each be there or not, and each one pushes the
- * row `RECALL LATEST` will hand over further under the top of the viewport.
- * Retiring the two confirmation banners recovered most of that height and none
- * of the guarantee, which is why this exists as well and not instead.
+ * Entries lead the History by **Last Use**, so index 0 is the destination and
+ * the destination never changes — but the distance to it does. Everything above
+ * the list is chrome and four of those bands come and go: a pending queue, a
+ * divergence, a blocked notification and a notice can each be there or not, and
+ * each one pushes the row `RECALL FIRST` will hand over further under the top
+ * of the viewport.
  *
- * **An arrival is a new head with the old head still under it**, which is a
- * narrower question than either "the head changed" or "the list grew" and is the
- * only one that means what this is for. Deleting the newest row changes the head
- * too, and so does switching the Viewed Pairing; scrolling somebody to the top
- * because they removed a row, or because they are now looking at a list they
- * have not read a word of, is not a courtesy. Both of those lose the old head,
- * and a prepend is exactly the case that keeps it.
+ * **The question is not "did the head change".** It used to be, by proxy: under
+ * capture ordering only an arrival could put a new row on top, so "new head,
+ * old head still under it" meant "something arrived". Last Use broke the proxy
+ * rather than the rule — a Use changes the head too, from this device and from
+ * any other, and neither is an arrival. So the two cases are named at the
+ * source instead, and [SharepasteViewModel.headMoves] carries exactly them: a
+ * new Entry on the Viewed Pairing, and a Use this device made. A **remote** Use
+ * raises nothing, because nothing new exists and chasing it would cost the
+ * reader their place to show them a row they already had.
  *
- * [seen] is what makes the comparison possible across recompositions. It is
- * `rememberSaveable`, so a rotation restores it beside the [LazyListState]'s own
- * restored offset, and the effect that necessarily re-runs against the new
- * composition finds the head already accounted for and leaves the person where
- * they were reading. The first population jumps rather than animates: an empty
- * list is already at index 0, and an animation from nowhere to nowhere is a
- * movement nobody asked for.
+ * `animateScrollToItem(0)` *is* the "has it left the viewport" check: it does
+ * nothing when the top is already in view and follows the row when it is not.
+ * No viewport arithmetic, and the two cases the old rule existed to exclude —
+ * deleting the newest row, switching the Viewed Pairing — stay excluded for
+ * free, because neither is an arrival or a Use.
  */
 @Composable
-private fun NewestEntryStaysInView(entries: List<Entry>, rows: LazyListState) {
-    val newest = entries.firstOrNull()?.id
-    var seen by rememberSaveable { mutableStateOf<Long?>(null) }
-    LaunchedEffect(newest) {
-        if (newest != null && newest != seen) {
-            if (seen == null) {
-                rows.scrollToItem(0)
-            } else if (entries.any { it.id == seen }) {
-                rows.animateScrollToItem(0)
-            }
-        }
-        seen = newest
+private fun TheNewHeadStaysInView(headMoves: Flow<Long>, rows: LazyListState) {
+    LaunchedEffect(headMoves, rows) {
+        headMoves.collect { rows.animateScrollToItem(0) }
     }
 }
 
@@ -238,6 +272,155 @@ private fun IdentityBand(state: UiState, actions: AppActions) {
     }
 }
 
+/**
+ * The Filter: the History on screen narrowed to what was typed.
+ *
+ * It never asks the Relay. It hides rows this phone already holds, which is why
+ * it is `FILTER HISTORY` and not `SEARCH` — somebody who searched and found
+ * nothing would reasonably conclude the Relay had been asked and had nothing.
+ *
+ * **Everything here reads [UiState.shown] and nothing derives a second opinion.**
+ * The rows, the `n/m` and the `NO MATCHES` branch all come from one value that
+ * carries the needle it answers, because the scan runs off the main thread and
+ * a count one keystroke ahead of the list it counts is the failure that costs.
+ * The denominator is [UiState.entries], which is the whole History: `3/100` is
+ * "three of the hundred this phone holds", not three of some other filtered
+ * number.
+ *
+ * The `✕` appears only with something to clear, so the band is inert chrome
+ * until it is used. The count is not conditional in the same way — a phone with
+ * Entries always says how many, which is where the hundred-row boundary is
+ * legible before anybody hits it.
+ */
+@Composable
+private fun FilterBand(state: UiState, onFilter: (String) -> Unit) {
+    // Keyed off `shown.needle` rather than off the field: what is announced has
+    // to be a count that exists, and during a scan the field is a keystroke
+    // ahead of the answer.
+    val filtering = state.shown.needle.isNotEmpty()
+    ChromeBand(height = FilterHeight) {
+        FuiTextField(
+            value = state.filter,
+            onValueChange = onFilter,
+            placeholder = stringResource(R.string.filter_placeholder),
+            // The label is what a 56dp band cannot afford, and the label is the
+            // only thing that would have named this field to TalkBack — the
+            // placeholder disappears at the first keystroke.
+            contentDescription = stringResource(R.string.filter_field),
+            keyboardOptions = KeyboardOptions(
+                // A needle is matched case-insensitively against text somebody
+                // else copied, so a capital first letter and a corrected word
+                // are both the keyboard answering a question nobody asked.
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+            ),
+            leading = {
+                Text(
+                    text = "⌕",
+                    style = Fui.Glyph,
+                    color = Fui.TextDim,
+                    // Decorative, as every glyph in this app that is not itself
+                    // a control is: the field beside it already has a name.
+                    modifier = Modifier.clearAndSetSemantics {},
+                )
+            },
+            trailing = { FilterTrailing(state, filtering, onFilter) },
+            modifier = Modifier.testTag(TAG_FILTER_FIELD),
+        )
+    }
+}
+
+/**
+ * How much of the History survives the needle, and the way out.
+ *
+ * **A node of its own inside the field's, and it has to be.** A text field
+ * merges its decoration into one accessible node, which would leave the count
+ * as a fragment of the field's name and give a live region nothing to be. A
+ * merging node is where that merge stops — which is also why the `✕` beside it
+ * stays reachable — so this asks to be one.
+ *
+ * Spoken as a sentence rather than as `3/100`, which TalkBack reads out as a
+ * date or as "three slash one hundred" depending on the engine. The visible
+ * text stays the terse form; only the announcement is prose.
+ *
+ * A live region only **while a needle is on**, and `Polite` so it waits for the
+ * keystroke to finish being announced. Every announcement then answers a key
+ * just pressed; unconditional, an Entry arriving in the background would bump
+ * the denominator and interrupt whatever a blind user was reading to tell them
+ * a number they had not asked for.
+ */
+@Composable
+private fun FilterTrailing(state: UiState, filtering: Boolean, onFilter: (String) -> Unit) {
+    val shown = state.shown.entries.size
+    val held = state.entries.size
+    val spoken = stringResource(R.string.filter_count_spoken, shown, held)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = "$shown/$held",
+            style = Fui.Micro,
+            color = Fui.TextDim,
+            modifier = Modifier
+                .testTag(TAG_FILTER_COUNT)
+                .semantics(mergeDescendants = true) {
+                    contentDescription = spoken
+                    if (filtering) liveRegion = LiveRegionMode.Polite
+                },
+        )
+        if (state.filter.isNotEmpty()) {
+            GlyphButton(
+                glyph = "✕",
+                onClick = { onFilter("") },
+                contentDescription = stringResource(R.string.filter_clear),
+                modifier = Modifier.testTag(TAG_FILTER_CLEAR),
+            )
+        }
+    }
+}
+
+/**
+ * The needle excluded everything this phone holds.
+ *
+ * No echo of the query: the field is 56dp above and still has it, and repeating
+ * it here would be the app reading a person their own typing back. No
+ * `CLEAR FILTER` button either — the `✕` is in the same band as the field, which
+ * is where a hand already is.
+ *
+ * [atTheCap] is the one thing this panel can say that is not already on screen.
+ * A phone holds the hundred most recently used Entries and no more, so a needle
+ * that matches nothing may be matching nothing *here* while the Relay has it —
+ * and only at the cap, because below it the list is everything there is and the
+ * sentence would be a lecture about a boundary nobody is near.
+ */
+@Composable
+private fun NoMatches(atTheCap: Boolean) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(24.dp)
+            .testTag(TAG_HISTORY_NO_MATCHES),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.history_no_matches),
+            style = Fui.Heading,
+            color = Fui.TextPrimary,
+        )
+        if (atTheCap) {
+            Text(
+                text = stringResource(R.string.history_cache_boundary),
+                style = Fui.Prose,
+                color = Fui.TextBody,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.testTag(TAG_HISTORY_CACHE_BOUNDARY),
+            )
+        }
+    }
+}
+
 @Composable
 private fun EmptyHistory() {
     Column(
@@ -285,17 +468,25 @@ private fun EmptyHistory() {
 private fun LazyListScope.entryRows(
     entries: List<Entry>,
     ownDeviceId: String?,
+    animatePlacement: Boolean,
     onRecall: (Entry) -> Unit,
     onDelete: (Entry) -> Unit,
 ) {
     itemsIndexed(entries, key = { _, entry -> entry.id }) { index, entry ->
+        // Keyed above, so a reorder is identity-tracked and no row swaps its
+        // content. Without a placement spec it would still teleport, and a
+        // stationary viewport plus a teleport is the one combination where
+        // something moved and nothing showed you.
+        val placed = Modifier.animateItem(
+            placementSpec = if (animatePlacement) RowPlacement else null,
+        )
         if (entry.undecryptable) {
-            UndecryptableRow(entry, onDelete)
+            UndecryptableRow(entry, onDelete, placed)
         } else {
-            // The newest Entry is the one `RECALL LATEST` will hand over, so it
-            // is the one row drawn as the emitter's: the verb bar's target,
-            // named in the list rather than only in the bar.
-            EntryRow(entry, ownDeviceId, newest = index == 0, onRecall, onDelete)
+            // **Positional, not the newest.** The Filter can hide whatever was
+            // at the head, and the marked row has to be the row `RECALL FIRST`
+            // will hand over or the mark is a lie. The two read the same list.
+            EntryRow(entry, ownDeviceId, first = index == 0, onRecall, onDelete, placed)
         }
     }
 }
@@ -319,9 +510,10 @@ private fun LazyListScope.entryRows(
 private fun EntryRow(
     entry: Entry,
     ownDeviceId: String?,
-    newest: Boolean,
+    first: Boolean,
     onRecall: (Entry) -> Unit,
     onDelete: (Entry) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val swipe = rememberSwipeToDismissBoxState()
     // The list is the source of truth about which Entries exist. The swipe asks
@@ -351,15 +543,15 @@ private fun EntryRow(
                 onDelete = onDelete,
             )
         },
-        modifier = Modifier.testTag(entryRowTag(entry.id)),
+        modifier = modifier.testTag(entryRowTag(entry.id)),
     ) {
         // Two layers, not one: the emitter's tint is 12% alpha and the delete
         // panel is sitting right behind it, so a single translucent background
-        // paints the newest row red.
+        // paints the marked row red.
         Column(
             Modifier
                 .background(Fui.Panel)
-                .then(if (newest) Modifier.background(Fui.Active) else Modifier),
+                .then(if (first) Modifier.background(Fui.Active) else Modifier),
         ) {
             Row(
                 modifier = Modifier
@@ -369,20 +561,20 @@ private fun EntryRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                // The emitter's own rule, on the one row Recall Latest will hand
-                // over. Every other row is flush with the gutter.
-                if (newest) {
+                // The emitter's own rule, on the one row `RECALL FIRST` will
+                // hand over. Every other row is flush with the gutter.
+                if (first) {
                     Box(Modifier.width(2.dp).fillMaxHeight().background(Fui.Cyan400))
                 }
                 Column(
-                    modifier = Modifier.weight(1f).padding(start = if (newest) 12.dp else Fui.Gutter),
+                    modifier = Modifier.weight(1f).padding(start = if (first) 12.dp else Fui.Gutter),
                     verticalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
                     Text(
                         // The facade's Preview, verbatim — see `entryRows`.
                         text = entry.preview,
                         style = Fui.Data,
-                        color = if (newest) Fui.TextPrimary else Fui.TextBody,
+                        color = if (first) Fui.TextPrimary else Fui.TextBody,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.testTag(entryPreviewTag(entry.id)),
@@ -400,7 +592,7 @@ private fun EntryRow(
                         )
                     }
                 }
-                if (newest) {
+                if (first) {
                     // Named, filled and wider, because this is the row the verb
                     // bar acts on and a person should be able to see which one
                     // that is before they press it.
@@ -483,8 +675,8 @@ private fun DeleteBehindTheRow(entry: Entry, uncovered: Boolean, onDelete: (Entr
  * not put behind a gesture they would have to discover.
  */
 @Composable
-private fun UndecryptableRow(entry: Entry, onDelete: (Entry) -> Unit) {
-    Column(Modifier.testTag(entryRowTag(entry.id))) {
+private fun UndecryptableRow(entry: Entry, onDelete: (Entry) -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier.testTag(entryRowTag(entry.id))) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -533,23 +725,38 @@ private fun UndecryptableRow(entry: Entry, onDelete: (Entry) -> Unit) {
 }
 
 /**
- * Offer and Recall Latest, the two verbs that need no row selected.
+ * Offer and Recall First, the two verbs that need no row *selected*.
  *
  * Deliberately **not** called Standing Actions: those are the verbs a device
- * exposes *without being opened*, and these are buttons on an open screen. They
- * call the same two repository entry points the Standing Actions do, which is
- * the point — neither of those entry points assumes a composition exists.
+ * exposes *without being opened*, and these are buttons on an open screen.
  *
- * **Recall Latest is the solid one and comes first.** Recall is why a phone is
- * opened at all — the laptop copied something and the phone has to paste it —
- * and it is the one verb that fetches rather than trusting the cache, so it is
- * the one that must never hand over something stale. Two equal outlines were
- * truthful about their symmetry in the code and mute about which one a person
- * reaches for. Offer keeps a full-height target beside it, in the order the
- * notification lists them.
+ * **`RECALL FIRST` takes [first], the first row of the displayed list**, and
+ * that is the whole of ADR 0010. `RECALL LATEST` fetched, which meant the row
+ * it handed over need not be a row on screen at all — and once a Filter can
+ * hide the head, "latest" and "the marked row" are two different Entries with
+ * one button between them. So the verb bar and the marker read the same list
+ * and the same index, and the button says which. The notification keeps
+ * `RECALL LATEST` and keeps the fetch; under Last Use ordering the two select
+ * the same Entry whenever nothing is filtered.
+ *
+ * It performs no fetch and it is not therefore inert: `recall` spawns a **Use**
+ * after the clipboard write, so the Entry leads the History on every device
+ * afterwards. Unfiltered that is idempotent — the head recalls itself and stays
+ * the head, renewing its tenure.
+ *
+ * **Disabled rather than absent, and rather than a notice.** With no first row
+ * there is nothing to hand over, and the control someone is looking for has to
+ * still be where they are looking, saying no. An Undecryptable first row counts
+ * as none: its own Recall is disabled for want of a key, and a verb bar that
+ * fired on it would contradict the row it is marking.
+ *
+ * It is the solid one and comes first, because Recall is why a phone is opened
+ * at all — the laptop copied something and the phone has to paste it. Offer
+ * keeps a full-height target beside it, in the order the notification lists them.
  */
 @Composable
-private fun VerbBar(actions: AppActions) {
+private fun VerbBar(first: Entry?, actions: AppActions) {
+    val recallable = first?.takeUnless { it.undecryptable }
     Column(Modifier.fillMaxWidth()) {
         Hairline(color = Fui.Frame)
         Row(
@@ -557,10 +764,11 @@ private fun VerbBar(actions: AppActions) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             FuiButton(
-                text = stringResource(R.string.recall_latest_bar),
-                onClick = actions.recallLatest,
+                text = stringResource(R.string.recall_first_bar),
+                onClick = { recallable?.let(actions.recall) },
                 solid = true,
-                modifier = Modifier.weight(1.6f).testTag(TAG_RECALL_LATEST),
+                enabled = recallable != null,
+                modifier = Modifier.weight(1.6f).testTag(TAG_RECALL_FIRST),
             )
             FuiButton(
                 text = stringResource(R.string.offer_bar),
@@ -608,6 +816,36 @@ private fun PendingReadout(pending: Long) {
     }
 }
 
+/**
+ * The Filter band's height, and the 56dp in "168dp of chrome".
+ *
+ * Material's own minimum for an outlined field, which is also the smallest one
+ * that holds a 48dp `✕` without cropping it.
+ */
+private val FilterHeight = 56.dp
+
+/**
+ * How many Entries this phone keeps.
+ *
+ * `MAX_PER_USER` in the core's entries cache, which `list_recent` clamps every
+ * request to and which `SharepasteRepository.listHistory` asks for by default.
+ * Named here for one reason: at the cap, and only at the cap, `NO MATCHES` owes
+ * the person the boundary — what is not on screen may still be on the Relay.
+ */
+private const val CACHE_CAP = 100
+
+/**
+ * How a row travels when the History reorders under it.
+ *
+ * Foundation's own default placement spec, spelled out because the gate needs
+ * something to withhold: `null` is "snap", and a re-layout caused by typing has
+ * to snap. Only a Use animates.
+ */
+private val RowPlacement = spring(
+    stiffness = Spring.StiffnessMediumLow,
+    visibilityThreshold = IntOffset.VisibilityThreshold,
+)
+
 const val TAG_HISTORY_SCREEN = "history-screen"
 
 /**
@@ -620,11 +858,35 @@ const val TAG_HISTORY_LIST = "history-list"
 
 const val TAG_HISTORY_EMPTY = "history-empty"
 
+/** The Filter's own field, which a test types into. */
+const val TAG_FILTER_FIELD = "filter-field"
+
+/** `n/m`: how much of the History the needle left. */
+const val TAG_FILTER_COUNT = "filter-count"
+
+/** The `✕`. On screen only while there is a needle to clear. */
+const val TAG_FILTER_CLEAR = "filter-clear"
+
+/**
+ * The panel that says the needle excluded everything.
+ *
+ * Distinct from [TAG_HISTORY_EMPTY], and the distinction is the assertion: a
+ * phone with no Entries at all says `NOTHING HERE YET`, and a test that could
+ * not tell the two apart could not hold that rule.
+ */
+const val TAG_HISTORY_NO_MATCHES = "history-no-matches"
+
+/** The sentence naming the hundred-Entry cache boundary. Only at the cap. */
+const val TAG_HISTORY_CACHE_BOUNDARY = "history-cache-boundary"
+
 /** Which Pairing's History is on screen: `<user> @ <relay host>`. */
 const val TAG_IDENTITY = "history-identity"
 
 const val TAG_OFFER = "offer-clipboard"
-const val TAG_RECALL_LATEST = "recall-latest"
+
+/** The verb bar's Recall. It acts on the first *displayed* row. */
+const val TAG_RECALL_FIRST = "recall-first"
+
 const val TAG_OPEN_PAIRINGS = "open-pairings"
 
 /** The sentence that says what a queue is. */

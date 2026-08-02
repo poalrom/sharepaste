@@ -1,9 +1,9 @@
 import { useEffect, useRef } from "react";
 import { useFilteredEntries, useHistoryStore, useUiStore } from "../store";
 
-export default function Search() {
-  const search = useUiStore((s) => s.search);
-  const setSearch = useUiStore((s) => s.setSearch);
+export default function Filter() {
+  const filter = useUiStore((s) => s.filter);
+  const setFilter = useUiStore((s) => s.setFilter);
   const filtered = useFilteredEntries();
   const total = useHistoryStore((s) => s.entries).length;
   const ref = useRef<HTMLInputElement>(null);
@@ -20,7 +20,7 @@ export default function Search() {
   // gained focus" always means "just shown". Focus moving *within* the popover
   // does not fire this, so it never fights the user's own focus choices.
   useEffect(() => {
-    const focusSearch = () => {
+    const focusFilter = () => {
       const input = ref.current;
       if (!input) return;
       input.focus();
@@ -28,9 +28,9 @@ export default function Search() {
       // so leaving it visible is honest, and typing replaces it.
       input.select();
     };
-    focusSearch();
-    window.addEventListener("focus", focusSearch);
-    return () => window.removeEventListener("focus", focusSearch);
+    focusFilter();
+    window.addEventListener("focus", focusFilter);
+    return () => window.removeEventListener("focus", focusFilter);
   }, []);
 
   useEffect(() => {
@@ -53,9 +53,9 @@ export default function Search() {
       <input
         ref={ref}
         className="min-w-0 flex-1 bg-transparent font-mono text-data text-text-body outline-none placeholder:text-text-dim"
-        placeholder="Search history…"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Filter history…"
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
       />
       {total > 0 && (
         <span className="shrink-0 text-chrome tabular-nums text-text-dim">

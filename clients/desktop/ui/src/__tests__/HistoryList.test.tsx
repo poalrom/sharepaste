@@ -12,7 +12,7 @@ describe("HistoryList", () => {
   beforeEach(() => {
     scrollIntoView.mockClear();
     ipc = mockIpc();
-    useUiStore.setState({ search: "", selectedIndex: 0, mainSection: "history" });
+    useUiStore.setState({ filter: "", selectedIndex: 0, mainSection: "history" });
     useHistoryStore.setState({ entries: [
       { id: 1, user_id: "u", preview: "Hello", plaintext: "Hello", created_at: 1, last_use: 1, device_id: "d", origin_label: "d", undecryptable: false },
       { id: 2, user_id: "u", preview: "World", plaintext: "World", created_at: 2, last_use: 2, device_id: "d", origin_label: "d", undecryptable: false },
@@ -23,15 +23,15 @@ describe("HistoryList", () => {
     });
   });
 
-  it("filters by search term", () => {
-    useUiStore.setState({ search: "world", selectedIndex: 0, mainSection: "history" });
+  it("filters by what was typed", () => {
+    useUiStore.setState({ filter: "world", selectedIndex: 0, mainSection: "history" });
     render(<HistoryList />);
     const rows = screen.getAllByTestId("entry-row");
     expect(rows).toHaveLength(1);
   });
 
   it("highlights the selected index", () => {
-    useUiStore.setState({ search: "", selectedIndex: 1, mainSection: "history" });
+    useUiStore.setState({ filter: "", selectedIndex: 1, mainSection: "history" });
     render(<HistoryList />);
     const rows = screen.getAllByTestId("entry-row");
     expect(rows[1]!).toHaveAttribute("data-selected", "true");
@@ -63,7 +63,7 @@ describe("HistoryList", () => {
   // The window listener outlives the rendered rows, so arrowing on an empty
   // list must not leave selectedIndex as NaN.
   it("survives arrow keys with no rows to select", () => {
-    useUiStore.setState({ search: "matches nothing" });
+    useUiStore.setState({ filter: "matches nothing" });
     render(<HistoryList />);
     fireEvent.keyDown(window, { key: "ArrowUp" });
     expect(useUiStore.getState().selectedIndex).toBe(0);
@@ -140,7 +140,7 @@ describe("HistoryList", () => {
     });
   });
 
-  // Search holds the input focused essentially always, so an unmodified key
+  // Filter holds the input focused essentially always, so an unmodified key
   // would delete the entry the user was only trying to edit the query for.
   it("does not delete on a bare Backspace", async () => {
     render(<HistoryList />);

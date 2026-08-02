@@ -230,22 +230,22 @@ fun DivergenceBand(
  * this screen are the same operation, and reporting one of them in two idioms
  * would make them look like two.
  *
- * **Six outcomes reach this band, and the two that no longer do are the point.**
- * A plain Offer and a plain Recall confirm and need nothing back, so they are
- * [Receipt]s and go past as a Toast. What is left here all needs something done
- * or known, which is what earns a container that waits to be dismissed — and it
- * is why this band is never the report of a verb that simply worked. Chrome
- * that only ever appears with something in it is chrome nobody has to learn to
- * ignore.
+ * **Five outcomes reach this band, and the three that no longer do are the
+ * point.** A plain Offer and a plain Recall confirm and need nothing back, so
+ * they are [Receipt]s and go past as a Toast. What is left here all needs
+ * something done or known, which is what earns a container that waits to be
+ * dismissed — and it is why this band is never the report of a verb that simply
+ * worked. Chrome that only ever appears with something in it is chrome nobody
+ * has to learn to ignore.
  *
- * [Notice.RecalledFromCache] is the only one that tints its whole band, and that
- * is not decoration: every other notice is a statement about something the
- * person just did, while that one is a warning about the content now on their
- * clipboard — it may be yesterday's link. A refusal is ruled down its left edge
- * instead, in amber, because both of the refusals an Offer can still receive
- * need something done about them. The one that did not — `ALREADY HERE`, drawn
- * inert because the app was working correctly — is no longer a refusal at all
- * (ADR 0012), and with it went the only reason this had to ask the reason.
+ * The third to go was the stale Recall, and it took the only whole-band tint
+ * with it: `RECALL FIRST` selects from the cache and performs no round trip
+ * (ADR 0010), so nothing here is a warning about the clipboard's contents any
+ * more. A refusal is ruled down its left edge instead, in amber, because both
+ * of the refusals an Offer can still receive need something done about them.
+ * The one that did not — `ALREADY HERE`, drawn inert because the app was
+ * working correctly — is no longer a refusal at all (ADR 0012), and with it
+ * went the only reason this had to ask the reason.
  *
  * Lives here rather than on one screen because two screens raise notices: a
  * Recall happens on the History and a Pairing is forgotten on the Pairings, and
@@ -253,17 +253,14 @@ fun DivergenceBand(
  */
 @Composable
 fun NoticeBanner(notice: Notice, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
-    val stale = notice is Notice.RecalledFromCache
     val label = when (notice) {
         is Notice.OfferRefused -> offerRefusalLabel(notice.reason)
-        Notice.RecalledFromCache -> R.string.recall_from_cache_badge
         Notice.Unpaired -> R.string.notice_not_paired
         is Notice.HistoryCleared -> R.string.notice_cleared
         is Notice.PairingForgotten -> R.string.notice_forgotten
         is Notice.Failed -> R.string.notice_failed
     }
     val accent = when (notice) {
-        Notice.RecalledFromCache,
         is Notice.OfferRefused,
         is Notice.Failed,
         -> Accent.Caution
@@ -275,7 +272,6 @@ fun NoticeBanner(notice: Notice, onDismiss: () -> Unit, modifier: Modifier = Mod
     }
     val text = when (notice) {
         is Notice.OfferRefused -> stringResource(offerRefusalMessage(notice.reason))
-        Notice.RecalledFromCache -> stringResource(R.string.recall_from_cache)
         Notice.Unpaired -> stringResource(R.string.action_unpaired)
         is Notice.HistoryCleared -> stringResource(R.string.history_cleared, notice.pairing)
         is Notice.PairingForgotten -> notice.promoted?.let {
@@ -288,27 +284,25 @@ fun NoticeBanner(notice: Notice, onDismiss: () -> Unit, modifier: Modifier = Mod
         }
     }
     // A refusal is ruled down its left edge in the colour of what to do about
-    // it; an outcome that simply happened is not. Only the stale Recall tints
-    // its whole band, because it is the only notice about *what is now on the
-    // clipboard* rather than about what the app just did.
+    // it; an outcome that simply happened is not.
     val ruled = notice is Notice.OfferRefused || notice is Notice.Failed
     Row(
         modifier = modifier
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
-            .background(if (stale) Fui.AmberA16 else Fui.Band)
-            .testTag(if (stale) TAG_NOTICE_STALE else TAG_NOTICE),
+            .background(Fui.Band)
+            .testTag(TAG_NOTICE),
     ) {
         if (ruled) Box(Modifier.width(2.dp).fillMaxHeight().background(accent.ink))
         Column(
             modifier = Modifier.weight(1f).padding(Fui.Gutter, 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            FuiBadge(text = stringResource(label), accent = accent, solid = stale)
+            FuiBadge(text = stringResource(label), accent = accent)
             Text(
                 text = text,
                 style = Fui.Prose,
-                color = if (stale) Fui.TextPrimary else Fui.TextBody,
+                color = Fui.TextBody,
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 FuiButton(
@@ -320,7 +314,7 @@ fun NoticeBanner(notice: Notice, onDismiss: () -> Unit, modifier: Modifier = Mod
             }
         }
     }
-    Hairline(color = if (stale) Fui.AmberA40 else Fui.Hairline)
+    Hairline()
 }
 
 /**
@@ -522,15 +516,6 @@ const val TAG_FOREGROUND_NOTE = "foreground-only-note"
 const val TAG_FOREGROUND_WHY = "foreground-only-why"
 
 const val TAG_NOTICE = "notice"
-
-/**
- * The notice that says a Recall Latest fell back to the cache.
- *
- * Its own tag, so a test asserts the *visible statement* rather than the return
- * value that produced it. A silent fallback hands over yesterday's link, and the
- * only way that rule survives is if the thing proving it is on screen.
- */
-const val TAG_NOTICE_STALE = "notice-stale-recall"
 
 /** The band that admits the Viewed Pairing is not the one being synced. */
 const val TAG_DIVERGED = "pairing-diverged"

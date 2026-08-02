@@ -89,7 +89,7 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             val state by model.state.collectAsStateWithLifecycle()
-            SharepasteApp(state, actions)
+            SharepasteApp(state, actions, headMoves = model.headMoves)
         }
     }
 

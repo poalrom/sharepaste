@@ -16,6 +16,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -30,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
@@ -573,6 +577,70 @@ fun GlyphButton(
             modifier = Modifier.clearAndSetSemantics {},
         )
     }
+}
+
+/**
+ * A text field in the console's own voice.
+ *
+ * Material's outlined field underneath, because a hand-rolled one would owe the
+ * platform a cursor, a selection handle, an IME contract and an accessibility
+ * tree. Only its colours, shape and type are ours.
+ *
+ * [label] is nullable because one caller cannot afford it. Material floats the
+ * label above the value and charges the height for it either way; the History's
+ * Filter is a 56dp chrome band and has nowhere to put it. A field with no label
+ * has no accessible name either, which is why [contentDescription] exists beside
+ * it — a placeholder disappears the moment somebody types, and a TalkBack user
+ * who has typed is exactly the one who needs telling which field they are in.
+ *
+ * [leading] and [trailing] are Material's icon slots under the names they are
+ * being used for: the Filter puts a glyph in one and a count with a `✕` in the
+ * other, and neither is an icon.
+ */
+@Composable
+fun FuiTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+    placeholder: String? = null,
+    contentDescription: String? = null,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    leading: @Composable (() -> Unit)? = null,
+    trailing: @Composable (() -> Unit)? = null,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = label?.let { { Text(it, style = Fui.Micro) } },
+        placeholder = placeholder?.let { { Text(it, style = Fui.Data, color = Fui.TextDim) } },
+        leadingIcon = leading,
+        trailingIcon = trailing,
+        singleLine = true,
+        shape = RectangleShape,
+        textStyle = Fui.Data,
+        keyboardOptions = keyboardOptions,
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = Fui.TextPrimary,
+            unfocusedTextColor = Fui.TextBody,
+            focusedBorderColor = Fui.Cyan400,
+            unfocusedBorderColor = Fui.Frame,
+            focusedLabelColor = Fui.TextEmitter,
+            unfocusedLabelColor = Fui.TextMuted,
+            cursorColor = Fui.Cyan400,
+            focusedContainerColor = Fui.Recess,
+            unfocusedContainerColor = Fui.Recess,
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (contentDescription == null) {
+                    Modifier
+                } else {
+                    Modifier.semantics { this.contentDescription = contentDescription }
+                },
+            ),
+    )
 }
 
 /**

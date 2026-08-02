@@ -10,10 +10,10 @@ import {
   useContactStore,
   useUiStore,
 } from "../store";
+import Filter from "./Filter";
 import Footer from "./Footer";
 import HintStrip from "./HintStrip";
 import HistoryList from "./HistoryList";
-import Search from "./Search";
 import { CONNECTION } from "./connection";
 import { PanelMessage, Strip } from "./fui";
 
@@ -48,7 +48,7 @@ export default function Popover() {
 
   useEffect(() => {
     const onBlur = () => {
-      useUiStore.getState().setSearch("");
+      useUiStore.getState().setFilter("");
       useUiStore.getState().setSelectedIndex(0);
     };
     window.addEventListener("blur", onBlur);
@@ -56,12 +56,12 @@ export default function Popover() {
   }, []);
 
   // `focus` is the signal that the window was just shown, for the reason
-  // Search.tsx documents: it is shown and hidden, never unmounted, and it hides
+  // Filter.tsx documents: it is shown and hidden, never unmounted, and it hides
   // on Focused(false), so it can never be visible-but-unfocused.
   //
   // The sweep rides its own overlay rather than the panel element because
   // restarting the animation means remounting whatever carries it, and
-  // remounting the panel would tear the search box out from under the focus the
+  // remounting the panel would tear the Filter box out from under the focus the
   // same event just restored. The counter restarts a sweep still in flight.
   useEffect(() => {
     let timer: number | undefined;
@@ -196,7 +196,7 @@ export default function Popover() {
         />
       ) : (
         <>
-          <Search />
+          <Filter />
           {degraded && (
             <Strip tone={degraded.tone} testId="degraded-strip">
               <span className="shrink-0">{degraded.label}</span>

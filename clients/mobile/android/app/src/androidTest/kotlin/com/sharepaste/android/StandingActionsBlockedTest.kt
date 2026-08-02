@@ -12,7 +12,7 @@ import com.sharepaste.android.ui.SessionPhase
 import com.sharepaste.android.ui.SharepasteTheme
 import com.sharepaste.android.ui.TAG_FAULT
 import com.sharepaste.android.ui.TAG_OFFER
-import com.sharepaste.android.ui.TAG_RECALL_LATEST
+import com.sharepaste.android.ui.TAG_RECALL_FIRST
 import com.sharepaste.android.ui.TAG_STANDING_ACTIONS_BLOCKED
 import com.sharepaste.android.ui.TAG_STANDING_ACTIONS_ENABLE
 import com.sharepaste.android.ui.UiState
@@ -51,6 +51,10 @@ class StandingActionsBlockedTest {
         session = SessionPhase.OutOfContact("u"),
         activeUserId = "u",
         standingActionsBlocked = true,
+        // A row for `RECALL FIRST` to be about: the verb takes the first
+        // displayed one, so with an empty History it is correctly disabled and
+        // would prove nothing about a blocked notification.
+        entries = listOf(entry(id = 1, preview = "ssh me@box")),
     )
 
     /**
@@ -65,12 +69,12 @@ class StandingActionsBlockedTest {
     @Test
     fun a_blocked_notification_is_explained_and_is_not_a_fault() {
         var offers = 0
-        var recalls = 0
+        val recalled = mutableListOf<Long>()
         compose.setContent {
             SharepasteTheme {
                 HistoryScreen(
                     blocked,
-                    noActions(offerClipboard = { offers++ }, recallLatest = { recalls++ }),
+                    noActions(offerClipboard = { offers++ }, recall = { recalled += it.id }),
                 )
             }
         }
@@ -83,9 +87,9 @@ class StandingActionsBlockedTest {
         // The point of the sentence: nothing else is affected. Both verbs are on
         // screen and both still fire.
         compose.onNodeWithTag(TAG_OFFER).performClick()
-        compose.onNodeWithTag(TAG_RECALL_LATEST).performClick()
+        compose.onNodeWithTag(TAG_RECALL_FIRST).performClick()
         assertEquals("the in-app Offer must still work with the notification denied", 1, offers)
-        assertEquals("the in-app Recall must still work with the notification denied", 1, recalls)
+        assertEquals("the in-app Recall must still work with the notification denied", listOf(1L), recalled)
         Evidence.log("denied        = on screen: ${sentence.take(80)}…; both verbs still fire")
     }
 

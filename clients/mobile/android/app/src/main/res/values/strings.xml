@@ -99,6 +99,26 @@
     <string name="history_empty_body">Anything you copy on a paired computer shows up here as an
         Entry. Nothing has been offered yet.</string>
 
+    <!--
+      The Filter. Chrome in capitals; the two lines that are spoken rather than
+      drawn are sentence case, because TalkBack reads them out as speech.
+    -->
+    <string name="filter_placeholder">FILTER HISTORY</string>
+    <!-- The field's accessible name. It has no label: the band is 56dp. -->
+    <string name="filter_field">Filter history</string>
+    <string name="filter_clear">Clear filter</string>
+    <!-- %1$d rows left, %2$d Entries held. Announced, never drawn. -->
+    <string name="filter_count_spoken">%1$d of %2$d shown</string>
+    <string name="history_no_matches">NO MATCHES</string>
+    <!--
+      Shown under NO MATCHES only when the cache is full, where "nothing here"
+      and "nothing anywhere" stop being the same statement. The number is the
+      core's MAX_PER_USER, and it counts from Last Use rather than from capture
+      (ADR 0011).
+    -->
+    <string name="history_cache_boundary">This phone keeps the 100 most recently used
+        entries.</string>
+
     <!-- A row. The Preview itself is the facade's and is never re-worded here. -->
     <!--
       Two parts, because the row draws two. The marker names the state in the
@@ -122,9 +142,15 @@
     -->
     <string name="offer_button">Offer what I copied</string>
     <string name="recall_latest_button">Recall the latest Entry</string>
-    <!-- The same two verbs on the open screen, where the screen is the context. -->
+    <!--
+      The same two verbs on the open screen, where the screen is the context.
+      `RECALL FIRST` and not `RECALL LATEST`: it hands over the first row of the
+      displayed list, which a Filter may have narrowed, and it fetches nothing
+      (ADR 0010). The notification's verb above is still `latest` and still
+      fetches.
+    -->
     <string name="offer_bar">OFFER</string>
-    <string name="recall_latest_bar">RECALL LATEST</string>
+    <string name="recall_first_bar">RECALL FIRST</string>
     <string name="notice_dismiss">DISMISS</string>
 
     <!--
@@ -182,19 +208,17 @@
     -->
     <string name="receipt_recalled">On the clipboard: %1$s</string>
     <!--
-      The one sentence that may never be missing. Recall Latest always tries the
-      Relay; when the try fails, the newest Entry this phone already had is still
-      the best answer available — but it may be yesterday's link, and the person
-      is the only one who can tell.
+      The one sentence that may never be missing, and now the Standing Actions'
+      alone: `RECALL FIRST` on the open screen selects from the cache and never
+      fetches, so it has nothing to fall back from (ADR 0010). The
+      notification's Recall Latest still tries the Relay; when the try fails,
+      the Entry this phone already had is still the best answer available — but
+      it may be yesterday's link, and the person is the only one who can tell.
     -->
     <string name="recall_from_cache">Sharepaste could not reach the Relay, so this is the newest
         Entry it already had. Anything you copied on your computer since then is not here yet —
         open Sharepaste again once you have a connection.</string>
-    <!--
-      Its badge. The notice above is about what is *now on the clipboard*, not
-      about what the app just did, which is why it is the one notice that wears
-      a colour at all.
-    -->
+    <!-- Its label. Said out loud as a Receipt, because a Toast has no band. -->
     <string name="recall_from_cache_badge">MAY BE STALE</string>
     <string name="recall_nothing_to_recall">There is nothing to recall. Either this History is
         empty, or that Entry is Undecryptable and this phone holds no plaintext for it.</string>

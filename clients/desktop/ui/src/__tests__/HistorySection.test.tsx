@@ -53,7 +53,7 @@ const MULTILINE_PREVIEW = "ssh admin@10.0.0.4   -i ~/.ssh/id_ed25519   -p 2222";
  * An entry whose third line falls past the Preview's 80-character cap, and the
  * word that lives only there.
  *
- * The reason the search reads `plaintext`. `borogoves` appears nowhere in
+ * The reason the Filter reads `plaintext`. `borogoves` appears nowhere in
  * `LONG_PREVIEW`, so a filter over the Preview cannot find this row at all —
  * which is what truncating the one field into the other would have caused.
  */
@@ -137,7 +137,7 @@ const selectedRowIndex = (): number =>
  * and this asserts the premise each time.
  */
 function filterInput(): HTMLElement {
-  const input = screen.getByLabelText("Filter entries");
+  const input = screen.getByLabelText("Filter history");
   expect(document.activeElement).toBe(input);
   return input;
 }
@@ -176,7 +176,7 @@ beforeEach(() => {
   useHistoryStore.setState({ entries: [] });
   useContactStore.setState({ lastContactByUser: {} });
   useUiStore.setState({
-    search: "",
+    filter: "",
     selectedIndex: 0,
     mainSection: "history",
     pairingFlowOpen: false,
@@ -215,7 +215,7 @@ describe("HistorySection — the reader", () => {
     ];
     await renderPane();
 
-    fireEvent.change(screen.getByLabelText("Filter entries"), {
+    fireEvent.change(screen.getByLabelText("Filter history"), {
       target: { value: THIRD_LINE_WORD },
     });
 

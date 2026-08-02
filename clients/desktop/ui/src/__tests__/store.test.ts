@@ -74,15 +74,15 @@ describe("useUiStore mainSection", () => {
   // A query left over from the last visit would silently hide rows the
   // returning reader expects to see, and the selection it indexed is gone.
   it("switching pane or Viewed Pairing drops the filter and the selection", () => {
-    useUiStore.setState({ search: "ss://", selectedIndex: 4 });
+    useUiStore.setState({ filter: "ss://", selectedIndex: 4 });
     useUiStore.getState().setMainSection("history");
-    expect(useUiStore.getState().search).toBe("");
+    expect(useUiStore.getState().filter).toBe("");
     expect(useUiStore.getState().selectedIndex).toBe(0);
 
-    useUiStore.setState({ search: "npm", selectedIndex: 2 });
+    useUiStore.setState({ filter: "npm", selectedIndex: 2 });
     useUiStore.getState().setViewedUserId("u-other");
     expect(useUiStore.getState().viewedUserId).toBe("u-other");
-    expect(useUiStore.getState().search).toBe("");
+    expect(useUiStore.getState().filter).toBe("");
     expect(useUiStore.getState().selectedIndex).toBe(0);
   });
 });

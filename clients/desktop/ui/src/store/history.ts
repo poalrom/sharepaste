@@ -22,7 +22,7 @@ export const useHistoryStore = create<HistoryState>((set) => ({
 /**
  * The rows the popover is actually showing.
  *
- * Both the list and the search field's count suffix have to agree on this, and
+ * Both the list and the Filter field's count suffix have to agree on this, and
  * a second copy of the predicate is how they would stop agreeing. Matching runs
  * against `plaintext` rather than the one-line `preview`, so a query still
  * finds a word that only appears on an entry's third line. An Undecryptable
@@ -30,12 +30,12 @@ export const useHistoryStore = create<HistoryState>((set) => ({
  */
 export function useFilteredEntries(): EntryView[] {
   const entries = useHistoryStore((s) => s.entries);
-  const search = useUiStore((s) => s.search);
+  const filter = useUiStore((s) => s.filter);
   return useMemo(() => {
-    const needle = search.trim().toLowerCase();
+    const needle = filter.trim().toLowerCase();
     if (!needle) return entries;
     return entries.filter((e) => e.plaintext?.toLowerCase().includes(needle) ?? false);
-  }, [entries, search]);
+  }, [entries, filter]);
 }
 
 function dedupePrepend(existing: EntryView[], next: EntryView): EntryView[] {

@@ -19,8 +19,8 @@ import com.sharepaste.core.PairingSummary
  * was wired to something else.
  */
 fun noActions(
+    setFilter: (String) -> Unit = {},
     offerClipboard: () -> Unit = {},
-    recallLatest: () -> Unit = {},
     recall: (Entry) -> Unit = {},
     deleteEntry: (Entry) -> Unit = {},
     dismissNotice: () -> Unit = {},
@@ -42,8 +42,8 @@ fun noActions(
     pairWithCode = {},
     setCameraProblem = {},
     dismissPairFailure = {},
+    setFilter = setFilter,
     offerClipboard = offerClipboard,
-    recallLatest = recallLatest,
     recall = recall,
     deleteEntry = deleteEntry,
     dismissNotice = dismissNotice,

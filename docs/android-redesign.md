@@ -1,5 +1,20 @@
 # Android redesign — record
 
+**Superseded in part, 2026-08-02.** This record is unchanged and still describes what that
+effort built. Six of its statements have since been overtaken, and one has come right again:
+
+- **Decision 5** (`RECALL LATEST` *"must never hand over something stale"*), the verb in the
+  layout diagram, and the emitter row's caption — the verb is `RECALL FIRST` and takes the
+  first row of the displayed list. [ADR 0010](adr/0010-the-phone-recalls-what-you-can-see.md).
+- **The chrome budget** — 112dp/82dp becomes 168dp/138dp, and the layout diagram has no Filter
+  band in it.
+- **The crowding note**, which argues about the height above the list the Filter has now added
+  to.
+- **The `ALREADY HERE` evidence line** — a repeat copy is a **Use**, not a refusal.
+  [ADR 0012](adr/0012-a-repeat-copy-is-a-use.md).
+- **Unchanged after all:** *"scrolled to index 0 on a new Entry"*. The code had drifted to
+  scrolling on any new head; keying it back on `EntryAdded` is what this line always said.
+
 > Written after the fact, not before it. The popover and the Main Window each got
 > a plan document first; this one was implemented directly from the mock and this
 > file records what was built, what was corrected, and what was deliberately cut.

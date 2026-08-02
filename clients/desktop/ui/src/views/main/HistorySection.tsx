@@ -47,8 +47,8 @@ export default function HistorySection({ now }: { now: number }) {
   const entries = useHistoryStore((s) => s.entries);
   const hydrate = useHistoryStore((s) => s.hydrate);
   const filtered = useFilteredEntries();
-  const search = useUiStore((s) => s.search);
-  const setSearch = useUiStore((s) => s.setSearch);
+  const filter = useUiStore((s) => s.filter);
+  const setFilter = useUiStore((s) => s.setFilter);
   const selectedIndex = useUiStore((s) => s.selectedIndex);
   const setSelectedIndex = useUiStore((s) => s.setSelectedIndex);
   const viewedUserId = useUiStore((s) => s.viewedUserId);
@@ -172,8 +172,8 @@ export default function HistorySection({ now }: { now: number }) {
     list = (
       <PanelMessage
         title="NO MATCHES"
-        detail={`Nothing matches "${search}"`}
-        action={{ label: "CLEAR FILTER", onClick: () => setSearch(""), variant: "outline" }}
+        detail={`Nothing matches "${filter}"`}
+        action={{ label: "CLEAR FILTER", onClick: () => setFilter(""), variant: "outline" }}
       />
     );
   } else {
@@ -250,7 +250,7 @@ export default function HistorySection({ now }: { now: number }) {
           never be shown a limit that has not bitten them, and a filtered list
           is short for a reason of the reader's own making.
         */}
-        {!search.trim() && entries.length >= CACHE_CAP && (
+        {!filter.trim() && entries.length >= CACHE_CAP && (
           <li
             data-testid="list-end"
             className="px-3 py-2 text-center text-chrome tracking-phrase text-text-dim"
@@ -334,10 +334,10 @@ export default function HistorySection({ now }: { now: number }) {
             // keyboard-dead and the filter reads as decoration.
             autoFocus
             className="fui-field min-w-0 flex-1 pl-7 pr-14"
-            placeholder="Filter entries…"
-            aria-label="Filter entries"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Filter history…"
+            aria-label="Filter history"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
           />
           <span className="pointer-events-none absolute right-2.5 text-chrome tabular-nums text-text-dim">
             {filtered.length}/{entries.length}

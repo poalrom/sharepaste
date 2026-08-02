@@ -10,6 +10,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.sharepaste.android.scan.CameraProblem
 import com.sharepaste.core.Entry
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 /**
  * Everything a screen can ask the app to do.
@@ -20,12 +22,19 @@ import com.sharepaste.core.Entry
  * Standing Actions' own entry points — rather than handing screens a
  * `SharepasteViewModel`.
  *
- * [offerClipboard] and [recallLatest] are the two that matter beyond this file.
- * They are one call each on `SharepasteRepository`, and neither takes a screen
- * for granted: ticket 12's Standing Actions invoke the same repository methods
- * from a transparent activity with no composition at all. Both act on the
- * **Active** Pairing and not on the Viewed one, which is the whole content of
- * "switching the Viewed Pairing changes nothing about syncing or capture".
+ * [offerClipboard] is the one that matters beyond this file. It is a single
+ * call on `SharepasteRepository` and takes no screen for granted: the Standing
+ * Actions invoke the same repository method from a transparent activity with no
+ * composition at all, and it acts on the **Active** Pairing and not on the
+ * Viewed one — which is the whole content of "switching the Viewed Pairing
+ * changes nothing about syncing or capture".
+ *
+ * The verb bar's other half no longer joins it. `RECALL FIRST` calls [recall]
+ * with the first displayed row, on the **Viewed** Pairing, and fetches nothing;
+ * the notification's `RECALL LATEST` still calls `recallLatestOnActivePairing`
+ * and still performs the round trip. The two select the same Entry whenever
+ * nothing is filtered and the two Pairings agree, and differ by the fetch
+ * (ADR 0010).
  */
 class AppActions(
     val setDeviceLabel: (String) -> Unit,
@@ -44,8 +53,15 @@ class AppActions(
     val pairWithCode: () -> Unit,
     val setCameraProblem: (CameraProblem?) -> Unit,
     val dismissPairFailure: () -> Unit,
+    /**
+     * The Filter, as somebody types in it.
+     *
+     * Narrows the rows on screen and asks the Relay nothing, so unlike the two
+     * verbs below it acts on the **Viewed** Pairing: it can only hide what that
+     * History already holds.
+     */
+    val setFilter: (String) -> Unit,
     val offerClipboard: () -> Unit,
-    val recallLatest: () -> Unit,
     val recall: (Entry) -> Unit,
     val deleteEntry: (Entry) -> Unit,
     val dismissNotice: () -> Unit,
@@ -97,8 +113,8 @@ fun appActions(
     pairWithCode = model::pairWithCode,
     setCameraProblem = model::setCameraProblem,
     dismissPairFailure = model::dismissPairFailure,
+    setFilter = model::setFilter,
     offerClipboard = model::offerClipboard,
-    recallLatest = model::recallLatest,
     recall = model::recall,
     deleteEntry = model::deleteEntry,
     dismissNotice = model::dismissNotice,
@@ -128,10 +144,12 @@ fun appActions(
  *
  * System back is answered here too, per branch, and it is still not a back
  * stack: each destination replies to the gesture with the action its own `◂`
- * fires, so the two ways out of a screen cannot drift apart. `enabled = false`
- * is where that reads best — History is the root, and the pairing flow on a
- * phone that has never paired has an empty History behind it, which is not
- * somewhere to be sent. Back belongs to the platform in both.
+ * fires, so the two ways out of a screen cannot drift apart. On the History
+ * that action is `✕`, which clears the Filter — and only when there is one to
+ * clear, because a History with no needle in it is the root and back belongs to
+ * the platform there. The pairing flow on a phone that has never paired has an
+ * empty History behind it, which is not somewhere to be sent, so it is
+ * `enabled = false` for the same reason.
  *
  * The system-bar inset is applied here, once, and not by the three screens.
  * Android 15 draws every app edge to edge whether it asked to or not, and each
@@ -139,9 +157,20 @@ fun appActions(
  * an identity band under the status bar and a verb bar under the gesture pill
  * are the exact two failures edge-to-edge invites. The window itself is already
  * the same void (`themes.xml`), so the inset costs no visible seam.
+ *
+ * [headMoves] is the state holder's one event stream that is not a [Receipt]:
+ * the ids of Entries that have taken the head of the History and that the list
+ * should follow there. It is passed rather than read, for the reason everything
+ * else here is — no composable sees the state holder — and it defaults to
+ * nothing, so a screen rendered to be read composes without one.
  */
 @Composable
-fun SharepasteApp(state: UiState, actions: AppActions, modifier: Modifier = Modifier) {
+fun SharepasteApp(
+    state: UiState,
+    actions: AppActions,
+    modifier: Modifier = Modifier,
+    headMoves: Flow<Long> = emptyFlow(),
+) {
     SharepasteTheme {
         Surface(modifier = modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             when (state.screen) {
@@ -176,9 +205,15 @@ fun SharepasteApp(state: UiState, actions: AppActions, modifier: Modifier = Modi
                 }
 
                 Screen.History -> {
-                    // The root. Back exits, and that is the platform's answer.
-                    BackHandler(enabled = false) {}
-                    HistoryScreen(state = state, actions = actions)
+                    // The same action as the `✕` in the Filter band, and only
+                    // while that control is on screen. With no Filter this is
+                    // the root and back exits, which is the platform's answer.
+                    //
+                    // Three presses leave the app while the keyboard is up: the
+                    // IME eats the first, this takes the second. That is the
+                    // cost of a Filter that does not vanish on a stray gesture.
+                    BackHandler(enabled = state.filter.isNotEmpty()) { actions.setFilter("") }
+                    HistoryScreen(state = state, actions = actions, headMoves = headMoves)
                 }
 
                 Screen.Pairings -> {

@@ -6,7 +6,6 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
 import com.sharepaste.android.OfferAttempt
 import com.sharepaste.android.R
-import com.sharepaste.android.RecallAttempt
 import com.sharepaste.android.SharepasteApplication
 import com.sharepaste.android.SharepasteRepository
 import com.sharepaste.android.platform.UiPreferences
@@ -16,6 +15,8 @@ import com.sharepaste.core.ConnectionState
 import com.sharepaste.core.CoreEvent
 import com.sharepaste.core.Entry
 import com.sharepaste.core.OfferOutcome
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,8 +24,12 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The one state holder, and the whole of the sync model.
@@ -71,6 +76,32 @@ class SharepasteViewModel(
     )
     val receipts: SharedFlow<Receipt> = _receipts.asSharedFlow()
 
+    /**
+     * The id of the Entry that has just taken the head of the Viewed Pairing's
+     * History, when the list should follow it there.
+     *
+     * Two things put a row at the head and only these two are worth chasing: an
+     * **arrival** — a new Entry, which is `CoreEvent.EntryAdded` and nothing
+     * else — and a **Use this device made**. A Use from another device raises
+     * neither: nothing new exists, and reordering somebody's viewport to show
+     * them a row they already had costs them their place for no news.
+     *
+     * An event and not a [UiState] field, for the reason the Receipts are: it
+     * is consumed once and a snapshot would re-deliver it on every
+     * recomposition. Not [Receipt.Recalled] either — [confirmRecall] suppresses
+     * that one whole when `SHOW WHAT WAS RECALLED` is off, and where the list
+     * scrolls to must not become a function of a display preference.
+     *
+     * Buffered by one and `DROP_OLDEST`, like [_receipts], so [tryEmit] always
+     * takes and a backfill arriving with no screen collecting is dropped rather
+     * than replayed.
+     */
+    private val _headMoves = MutableSharedFlow<Long>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val headMoves: SharedFlow<Long> = _headMoves.asSharedFlow()
+
     init {
         viewModelScope.launch {
             repo.events.collect(::onCoreEvent)
@@ -84,6 +115,48 @@ class SharepasteViewModel(
                     )
                 }
             }
+        }
+        scanForTheFilter()
+    }
+
+    /**
+     * The Filter's real scans, which are the only work this class does that is
+     * not a call into the core.
+     *
+     * `mapLatest` cancels the scan a keystroke ago, so a slow answer can never
+     * land on top of a fast one, and `Dispatchers.Default` keeps a hundred
+     * Entries of `plaintext` — 6.4 MiB at the 64 KB cap — off the frame the
+     * person is typing into.
+     *
+     * `distinctUntilChanged` on the pair is what stops a Notice, a Receipt or a
+     * Contact reading re-running the scan: those change the snapshot several
+     * times a second and change neither the needle nor the rows.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun scanForTheFilter() {
+        viewModelScope.launch {
+            _state.map { it.filter.trim() to it.entries }
+                .distinctUntilChanged()
+                .mapLatest { (needle, entries) ->
+                    // The two answers [UiState.shown] gives without a scan.
+                    // Re-deriving them here would be a frame's worth of nothing.
+                    if (needle.isEmpty() || entries.isEmpty()) {
+                        null
+                    } else {
+                        withContext(Dispatchers.Default) { filtered(needle, entries) }
+                    }
+                }
+                .collect { answer ->
+                    if (answer == null) return@collect
+                    // Guarded on the needle rather than trusted to cancellation:
+                    // the write does not suspend, so it can outrun the
+                    // coroutine's own cancellation by a few microseconds, and a
+                    // count that disagrees with the rows it counts is the one
+                    // thing the pair exists to rule out.
+                    _state.update {
+                        if (it.filter.trim() == answer.needle) it.copy(scanned = answer) else it
+                    }
+                }
         }
     }
 
@@ -166,14 +239,16 @@ class SharepasteViewModel(
      * same outcome by a shorter route.
      */
     fun onLeaveForeground() {
-        // The Viewed Pairing goes with it. It is a transient view choice —
-        // CONTEXT.md: "forgotten when the window closes" — and a phone's
-        // equivalent of closing the window is being put down. Nothing persists
-        // it, so forgetting is simply dropping the override.
+        // The Viewed Pairing goes with it, and so does the Filter. Both are
+        // transient view choices — CONTEXT.md: "forgotten when the window
+        // closes" — and a phone's equivalent of closing the window is being put
+        // down. Nothing persists either, so forgetting is simply dropping them,
+        // which is the desktop's rule for the same two (`store/ui.ts`).
         _state.update {
             it.copy(
                 foreground = false,
                 viewedUserId = null,
+                filter = "",
                 confirming = null,
                 // The rows belonged to the Pairing being stopped looking at, so
                 // they would otherwise be read as the Active Pairing's on the way
@@ -329,6 +404,17 @@ class SharepasteViewModel(
     // -- History, Offer and Recall --------------------------------------------
 
     /**
+     * The Filter, as somebody types in it.
+     *
+     * Stored verbatim and trimmed only where the needle is made, so the field
+     * draws back exactly what was typed. The scan this may need does not happen
+     * here — see [scanForTheFilter].
+     */
+    fun setFilter(filter: String) {
+        _state.update { it.copy(filter = filter) }
+    }
+
+    /**
      * Offered Capture of whatever is on the clipboard.
      *
      * Every Entry a phone produces is an Offered Capture: the person hands the
@@ -377,37 +463,18 @@ class SharepasteViewModel(
     }
 
     /**
-     * Recall Latest: the newest Entry onto this device's clipboard.
-     *
-     * It always fetches, and when the fetch fails the newest **cached** Entry is
-     * handed over instead with [Notice.RecalledFromCache] to say so. That one
-     * stays a Notice and not a Receipt: it is the outcome ADR 0007 says may
-     * never be silent, and a band that waits to be dismissed is what "never
-     * silent" costs.
-     */
-    fun recallLatest() {
-        viewModelScope.launch {
-            try {
-                when (val attempt = repo.recallLatestOnActivePairing()) {
-                    RecallAttempt.Unpaired -> raise(Notice.Unpaired)
-                    is RecallAttempt.Done -> if (attempt.fromCache) {
-                        raise(Notice.RecalledFromCache)
-                    } else {
-                        confirmRecall(previewOf(attempt.userId, attempt.entryId))
-                    }
-                }
-            } catch (e: AppException) {
-                raise(recallFailureFor(e))
-            }
-        }
-    }
-
-    /**
      * Recall one chosen Entry.
      *
      * Takes the Entry's own `userId` rather than the Active Pairing's, because
-     * ticket 11 introduces a Viewed Pairing that may not be the Active one and a
-     * row must recall from the History it is a row of.
+     * a Viewed Pairing may not be the Active one and a row must recall from the
+     * History it is a row of. `RECALL FIRST` reaches this too, with the first
+     * displayed row, which is what makes the marked row and the verb bar one
+     * decision rather than two that can disagree (ADR 0010).
+     *
+     * It fetches nothing. A Recall is still a **Use**, so the core puts the
+     * Entry at the head of the History and every device reorders with it — and
+     * this is where the screen is told that the Use was *this* device's, because
+     * `HistoryChanged` arrives carrying only a `user_id` and cannot say.
      */
     fun recall(entry: Entry) {
         viewModelScope.launch {
@@ -417,6 +484,7 @@ class SharepasteViewModel(
                 raise(recallFailureFor(e))
                 return@launch
             }
+            _headMoves.tryEmit(entry.id)
             confirmRecall(entry.preview)
         }
     }
@@ -564,6 +632,10 @@ class SharepasteViewModel(
             current.copy(
                 viewedUserId = userId,
                 confirming = null,
+                // A needle typed against one Pairing's History narrows another's
+                // to rows it was never asked about. Cleared, and not carried
+                // over, for the reason the desktop clears it on the same switch.
+                filter = "",
                 // Emptied rather than left: the rows on screen belong to the other
                 // Pairing, and a list that changes ownership one repaint late is a
                 // list that briefly attributes Entries to the wrong User.
@@ -716,16 +788,20 @@ class SharepasteViewModel(
             // is looking at another Pairing's History; ungated, its Entries would
             // appear in a list they are not part of and be attributed to the
             // wrong User.
-            is CoreEvent.EntryAdded -> _state.update { current ->
+            is CoreEvent.EntryAdded -> {
                 // Newest first, and de-duplicated by id: the backfill and the
                 // live SSE stream can both deliver the same Entry across a
                 // reconnect.
-                if (event.userId != current.viewedPairing) {
-                    current
-                } else if (current.entries.any { it.id == event.entry.id }) {
-                    current
-                } else {
-                    current.copy(entries = listOf(event.entry) + current.entries)
+                val current = _state.value
+                val arrived = event.userId == current.viewedPairing &&
+                    current.entries.none { it.id == event.entry.id }
+                if (arrived) {
+                    _state.update { it.copy(entries = listOf(event.entry) + it.entries) }
+                    // **This event is the arrival.** Nothing derived from the
+                    // list can be: under Last Use ordering a Use changes the
+                    // head too, on this device and on any other, and neither is
+                    // something new to be shown. Only a capture raises this.
+                    _headMoves.tryEmit(event.entry.id)
                 }
             }
 

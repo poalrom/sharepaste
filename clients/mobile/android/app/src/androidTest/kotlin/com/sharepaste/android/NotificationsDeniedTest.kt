@@ -14,7 +14,7 @@ import com.sharepaste.android.ui.Receipt
 import com.sharepaste.android.ui.SessionPhase
 import com.sharepaste.android.ui.TAG_FAULT
 import com.sharepaste.android.ui.TAG_OFFER
-import com.sharepaste.android.ui.TAG_RECALL_LATEST
+import com.sharepaste.android.ui.TAG_RECALL_FIRST
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -118,9 +118,11 @@ class NotificationsDeniedTest {
      * And both in-app verbs still work, against a real Relay.
      *
      * The part of "usable rather than broken" that cannot be faked by rendering
-     * a state: a genuine Offered Capture and a genuine Recall Latest, on a phone
-     * whose notification the platform is refusing to show. Costs the run one
-     * single-use invite token, and only when the class actually runs.
+     * a state: a genuine Offered Capture and a genuine `RECALL FIRST`, on a
+     * phone whose notification the platform is refusing to show. The Entry just
+     * offered is the one at the head, so the first displayed row is the row the
+     * verb bar owes. Costs the run one single-use invite token, and only when
+     * the class actually runs.
      */
     @Test
     fun the_in_app_verbs_still_work_with_the_notification_denied() {
@@ -139,7 +141,7 @@ class NotificationsDeniedTest {
         Evidence.log("denied verbs  = Offer still works: Entry id=${entry.id}")
 
         phone.clip.putText("not the Entry")
-        compose.onNodeWithTag(TAG_RECALL_LATEST).performClick()
+        compose.onNodeWithTag(TAG_RECALL_FIRST).performClick()
         val recalled = phone.awaitReceipt("the in-app Recall must still report what it handed over") {
             it is Receipt.Recalled
         } as Receipt.Recalled
@@ -149,8 +151,7 @@ class NotificationsDeniedTest {
             recalled.preview,
         )
         assertNull(
-            "the fetch succeeded, so the outcome confirms and vanishes. A band left standing " +
-                "here would be the cache fallback, which is what 'not fall back' rules out",
+            "a Recall that worked confirms and vanishes; this screen has no band for one",
             phone.state.notice,
         )
         assertEquals(

@@ -216,11 +216,17 @@ class SharepasteRepository private constructor(
      * following Last Use, so paging by it alone would skip and repeat rows.
      * Nothing on this phone pages — the cache holds a hundred Entries and the
      * screen shows them all — but the boundary carries the shape the core has.
+     *
+     * [limit] defaults to that same hundred because it is the cache's own
+     * `MAX_PER_USER`, and the ceiling `list_recent` clamps to regardless, so
+     * anything smaller would only hide rows the device already holds. The
+     * Filter narrows this one page and never asks the Relay, so what this call
+     * returns is the whole of what it can ever find.
      */
     suspend fun listHistory(
         userId: String,
         before: HistoryCursor? = null,
-        limit: Long = 50,
+        limit: Long = 100,
     ): List<Entry> = io { it.listHistory(userId, before, limit) }
 
     suspend fun readEntry(userId: String, entryId: Long): String? = io { it.readEntry(userId, entryId) }

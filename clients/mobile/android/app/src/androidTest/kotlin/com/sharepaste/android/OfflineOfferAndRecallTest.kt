@@ -1,32 +1,26 @@
 package com.sharepaste.android
 
 import androidx.activity.ComponentActivity
-import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.sharepaste.android.ui.Notice
 import com.sharepaste.android.ui.Receipt
 import com.sharepaste.android.ui.SessionPhase
-import com.sharepaste.android.ui.TAG_NOTICE_STALE
 import com.sharepaste.android.ui.TAG_OFFER
 import com.sharepaste.android.ui.TAG_PENDING
-import com.sharepaste.android.ui.TAG_RECALL_LATEST
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * What the phone does with no route to the Relay: it says what it handed over,
- * and it keeps what it could not send.
+ * What the phone does with no route to the Relay: it keeps what it could not
+ * send.
  *
  * The missing network is real and it is this test's own. [RelayProxy] forwards to
  * the Relay on a port this process owns; closing it gives the next request a
@@ -39,6 +33,12 @@ import org.junit.runner.RunWith
  * so a phone that pairs by code talks to whatever that device talks to. Pairing
  * against a port this test controls therefore means claiming an invite of its own,
  * and costs the run a third single-use token.
+ *
+ * **There is no offline Recall here any more.** `RECALL FIRST` selects from the
+ * cache and performs no round trip (ADR 0010), so there is no fetch that can
+ * fail and nothing to fall back from. The fallback, and the sentence that may
+ * never be silent, belong to the notification's `RECALL LATEST` —
+ * `StandingActionsOnAClosedPhoneTest` is where that rule is held.
  */
 @RunWith(AndroidJUnit4::class)
 class OfflineOfferAndRecallTest {
@@ -66,59 +66,6 @@ class OfflineOfferAndRecallTest {
         proxy.reopen()
         phone.close()
         proxy.shutdown()
-    }
-
-    /**
-     * Recall Latest with no Relay falls back to the newest cached Entry **and says
-     * so on screen.**
-     *
-     * The visible statement is the assertion, not the return value. A silent
-     * fallback hands over yesterday's link and looks exactly like a success, so the
-     * only proof worth having is the sentence a person would read.
-     */
-    @Test
-    fun recall_latest_with_no_relay_falls_back_to_the_cache_and_says_so_on_screen() {
-        phone.enterForeground()
-        phone.await("in contact through the proxy") { it.session is SessionPhase.InContact }
-
-        // Something to fall back *to*. Offered here and round-tripped through the
-        // Relay, so it is a genuinely cached Entry rather than a fixture.
-        val cached = "the-newest-thing-this-phone-had-${System.currentTimeMillis()}"
-        phone.clip.putText(cached)
-        compose.onNodeWithTag(TAG_OFFER).performClick()
-        phone.awaitReceipt("the seed Offer must be taken") { it is Receipt.Offered }
-        phone.awaitEntry("the seed Offer must come back from the Relay and be cached") {
-            it.preview == cached
-        }
-        // Asserted rather than dismissed. A taken Offer is a Receipt now, so it
-        // leaves the band empty on its own — and that is exactly what makes the
-        // wait below mean anything: the only Notice this test can produce is the
-        // fallback it is here to catch.
-        assertNull("a taken Offer must leave the band empty", phone.state.notice)
-
-        proxy.close()
-        proxy.assertUnreachable()
-        Evidence.log("relay gone    = the proxy is closed; the port now refuses connections")
-
-        phone.clip.putText("something else entirely")
-        compose.onNodeWithTag(TAG_RECALL_LATEST).performClick()
-        phone.await("Recall Latest must settle") { it.notice != null }
-
-        assertEquals(
-            "a fetch that failed must be reported as a cache read, not as a success",
-            Notice.RecalledFromCache,
-            phone.state.notice,
-        )
-        val sentence = resources.getString(R.string.recall_from_cache)
-        compose.onNodeWithTag(TAG_NOTICE_STALE).assertIsDisplayed()
-        compose.onNodeWithText(sentence).assertIsDisplayed()
-        Evidence.log("stale recall  = on screen: $sentence")
-
-        assertEquals(
-            "the fallback still has to hand over the newest Entry it had",
-            cached,
-            phone.clip.requireText("after Recall Latest with the Relay gone"),
-        )
     }
 
     /**

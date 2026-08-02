@@ -214,12 +214,15 @@ class StandingActionActivity : Activity() {
      * The newest Entry onto this device's clipboard — what it was, and the cache
      * fallback said out loud.
      *
-     * Recall Latest always attempts the round trip. When the fetch fails, the
-     * newest Entry this phone already had is still the best answer available,
-     * but it may be yesterday's link and only the person can tell. That one is
-     * [Notice.RecalledFromCache] on an open screen and reaches this surface as a
-     * [Receipt.Aloud] — a warning said out loud, never a confirmation, which is
-     * what keeps ADR 0007's "may never be silent" true of the switch below.
+     * Recall Latest always attempts the round trip, and this is now the only
+     * verb that does: `RECALL FIRST` on the open screen selects from the cache
+     * and fetches nothing (ADR 0010). When the fetch fails, the Entry this
+     * phone already had is still the best answer available, but it may be
+     * yesterday's link and only the person can tell — so it reaches this
+     * surface as a [Receipt.Aloud], a warning said out loud and never a
+     * confirmation, which is what keeps ADR 0007's "may never be silent" true
+     * of the switch below. There is no longer an in-app twin of it, because
+     * there is no longer an in-app fetch to fall back from.
      *
      * The confirmation names the Entry's Preview, read back through the same
      * [SharepasteRepository.previewOf] the state holder uses, so a Recall from

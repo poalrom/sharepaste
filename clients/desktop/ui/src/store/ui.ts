@@ -20,7 +20,7 @@ export type MainSection = "history" | "pairings" | "settings";
 export type Toast = { tone: Tone; text: string; detail?: string; seq: number };
 
 export type UiState = {
-  search: string;
+  filter: string;
   selectedIndex: number;
   mainSection: MainSection;
   /** True when the Pairings pane should show the add-a-pairing flow expanded. */
@@ -38,7 +38,7 @@ export type UiState = {
   seedEntryId?: number | undefined;
   /** Explicit `| undefined`: `exactOptionalPropertyTypes` is on, and clearing writes the key. */
   toast?: Toast | undefined;
-  setSearch: (s: string) => void;
+  setFilter: (s: string) => void;
   setSelectedIndex: (i: number) => void;
   setMainSection: (m: MainSection) => void;
   setPairingFlowOpen: (open: boolean) => void;
@@ -49,20 +49,20 @@ export type UiState = {
 };
 
 export const useUiStore = create<UiState>((set) => ({
-  search: "",
+  filter: "",
   selectedIndex: 0,
   mainSection: "history",
   pairingFlowOpen: false,
   viewedUserId: undefined,
   seedEntryId: undefined,
   toast: undefined,
-  setSearch: (search) => set({ search, selectedIndex: 0 }),
+  setFilter: (filter) => set({ filter, selectedIndex: 0 }),
   setSelectedIndex: (selectedIndex) => set({ selectedIndex }),
   // Switching panes drops the filter with them: a query left over from the last
   // visit would silently hide rows the returning user expects to see.
-  setMainSection: (mainSection) => set({ mainSection, search: "", selectedIndex: 0 }),
+  setMainSection: (mainSection) => set({ mainSection, filter: "", selectedIndex: 0 }),
   setPairingFlowOpen: (pairingFlowOpen) => set({ pairingFlowOpen }),
-  setViewedUserId: (viewedUserId) => set({ viewedUserId, search: "", selectedIndex: 0 }),
+  setViewedUserId: (viewedUserId) => set({ viewedUserId, filter: "", selectedIndex: 0 }),
   setSeedEntryId: (seedEntryId) => set({ seedEntryId }),
   showToast: (toast) => set((s) => ({ toast: { ...toast, seq: (s.toast?.seq ?? 0) + 1 } })),
   dismissToast: () => set({ toast: undefined }),

@@ -7,9 +7,9 @@ export type ConnectionState = "Disconnected" | "Connecting" | "Online" | "AuthFa
  * flattened, capped, built by the core. Rows render it as it arrives.
  *
  * `plaintext` is the whole text — what the reader pane renders (ADR 0003), what
- * the search matches so a query can find a word on an entry's third line, and
- * what the header's byte count measures. `null` only for an Undecryptable
- * entry.
+ * the Filter matches, so a word on an entry's third line still narrows the
+ * history, and what the header's byte count measures. `null` only for an
+ * Undecryptable entry.
  *
  * `undecryptable` is stated by the backend and must never be re-derived. An
  * entry whose plaintext is genuinely empty is indistinguishable from one this

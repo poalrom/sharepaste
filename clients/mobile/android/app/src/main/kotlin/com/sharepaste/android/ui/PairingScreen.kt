@@ -25,8 +25,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -39,7 +37,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -551,46 +548,6 @@ fun CameraPreview(onCode: (String) -> Unit) {
             },
         )
     }
-}
-
-/**
- * A text field in the console's own voice.
- *
- * Material's outlined field underneath, because a hand-rolled one would owe the
- * platform a cursor, a selection handle, an IME contract and an accessibility
- * tree. Only its colours, shape and type are ours.
- */
-@Composable
-private fun FuiTextField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: String,
-    modifier: Modifier = Modifier,
-    placeholder: String? = null,
-    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label, style = Fui.Micro) },
-        placeholder = placeholder?.let { { Text(it, style = Fui.Data, color = Fui.TextDim) } },
-        singleLine = true,
-        shape = RectangleShape,
-        textStyle = Fui.Data,
-        keyboardOptions = keyboardOptions,
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = Fui.TextPrimary,
-            unfocusedTextColor = Fui.TextBody,
-            focusedBorderColor = Fui.Cyan400,
-            unfocusedBorderColor = Fui.Frame,
-            focusedLabelColor = Fui.TextEmitter,
-            unfocusedLabelColor = Fui.TextMuted,
-            cursorColor = Fui.Cyan400,
-            focusedContainerColor = Fui.Recess,
-            unfocusedContainerColor = Fui.Recess,
-        ),
-        modifier = modifier.fillMaxWidth(),
-    )
 }
 
 const val TAG_PAIRING_SCREEN = "pairing-screen"

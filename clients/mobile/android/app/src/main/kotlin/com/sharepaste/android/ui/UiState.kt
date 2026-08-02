@@ -142,6 +142,27 @@ data class UiState(
      * full length, which is the whole reason a dismissal is allowed to persist.
      */
     val foregroundNoteDismissed: Boolean = false,
+    /**
+     * What has been typed into the Filter, verbatim.
+     *
+     * Held here and not in the band's own `remember` for the reason everything
+     * else is: it survives a rotation with the rest of the snapshot. It is
+     * cleared on a Viewed Pairing switch and when the app goes to the back —
+     * the desktop's rule (`store/ui.ts`), ported — because a needle left over
+     * from the last visit is a needle silently hiding rows.
+     *
+     * Untrimmed, because it is what the person typed and the field draws it
+     * back. Trimming happens once, in [shown], where the needle is made.
+     */
+    val filter: String = "",
+    /**
+     * The last real scan's answer, and the needle it answered.
+     *
+     * Written only by [SharepasteViewModel]'s filtering job and read only
+     * through [shown], which is the reason it can be a frame behind without
+     * anything on screen disagreeing with itself.
+     */
+    val scanned: Filtered = Filtered(),
 ) {
     /**
      * The Pairing whose History is on screen. Defaults to the Active one.
@@ -166,7 +187,71 @@ data class UiState(
         if (userId == null) return ""
         return pairings.firstOrNull { it.userId == userId }?.let { it.username ?: it.userId } ?: userId
     }
+
+    /**
+     * The rows on screen, and the needle that left them.
+     *
+     * The screen reads this and never [entries]: the list, the `n/m` count and
+     * the empty-state branch all resolve from one value that carries the query
+     * it answers, so no frame can show one needle's rows under another's count.
+     *
+     * **Two of the three answers need no scan, and they are the two that
+     * matter.** A blank needle is every Entry and an empty History is no
+     * Entries, so both are known here without reading a single `plaintext` —
+     * and every path that could otherwise mislead goes through one of them.
+     * Switching the Viewed Pairing and going to the back clear the needle;
+     * clearing a History and forgetting the last Pairing empty the list. So no
+     * frame can put one Pairing's rows under another's name, and this holds by
+     * construction rather than by every future edit to [entries] remembering
+     * there is a second field to keep up.
+     *
+     * The third answer is a real scan, and that is the one case this hands back
+     * [scanned] instead: computing it here would run it on whichever thread read
+     * the property, which is the main one, and a hundred Entries is 6.4 MiB at
+     * the 64 KB cap. [SharepasteViewModel] runs it on `Dispatchers.Default` and
+     * writes it back. Between the keystroke and the answer this is one frame
+     * stale — and says so, because [Filtered.needle] is the needle it answered
+     * rather than the one in the field.
+     */
+    val shown: Filtered
+        get() {
+            val needle = filter.trim()
+            return if (needle.isEmpty() || entries.isEmpty()) filtered(needle, entries) else scanned
+        }
 }
+
+/**
+ * The Entries a needle left, and the needle that left them.
+ *
+ * One pair rather than two fields, because a count that disagrees with the rows
+ * it counts is the whole failure mode of filtering off the main thread. An empty
+ * [needle] means no Filter is on: [entries] is then the whole History, and
+ * `NO MATCHES` is not a thing that can be said about it.
+ */
+data class Filtered(val needle: String = "", val entries: List<Entry> = emptyList())
+
+/**
+ * The one predicate, so a phone cannot answer a needle two ways.
+ *
+ * Matches the whole [Entry.plaintext] and not the [Entry.preview]: the Preview
+ * is capped at 80 characters, which truncates exactly the long Entries a Filter
+ * exists to tell apart. The needle arrives trimmed and the haystack does not —
+ * leading whitespace is part of what was copied, and a trailing space nobody can
+ * see must not empty the list.
+ *
+ * `ignoreCase` rather than lowercasing both sides: `lowercase()` is
+ * locale-sensitive, and on a Turkish locale it turns `ID` into `ıd` and stops it
+ * matching `id`.
+ *
+ * An **Undecryptable** Entry carries no plaintext and so matches nothing, which
+ * is the truth about it rather than an omission.
+ */
+fun filtered(needle: String, entries: List<Entry>): Filtered =
+    if (needle.isEmpty()) {
+        Filtered(needle, entries)
+    } else {
+        Filtered(needle, entries.filter { it.plaintext?.contains(needle, ignoreCase = true) == true })
+    }
 
 /**
  * A destructive action that has been asked for and not yet agreed to.
@@ -202,12 +287,14 @@ sealed interface Confirmation {
  * mood. The sealed hierarchy is what makes rendering exhaustive — an outcome
  * added without words for it will not compile.
  *
- * **Six variants, and the two that left are the point.** A plain Offer and a
+ * **Five variants, and the three that left are the point.** A plain Offer and a
  * plain Recall confirm and need nothing back, so they are [Receipt]s and reach
  * the person as a Toast; every one of these needs something done or known, and
  * a band that persists until it is dismissed is what that difference looks like.
- * [RecalledFromCache] is the variant that keeps the line honest — it is the
- * plausible seventh Receipt and it may never be silent.
+ * The third was `RecalledFromCache`, and it left for a different reason: the
+ * verb that raised it stopped fetching (ADR 0010), so there is no round trip
+ * left to fall back from. The Standing Actions' Recall still fetches and still
+ * says so, on a surface with no band — see `StandingActionActivity`.
  */
 sealed interface Notice {
 
@@ -218,18 +305,6 @@ sealed interface Notice {
      * see [offerRefusalMessage] for the words and for which reasons can arrive.
      */
     data class OfferRefused(val reason: SkipReason) : Notice
-
-    /**
-     * The newest **cached** Entry is on the clipboard, because the Relay could
-     * not be reached.
-     *
-     * The one notice that may never be silent. Recall Latest always attempts the
-     * round trip; when the round trip fails, the honest answer is still the best
-     * one available, but it may be yesterday's link and the person is the only
-     * one who can tell. A silent fallback is how a phone hands over the wrong
-     * thing and looks like it worked.
-     */
-    data object RecalledFromCache : Notice
 
     /** Nothing is paired, so there is nothing to Offer to or Recall from. */
     data object Unpaired : Notice

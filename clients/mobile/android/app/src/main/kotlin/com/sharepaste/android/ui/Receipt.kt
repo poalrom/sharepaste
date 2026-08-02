@@ -17,9 +17,10 @@ import com.sharepaste.android.R
  *
  * The split against [Notice] is by **outcome kind**, not by which path invoked
  * it. A Receipt says a thing happened and vanishes; a Notice says something
- * needs doing and waits to be dismissed. [Notice.RecalledFromCache] is the one
- * that proves the line is real: it looks like a confirmation and is not, because
- * ADR 0007 says it may never be silent.
+ * needs doing and waits to be dismissed. [Aloud] is what proves the line is
+ * real: the Standing Actions' Recall still fetches, and when the fetch fails it
+ * hands over the cache and must say so on a surface that has no band to say it
+ * in — see `StandingActionActivity`.
  *
  * **[Recalled] is the only variant that may ever carry an Entry's text**, and
  * that is enforced by the shape rather than by a comment — everything else here

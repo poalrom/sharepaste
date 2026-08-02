@@ -52,9 +52,10 @@ impl From<CoreConnectionState> for ConnectionState {
 /// Empty when the entry is Undecryptable.
 ///
 /// `plaintext` is the whole decrypted text, `None` only when the entry is
-/// Undecryptable. A phone has no reader pane and no search, so nothing on
-/// Android reads it; it is carried because this record is the core's `Entry`,
-/// whole, and a boundary that dropped the field would make an iOS reader
+/// Undecryptable. A phone still has no reader pane, but the Filter matches the
+/// whole `plaintext` rather than the Preview, so Android does read it; the
+/// field crosses the boundary for that, and not only because this record is
+/// the core's `Entry`, whole, and dropping it would make an iOS reader
 /// impossible to write. Same warning as [`ShortCode`]: it is whatever the
 /// person copied, and UniFFI records always get a `toString` — do not log one.
 ///

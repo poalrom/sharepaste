@@ -21,7 +21,7 @@ beforeEach(() => {
     },
   });
   useUiStore.setState({
-    search: "",
+    filter: "",
     selectedIndex: 0,
     mainSection: "history",
     pairingFlowOpen: false,

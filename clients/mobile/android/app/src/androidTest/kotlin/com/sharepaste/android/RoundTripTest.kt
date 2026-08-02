@@ -5,12 +5,9 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.sharepaste.android.ui.Notice
 import com.sharepaste.android.ui.Receipt
 import com.sharepaste.android.ui.SessionPhase
-import com.sharepaste.android.ui.TAG_NOTICE_STALE
 import com.sharepaste.android.ui.TAG_OFFER
-import com.sharepaste.android.ui.TAG_RECALL_LATEST
 import com.sharepaste.android.ui.entryRecallTag
 import com.sharepaste.core.AppException
 import com.sharepaste.core.SettingsPatch
@@ -18,7 +15,6 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -40,6 +36,16 @@ import org.junit.runner.RunWith
  *
  * Each test pairs its own phone into the run's one inviting User, so nothing here
  * depends on the order JUnit picks.
+ *
+ * **The in-app Recall does not fetch, and that is the point of ADR 0010.** The
+ * test that used to sit here proved the opposite of `RECALL LATEST`: the phone
+ * was put down, the other device put an Entry on the Relay that this phone's
+ * cache had never held, and the verb handed it over. That verb is now the
+ * notification's alone. `RECALL FIRST` hands over the first row of the
+ * displayed list, which is a row on screen by construction, so the fetch it
+ * lost cannot swap in an Entry the person never saw — and
+ * `StandingActionsOnAClosedPhoneTest` still holds the round trip and the
+ * fallback that may never be silent, on the surface that kept them.
  */
 @RunWith(AndroidJUnit4::class)
 class RoundTripTest {
@@ -133,79 +139,6 @@ class RoundTripTest {
 
         awaitRelayNewest("the phone's Offer must reach the Relay", offered)
         Evidence.log("other device  = read it back off the Relay: ${offered.take(24)}…")
-    }
-
-    /**
-     * **Recall Latest fetches. It does not read the cache.**
-     *
-     * Proven the only way it can be: the phone is put down, the other device puts
-     * an Entry on the Relay that this phone's cache has *never* held, and Recall
-     * Latest is asked with no session running. If it read the cache it would hand
-     * over the older Entry; it hands over the new one.
-     *
-     * Which leaves the second half, and it is the *kind* of outcome rather than
-     * one enum value over another. A round trip that succeeded is a [Receipt]: it
-     * names what is now on the clipboard and then vanishes, because there is
-     * nothing left for anyone to do about it. A fallback is
-     * [Notice.RecalledFromCache] instead, and it waits in the band to be
-     * dismissed — handing back what may be yesterday's link is the one outcome
-     * ADR 0007 says may never be silent. So an authoritative answer reported in
-     * the band would be an authoritative answer reported as stale, and both
-     * halves are asserted: the Receipt that arrived, naming the Entry only the
-     * Relay had, and the band that never claimed staleness.
-     */
-    @Test
-    fun recall_latest_fetches_an_entry_this_phone_has_never_cached() {
-        val older = "older-entry-${System.currentTimeMillis()}"
-        other.offerAndWaitForUpload(older)
-        phone.enterForeground()
-        phone.await("in contact") { it.session is SessionPhase.InContact }
-        phone.awaitEntry("the older Entry must be cached first") { it.preview == older }
-
-        // Put the phone down. Nothing syncs now, which is the entire sync model.
-        phone.leaveForeground()
-        phone.await("resting after onStop") { it.session is SessionPhase.Resting }
-
-        val newer = "newer-entry-the-cache-has-never-seen-${System.currentTimeMillis()}"
-        other.offerAndWaitForUpload(newer)
-        Thread.sleep(SETTLE_MS)
-        assertTrue(
-            "the newer Entry must not have reached this phone's cache; with a live session " +
-                "this test would prove nothing about fetching",
-            phone.state.entries.none { it.preview == newer },
-        )
-        assertEquals(
-            "a cache read would hand over this one",
-            older,
-            runBlocking { phone.repo.listHistory(phone.userId!!) }.first().preview,
-        )
-        Evidence.log("cache head    = $older (the newer Entry is on the Relay only)")
-
-        compose.onNodeWithTag(TAG_RECALL_LATEST).performClick()
-        val fetched = phone.awaitReceipt("Recall Latest must report what it handed over") {
-            it is Receipt.Recalled
-        } as Receipt.Recalled
-
-        assertEquals(
-            "the Receipt must name the Entry only the Relay had; a cache read would have " +
-                "named the older one",
-            newer,
-            fetched.preview,
-        )
-        assertNotEquals(
-            "the round trip succeeded, so the answer is authoritative and must not be " +
-                "reported as stale",
-            Notice.RecalledFromCache,
-            phone.state.notice,
-        )
-        compose.onNodeWithTag(TAG_NOTICE_STALE).assertDoesNotExist()
-        val onClipboard = phone.clip.requireText("after Recall Latest with the Relay reachable")
-        Evidence.log("recall latest = fetched; clipboard holds the newer Entry")
-        assertEquals(
-            "Recall Latest read the cache instead of fetching",
-            newer,
-            onClipboard,
-        )
     }
 
     /**
@@ -320,14 +253,5 @@ class RoundTripTest {
 
     private companion object {
         const val DATABASE = "round-trip-proof.db"
-
-        /**
-         * How long the phone is left "closed" while the other device offers.
-         *
-         * Long enough that "nothing arrived" means the teardown worked rather than
-         * that nothing had been sent yet — the same reasoning as ticket 09's
-         * background window.
-         */
-        const val SETTLE_MS = 3_000L
     }
 }
