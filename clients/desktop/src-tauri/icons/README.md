@@ -118,5 +118,33 @@ and cargo directives printed from a proc macro are discarded. Delete those
 old artwork still compiled in. Any icon added here needs a line in `build.rs`.
 
 If something still looks stale, force it with `cargo clean -p
-sharepaste-desktop` — and note that Explorer keeps its own thumbnail cache for
-the `.exe`, refreshed with `ie4uinit.exe -show`.
+sharepaste-desktop`.
+
+## The Windows taskbar keeps showing the old icon
+
+Not the build. Windows 11 draws a taskbar button from the icon the *shell*
+resolves for the app — the Start Menu shortcut the installer writes, and the
+`.exe` behind it — rather than from the live window's `ICON_SMALL`. It caches
+the rendered bitmap in `%LOCALAPPDATA%\Microsoft\Windows\Explorer\iconcache_*.db`,
+and installing a new version does not invalidate it: the shortcut is rewritten
+to the same path, so nothing in the cache key changes. Seen for real after
+0.5.1, whose entire desktop payload was a recoloured icon.
+
+`ie4uinit.exe -show` does **not** clear it, which is what this section used to
+say. Measured on Windows 11 26200: after it ran, the taskbar still drew
+`#0f8a5b`, a green that has been in no shipped file since 0.5.0. What works is
+deleting the caches with the shell down:
+
+```powershell
+Stop-Process -Name explorer -Force
+Remove-Item "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\iconcache*.db" -Force
+Start-Process explorer.exe
+```
+
+Before reaching for that, tell a stale cache from a bad build by reading the
+icon out of the artifact: `SHGetFileInfo` on the installed `.exe` returns what
+the shell will draw, and `WM_GETICON` on the running window returns what the
+process itself set. Both right and the taskbar wrong is the cache, every time.
+
+The tray icon survives the restart unaided — `tray-icon` registers the
+`TaskbarCreated` broadcast and re-adds itself (`platform_impl/windows/mod.rs`).
