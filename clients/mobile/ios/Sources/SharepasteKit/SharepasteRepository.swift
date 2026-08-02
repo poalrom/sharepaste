@@ -194,6 +194,19 @@ public final class SharepasteRepository: Sendable {
         try await run { try $0.listHistory(userId: userId, beforeId: beforeId, limit: limit) }
     }
 
+    /// The full plaintext of one Entry, with no pasteboard involvement.
+    ///
+    /// The screen never calls this: it has no reader pane and no search, and a
+    /// row shows the Preview the core built. The Recall intent does, because its
+    /// return value **is** the Entry — Shortcuts is what puts it on the
+    /// pasteboard (ADR 0007), so the text has to cross this boundary once.
+    ///
+    /// `nil` covers both "no such Entry" and "this device cannot decrypt it";
+    /// the Entry's `undecryptable` flag is what tells them apart.
+    public func readEntry(userId: String, entryId: Int64) async throws -> String? {
+        try await run { try $0.readEntry(userId: userId, entryId: entryId) }
+    }
+
     public func recall(userId: String, entryId: Int64) async throws {
         try await run { try $0.recall(userId: userId, entryId: entryId) }
     }
