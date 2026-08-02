@@ -7,6 +7,22 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.5.1
+
+**Icons.** The phone never had one of its own; this machine's changes colour. Nothing else
+moves — no behaviour, no settings, nothing touched on either side of a pairing.
+
+- **The phone shows Sharepaste's icon.** Every version so far has worn Android's default
+  green robot — on the home screen, in the share sheet and in the app switcher — because
+  the app shipped without a launcher icon at all. It now carries the same three-ribbon
+  mark this machine does, and a themed version of it for launchers that recolour icons to
+  match the wallpaper.
+- **This machine's icon is cyan, not green.** The ribbons were drawn in the colour
+  Sharepaste uses to mean *in contact*, which is a status and has no business standing in
+  for the product. Same mark, same shape, new colour in the taskbar, the dock and the
+  browser tab. Windows keeps its own thumbnail cache, so the old one may linger there
+  until it refreshes.
+
 ## 0.5.0
 
 **Android only.** Nothing on this machine changes. The phone now says what a recall put
