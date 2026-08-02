@@ -722,6 +722,14 @@ jobs:
       # which the `integration` job below already records as the reason it is
       # shaped the way it is. `server/` is Node, so the runner starts it
       # directly.
+      #
+      # Ticket 08 asks for `npm start`, and that is not runnable as written:
+      # `server/package.json` defines `start` as `tsx src/index.ts`, which
+      # passes no subcommand, and the relay needs `serve`. Adding a subcommand
+      # to somebody else's npm script from a CI job would be worse than the
+      # divergence. The substance of the criterion — the relay runs natively on
+      # the runner, and no docker is invoked — is met exactly; the letter of it
+      # is not, and this is that said out loud.
       - name: Build the relay
         run: npm --prefix server ci && npm --prefix server run build
 
@@ -745,22 +753,31 @@ jobs:
           echo "the relay never answered /healthz within 60s" >&2
           exit 1
 
-      - name: Mint one invite per claiming test
+      - name: Mint invite tokens
         shell: bash
         run: |
           set -euo pipefail
-          # Four, and no spare. An invite is single-use — the relay answers a
-          # second claim with 409 — and the four tests that claim one are named
-          # here so that adding a fifth fails loudly, with the message in
-          # `Suite.nextInvite`, rather than stealing another test's token:
+          # Deliberately far more than a run needs, and deliberately not a count
+          # maintained against a list of tests.
           #
-          #   1. the run's one inviting device        (`Inviter.shared`)
-          #   2. the second User, for TwoPairingsTest (`Inviter.second`)
-          #   3. SessionEventsTest, which pairs a facade of its own
-          #   4. PendingOnANonActivePairingTest, whose inviter sits behind the
-          #      proxy so that the phone's Pairing has a relay it can take away
+          # An invite is single-use — the relay answers a second claim with 409 —
+          # and a process needs four: the run's inviting device
+          # (`Inviter.shared`), the second User for `TwoPairingsTest`
+          # (`Inviter.second`), `SessionEventsTest`'s own facade, and the
+          # inviter `PendingOnANonActivePairingTest` claims through its proxy.
+          # The first version of this step minted exactly those four and the run
+          # ran out, for two reasons worth writing down: the list of claiming
+          # tests grows without this file being touched, and `xcodebuild`
+          # relaunches a bundle that crashed and re-runs what had not finished,
+          # so one process's four can be spent several times over.
+          #
+          # Twenty-four costs twenty-four rows in a SQLite file the runner
+          # deletes with itself, and buys five full re-runs. Running out is no
+          # longer fatal either — `Suite.nextInvite` throws and names the claim
+          # that asked — so an exhausted pool now fails one test with a sentence
+          # instead of taking the process down and consuming more on the way.
           tokens=""
-          for n in 1 2 3 4; do
+          for n in $(seq 1 24); do
             token="$(node server/dist/index.js user create "ios-ci-$n" --db "$SHAREPASTE_TEST_DB" \
               | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).invite_token")"
             tokens="${tokens:+$tokens,}$token"
@@ -827,11 +844,28 @@ jobs:
           print(next((s for s in schemes if s.endswith("-Package")), schemes[0]))
           ')"
           echo "scheme: $scheme"
+          # `-test-timeouts-enabled` is not belt and braces; it is the only
+          # thing that can end a hang here. Every wait the suite writes for
+          # itself is bounded, but a blocking call inside the FFI boundary is
+          # not interruptible from the Swift side, and one `UIPasteboard` read
+          # with nobody to answer its permission prompt held this job for
+          # thirty-six minutes until a human cancelled it. With this, the same
+          # hang is one red test with a backtrace naming the frame, two minutes
+          # in — which is also how the *next* unknown blocking call gets
+          # diagnosed instead of cancelled.
+          #
+          # The maximum is above the default because `ExpiredCodeTest` raises
+          # its own allowance to 240s to wait out a real pairing slot; a
+          # per-class `executionTimeAllowance` above the maximum is clamped
+          # silently, which would fail that test for the wrong reason.
           xcodebuild test \
             -scheme "$scheme" \
             -destination "id=$SIMULATOR_UDID" \
             -only-testing:SharepasteFacadeTests \
             -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 \
+            -maximum-test-execution-time-allowance 300 \
             ARCHS=arm64 \
             CODE_SIGNING_ALLOWED=NO \
             TEST_RUNNER_SHAREPASTE_RELAY_URL="$SHAREPASTE_RELAY_URL" \
@@ -1158,7 +1192,7 @@ jobs:
       # rewrote it into, so the check would go green while the update path was
       # broken. The identifier is proved by watching an update land, and by
       # nothing else.
-      - name: Check the SideStore source names this release
+      - name: Check the SideStore source is fit to publish
         shell: bash
         run: |
           set -euo pipefail
@@ -1169,6 +1203,32 @@ jobs:
               `https://github.com/${process.env.REPO}/releases/download/v${version}/sharepaste-${version}.ipa`;
             const app = JSON.parse(fs.readFileSync(".github/sidestore-source.json", "utf8")).apps[0];
             const newest = app.versions[0];
+
+            // The blank, first. Publishing the placeholder produces exactly the
+            // failure the file argues about: SideStore identifies the app by
+            // this string, so a Release carrying an unfilled one offers a fresh
+            // install beside the real app, with an empty database, while the
+            // Pairings sit in the old one.
+            //
+            // This is NOT the identifier-versus-plist check ADR 0008 rejected.
+            // That one would compare two strings nobody installs — the plist
+            // holds `com.sharepaste.ios`, the device holds the form xtool and
+            // SideStore rewrote it into — and would go green while the real path
+            // was broken. This one has no opinion about what the identifier
+            // should be. It refuses a blank that was never filled in, which is
+            // the one state that is wrong from here without knowing anything
+            // about a device.
+            if (app.bundleIdentifier.includes("REPLACE-WITH-THE-INSTALLED-IDENTIFIER")) {
+              console.error(".github/sidestore-source.json still carries the placeholder identifier:");
+              console.error(`  apps[0].bundleIdentifier  ${app.bundleIdentifier}`);
+              console.error("");
+              console.error("Install the app once with SideStore, read the real identifier off the");
+              console.error("device with `ideviceinstaller -l`, and commit it. Until then a Release");
+              console.error("carrying this file offers a fresh install rather than an update, and the");
+              console.error("Pairings stay in the app it lands beside.");
+              process.exit(1);
+            }
+
             const wrong = Object.entries({
               "apps[0].version": [app.version, version],
               "apps[0].versions[0].version": [newest.version, version],

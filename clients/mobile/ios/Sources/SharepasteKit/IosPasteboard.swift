@@ -16,7 +16,16 @@ import UIKit
 /// watcher re-capturing our own write is the facade's job and is not
 /// reimplemented here; a shell that tries gets the ordering wrong and a Recall
 /// becomes a Capture of itself.
-public final class IosPasteboard: Clipboard, @unchecked Sendable {
+/// Checked `Sendable`, not `@unchecked`, and the distinction is not pedantry:
+/// this type holds no state, so the compiler proves the conformance, and the
+/// one thing that genuinely deserves an argument is then not hidden behind a
+/// blanket opt-out. That thing is `UIPasteboard.general` off the main thread.
+/// It is reached from the FFI chokepoint's serial queue, never the main one, by
+/// the same rule that governs every other crossing; UIKit documents no main-
+/// thread requirement for `UIPasteboard` and Android calls its equivalent off
+/// the main thread for the same reason. A read that had to be marshalled would
+/// be a deadlock waiting for the caller that is already blocking on the FFI.
+public final class IosPasteboard: Clipboard, Sendable {
 
     public init() {}
 

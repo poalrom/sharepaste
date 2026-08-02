@@ -528,9 +528,10 @@ private struct AboutThisPhone: View {
 /// `HStack` and a `VStack` gives one line or four and never the two the buttons
 /// actually want.
 ///
-/// Private, because exactly one screen draws it. If a second one ever does, it
-/// moves to `Readouts.swift` whole rather than being copied — that is the drift
-/// ADR 0010 is about, one layer down.
+/// Private, because exactly one screen draws it. If a second **screen** ever
+/// does, it moves to `Readouts.swift` whole rather than being copied — that is
+/// the drift ADR 0010 is about, one layer down. Two call sites on this one
+/// screen are not that trigger and have not tripped it.
 ///
 /// One `spacing` for both axes rather than Compose's two, because both call
 /// sites here pass the same number twice and a parameter with one possible shape
@@ -630,24 +631,6 @@ private func previewState(
     return state
 }
 
-/// **`PreviewProvider` rather than the `#Preview` macro, and it is the build
-/// path that decides that.** The macro's implementation ships as the
-/// `PreviewsMacros` plugin inside Xcode's toolchain; this package is built by
-/// SwiftPM under WSL against an Apple Swift SDK (spec rows 1 and 3), where that
-/// plugin does not exist and every `#Preview` is a hard compile error rather
-/// than a preview that merely does not render. `PreviewProvider` is also the
-/// only one of the two that works below iOS 17, which is this app's floor.
-@MainActor
-private let previewActions = AppActions(
-    setDeviceLabel: { _ in }, setPairingCode: { _ in }, codeScanned: { _ in },
-    pairWithCode: {}, setCameraProblem: { _ in }, dismissPairFailure: {},
-    offerPasteboard: {}, recallLatest: {}, recall: { _ in }, deleteEntry: { _ in },
-    dismissNotice: {}, openSettings: {}, openHistory: {}, openAddPairing: {},
-    viewPairing: { _ in }, activatePairing: { _ in }, confirm: { _ in },
-    clearHistory: { _ in }, forgetPairing: { _ in }, setShowRecalled: { _ in },
-    dismissForegroundNote: {}
-)
-
 private let onePairing = [previewPairing(user: "u-1", name: "ada", host: "relay.example.com", active: true)]
 
 /// Three Pairings, one Active, and a queue on a Pairing that is neither Active
@@ -659,11 +642,20 @@ private let threePairings = [
 ]
 
 /// The floor: one Pairing, syncing and showing, nothing to decide.
+///
+/// **`PreviewProvider` rather than the `#Preview` macro, and it is the build
+/// path that decides that.** The macro's implementation ships as the
+/// `PreviewsMacros` plugin inside Xcode's toolchain; this package is built by
+/// SwiftPM under WSL against an Apple Swift SDK (spec rows 1 and 3), where that
+/// plugin does not exist and every `#Preview` is a hard compile error rather
+/// than a preview that merely does not render. `PreviewProvider` is also the
+/// only one of the two that works below iOS 17, which is this app's floor.
+/// Every provider below is one of these for that reason.
 struct SettingsScreen_OnePairing_Previews: PreviewProvider {
     static var previews: some View {
         SettingsScreen(
             state: previewState(pairings: onePairing, active: "u-1"),
-            actions: previewActions
+            actions: .inert
         )
         .previewDisplayName("One pairing")
     }
@@ -676,7 +668,7 @@ struct SettingsScreen_Diverged_Previews: PreviewProvider {
     static var previews: some View {
         SettingsScreen(
             state: previewState(pairings: threePairings, active: "u-1", viewed: "u-2"),
-            actions: previewActions
+            actions: .inert
         )
         .previewDisplayName("Three, diverged")
     }
@@ -691,7 +683,7 @@ struct SettingsScreen_Clearing_Previews: PreviewProvider {
                 active: "u-1",
                 confirming: .clearHistory(userId: "u-2")
             ),
-            actions: previewActions
+            actions: .inert
         )
         .previewDisplayName("Clearing a History")
     }
@@ -707,7 +699,7 @@ struct SettingsScreen_Forgetting_Previews: PreviewProvider {
                 active: "u-1",
                 confirming: .forget(userId: "u-1")
             ),
-            actions: previewActions
+            actions: .inert
         )
         .previewDisplayName("Forgetting the Active Pairing")
     }
@@ -726,7 +718,7 @@ struct SettingsScreen_Refused_Previews: PreviewProvider {
                 ],
                 active: "u-1"
             ),
-            actions: previewActions
+            actions: .inert
         )
         .previewDisplayName("A refused pairing")
     }

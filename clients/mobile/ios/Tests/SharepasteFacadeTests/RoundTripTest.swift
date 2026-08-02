@@ -1,7 +1,6 @@
 import Foundation
 import SharepasteCore
 import SharepasteKit
-import UIKit
 import XCTest
 
 /// The round trip that justifies the client at all.
@@ -12,8 +11,20 @@ import XCTest
 /// either side would prove nothing about the bytes.
 ///
 /// Everything is driven through the shipped ``SharepasteRepository``, and the
-/// pasteboard assertions read `UIPasteboard` itself, because reaching the
-/// platform's pasteboard is the whole criterion.
+/// pasteboard assertions read the ``TestPasteboard`` the phone handed it.
+/// `UIPasteboard` is not reachable from a host-less test bundle at all; the
+/// reasoning, and the hang that established it, are on that type. What is under
+/// test is unchanged by the substitution: the Clipboard trait is a foreign
+/// trait precisely so that the shell decides what a pasteboard is, and the
+/// crossing being asserted is the core reaching a Swift object.
+///
+/// **A Recall's write is the core's, not the shell's.** Nothing in
+/// ``SharepasteRepository`` writes the pasteboard on a Recall —
+/// `recall_latest` calls `write_clipboard` inside the core
+/// (`clients/core/src/facade.rs`), so the assertion below that the plaintext
+/// arrived at the Clipboard trait is evidence about the *core's* behaviour.
+/// That matters beyond this test: ticket 07 says neither App Intent touches the
+/// pasteboard, and on this path one of them does.
 ///
 /// **What does not port.** On Android these tests now assert a Receipt and the
 /// Preview it names. A Receipt is a Toast — it is UI, and spec row 10 buys none
@@ -71,13 +82,13 @@ final class RoundTripTest: XCTestCase {
 
         // Overwritten first, so a pass cannot be an accident of whatever the
         // pasteboard already happened to hold.
-        UIPasteboard.general.string = "something else entirely"
+        phone.pasteboard.put("something else entirely")
         try await phone.repo.recall(userId: userId, entryId: arrived.id)
 
         XCTAssertEqual(
-            UIPasteboard.general.string,
-            copied,
-            "the Recall must put that Entry's plaintext on the pasteboard"
+            phone.pasteboard.written,
+            [copied],
+            "the Recall must hand that Entry's plaintext to the pasteboard, exactly once"
         )
         let preview = await phone.repo.previewOf(userId: userId, entryId: arrived.id)
         XCTAssertEqual(
@@ -101,7 +112,7 @@ final class RoundTripTest: XCTestCase {
         try await phone.awaitInContact(userId)
 
         let offered = "offered-from-the-phone-\(Self.stamp)"
-        UIPasteboard.general.string = offered
+        phone.pasteboard.put(offered)
         let attempt = try await phone.repo.offerPasteboard()
         guard case .settled(let offeredTo, let outcome) = attempt else {
             return XCTFail("a paired phone must not report itself unpaired: \(attempt)")
@@ -155,7 +166,7 @@ final class RoundTripTest: XCTestCase {
         )
         XCTAssertEqual(cached.first?.preview, older, "a cache read would hand over this one")
 
-        UIPasteboard.general.string = "something else entirely"
+        phone.pasteboard.put("something else entirely")
         let attempt = try await phone.repo.recallLatestOnActivePairing()
         guard case .done(let recalledFor, let entryId, _, let fromCache) = attempt else {
             return XCTFail("a paired phone must not report itself unpaired: \(attempt)")
@@ -167,7 +178,7 @@ final class RoundTripTest: XCTestCase {
                 + "as stale"
         )
         XCTAssertEqual(
-            UIPasteboard.general.string,
+            phone.pasteboard.written.last,
             newer,
             "Recall Latest read the cache instead of fetching"
         )

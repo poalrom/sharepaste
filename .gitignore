@@ -42,6 +42,10 @@ clients/mobile/ios/Sources/sharepaste_ffiFFI/
 clients/mobile/ios/.build/
 clients/mobile/ios/xtool/
 clients/mobile/ios/.swiftpm/
+# Where `make ios-vendor` unpacks the CI artifact before copying out of it. A
+# failed `gh run download` leaves it behind, and a half-fetched build input is
+# not something to offer somebody as an untracked file (G3).
+clients/mobile/ios/.vendor-download/
 
 # Stray cargo target dirs (agents may set CARGO_TARGET_DIR from the repo root)
 /target/

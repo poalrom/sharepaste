@@ -16,11 +16,31 @@ import SharepasteKit
 // invocation would *display a decrypted Entry* — precisely the exposure ADR 0007
 // exists to prevent. Do not add one because it would be convenient.
 //
-// **Neither intent touches the pasteboard.** Offer takes its text as a
-// parameter; Recall returns a string. The person assembles *Get Clipboard* →
-// Offer, and Recall → *Copy to Clipboard*. That is not a limitation worked
-// around: the app never reads a pasteboard it was not handed and never writes
-// one unasked, which is the whole of ADR 0007 expressed in two signatures.
+// **Neither intent READS the pasteboard, and one of them writes it.** Offer
+// takes its text as a parameter and Recall returns a string, so the person
+// assembles *Get Clipboard* → Offer and Recall → *Copy to Clipboard*. The read
+// half of ADR 0007 therefore holds outright: this app never sees a pasteboard
+// it was not handed.
+//
+// The write half does not, and ticket 07's *"neither touches the pasteboard —
+// Shortcuts does, never us"* is false as shipped. `recall_latest` in the core
+// puts the plaintext on the clipboard itself before it returns
+// (`clients/core/src/facade.rs:858`), because that is what the verb means on the
+// two shells that already existed. There is no shell-side way to decline it: the
+// facade exposes no fetch-without-writing, and `read_entry` alone would skip the
+// round trip that makes a Recall a Recall rather than a cache read.
+//
+// **Recorded as a finding rather than worked around.** The spec's Out of scope
+// says: *"Any core change beyond a Swift bindgen invocation. If iOS needs a core
+// change, that is a finding, not a task."* This is that. The finding is written
+// up on ticket 07 and the fix is a core one — `recall_latest` splitting the
+// fetch from the hand-over, or taking the clipboard write as a flag the way
+// `open` already takes `require_https`.
+//
+// What was **not** done is leave the app's own words claiming the property it
+// does not have. `Strings.shortcutsBody` and `Strings.shortcutsRecallNote` say
+// what actually happens, because a privacy claim a person reads on the Settings
+// Screen is worth more than a privacy claim in a ticket.
 //
 // **Neither intent opens the app.** `openAppWhenRun` stays `false` and nothing
 // here returns `.continueInApp`. The point of a Standing Action is that it shows
@@ -158,7 +178,12 @@ struct OfferIntent: AppIntent {
                 // somebody ran a shortcut, the wait is bounded, and the session
                 // comes down before the intent returns.
                 let drained = await repository.sendPending(userId: userId)
-                let said = drained ? Strings.offerQueued : Strings.pendingCount(pending)
+                // `pendingCount` is the screen's sentence and carries no number,
+                // because the History draws the depth beside it as a readout. A
+                // dialog has no readout beside it, so the intent needs the one
+                // that says the figure out loud — otherwise a shortcut that left
+                // a queue behind reports the same words as one that did not.
+                let said = drained ? Strings.offerQueued : Strings.offerQueuedPending(pending)
                 return .result(dialog: IntentDialog(stringLiteral: said))
 
             case let .rejected(reason):

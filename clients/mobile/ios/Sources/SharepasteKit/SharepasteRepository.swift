@@ -99,17 +99,34 @@ public final class SharepasteRepository: Sendable {
     /// Nothing on this platform constrains the core's Rust HTTP client — App
     /// Transport Security governs `URLSession` and reaches no further — so this
     /// flag is the only real enforcement.
+    ///
+    /// `clipboard` is handed in for the same class of reason the pasteboard is a
+    /// foreign trait in the first place: the shell decides what a pasteboard
+    /// *is*, and on this platform there are contexts in which `UIPasteboard`
+    /// is not one. An XCTest bundle is exactly such a context — a SwiftPM test
+    /// target has no host application, so the bundle runs in the unit-test
+    /// runner, which has neither the entitlements nor an app to present the
+    /// paste-permission prompt iOS 16 raises on a read. The call does not fail
+    /// there; it never returns.
+    ///
+    /// That is the same platform rule Android's suite already records from the
+    /// other side — the clipboard is readable only by the focused app or the
+    /// default IME, and an instrumentation run is neither. So this parameter is
+    /// not test scaffolding to be deleted on sight: it is the shell admitting
+    /// that "the system pasteboard" is a thing only some processes have.
     public init(
         directory: URL,
         requireHttps: Bool,
         databaseName: String = SharepasteRepository.databaseName,
-        keychain: Keychain? = nil
+        keychain: Keychain? = nil,
+        clipboard: Clipboard? = nil
     ) {
         let sink = StreamEventSink()
         // One pasteboard, handed both to the core and to `offerPasteboard`: a
         // Recall writes through the same object an Offer reads through, so there
-        // is one set of rules about what this platform calls text.
-        let pasteboard = IosPasteboard()
+        // is one set of rules about what this platform calls text. Whichever
+        // object it is — injected or the platform's — that stays true.
+        let pasteboard = clipboard ?? IosPasteboard()
         let secrets = keychain ?? IosKeychain()
         let path = directory.appendingPathComponent(databaseName).path
         let queue = self.queue
@@ -331,8 +348,12 @@ public final class SharepasteRepository: Sendable {
         userId: String,
         timeout: Duration = SharepasteRepository.sendTimeout
     ) async -> Bool {
-        let ours = await !held.contains(userId)
-        if ours {
+        // Nobody is holding a session for this Pairing, so this call has to
+        // bring one up — and, having brought it up, is the one that must put it
+        // back down. The guard returns before the `defer` is registered, so the
+        // flag is only ever read on a path where the session really did start.
+        let weStartedIt = await !held.contains(userId)
+        if weStartedIt {
             guard (try? await startSession(userId: userId)) != nil else { return false }
         }
         defer {
@@ -340,7 +361,7 @@ public final class SharepasteRepository: Sendable {
             // mid-drain must still put down the session it brought up, or sync
             // outlives the press that authorised it, which is the thing ADR 0007
             // forbids arrived at by accident.
-            if ours {
+            if weStartedIt {
                 Task { try? await self.stopSession(userId: userId) }
             }
         }

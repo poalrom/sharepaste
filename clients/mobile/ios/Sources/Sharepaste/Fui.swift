@@ -349,6 +349,12 @@ extension View {
 /// half the line width and matches Compose.
 struct NotchShape: InsettableShape {
 
+    /// Every call site takes the default, and it stays a parameter all the
+    /// same: the Kotlin's
+    /// `NotchShape(private val notch: Dp = Fui.Notch)` is one, and the mock
+    /// sizes the cut per element — `Fui.notch` is its `--clip-notch-sm`. The day
+    /// a larger cut is wanted this is the knob, rather than a second shape that
+    /// would have to be kept in step with this one.
     var notch: CGFloat = Fui.notch
     private var inset: CGFloat = 0
 
@@ -453,9 +459,10 @@ private struct FuiBackdrop: ViewModifier {
 ///
 /// **Apply this before the band's own background colour, not after.** SwiftUI
 /// stacks `background` backwards — the later one goes further back — so
-/// `.fuiScanlines().background(colour)` is the order that puts the lines over
-/// the fill and under the content, which is what Compose's `drawBehind` after
-/// `background` does. The other order paints them and then hides them.
+/// `.modifier(FuiScanlines()).background(colour)` is the order that puts the
+/// lines over the fill and under the content, which is what Compose's
+/// `drawBehind` after `background` does. The other order paints them and then
+/// hides them.
 ///
 /// ``active`` is a flag rather than an `if` at the call site, and that is a
 /// correctness point rather than a tidiness one: branching a modifier chain
@@ -514,9 +521,6 @@ extension View {
 
     /// See ``FuiBackdrop``.
     func fuiBackdrop() -> some View { modifier(FuiBackdrop()) }
-
-    /// See ``FuiScanlines`` — including its note on modifier order.
-    func fuiScanlines() -> some View { modifier(FuiScanlines()) }
 
     /// See ``DashedBorder``.
     func dashedBorder(_ color: Color) -> some View { modifier(DashedBorder(color: color)) }

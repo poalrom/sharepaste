@@ -164,7 +164,7 @@ final class Inviter: @unchecked Sendable {
         relay: String = Suite.relayURL
     ) async throws -> Inviter {
         let queue = DispatchQueue(label: "com.sharepaste.ios.tests.inviter.claim")
-        let invite = Suite.nextInvite()
+        let invite = try Suite.nextInvite(claiming: label)
 
         // A plain TCP connect before the protocol is asked to do anything.
         // Without it a relay that is simply not running looks exactly like a
@@ -199,9 +199,34 @@ final class Inviter: @unchecked Sendable {
     }
 }
 
-enum InviterFailure: Error {
+enum InviterFailure: Error, CustomStringConvertible {
     case neverUploaded(seconds: Int)
     case relayUnreachable(String)
+
+    /// The run asked for more single-use invites than the job minted.
+    ///
+    /// It names the claim that ran out, because that is the one thing the CI log
+    /// cannot work out for itself: the pool is process-wide and the order XCTest
+    /// runs classes in is not fixed, so "an invite was wanted and there was
+    /// none" without a name sends the reader to the wrong test.
+    case outOfInvites(claiming: String, taken: Int)
+
+    var description: String {
+        switch self {
+        case .neverUploaded(let seconds):
+            "the other device's Entry never reached the relay in \(seconds)s"
+        case .relayUnreachable(let relay):
+            "the relay at \(relay) is not reachable from this simulator"
+        case .outOfInvites(let label, let taken):
+            """
+            out of invite tokens while claiming "\(label)"; \(taken) had already been \
+            taken. Each is single-use. The CI job mints them with \
+            `node server/dist/index.js user create <name>` and passes them comma-separated \
+            as TEST_RUNNER_SHAREPASTE_INVITES — raise the count there rather than sharing \
+            one between two claims.
+            """
+        }
+    }
 }
 
 /// The two inviting devices, claimed at most once each.

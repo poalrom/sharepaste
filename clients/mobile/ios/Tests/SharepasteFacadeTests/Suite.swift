@@ -57,6 +57,20 @@ enum Suite {
     /// reports what it was waiting for when it expires.
     static let timeout: TimeInterval = 60
 
+    /// The wall clock XCTest itself gives one test before it kills it.
+    ///
+    /// Every wait in this suite is bounded, and that was not enough: a blocking
+    /// call inside the FFI boundary is not interruptible by anything on this
+    /// side, so one `UIPasteboard` read with nobody to answer its permission
+    /// prompt held a job for thirty-six minutes until a human cancelled it. A
+    /// test that cannot fail on its own has to be failed from outside.
+    ///
+    /// `xcodebuild` supplies that from outside with `-test-timeouts-enabled`,
+    /// and this is the value the job passes as the default allowance. It is
+    /// stated here as well because ``SlowTestCase`` raises it, and a number a
+    /// test overrides should be readable beside the override.
+    static let executionTimeAllowance: TimeInterval = 120
+
     /// The relay these tests pair against.
     ///
     /// Plain HTTP, which is why every facade opened here passes
@@ -74,10 +88,12 @@ enum Suite {
     /// The invite tokens the runner was given, handed out one at a time.
     ///
     /// An invite is **single use** — the relay answers a second claim with `409
-    /// Conflict` — so a run needs one per test that claims one, and a
-    /// comma-separated list is how the host supplies them.
-    static func nextInvite() -> String {
-        invites.next()
+    /// Conflict` — so every claim spends one, and a comma-separated list is how
+    /// the host supplies them. The job mints far more than a run needs; see the
+    /// reasoning at that step, and at ``InviterFailure/outOfInvites(claiming:taken:)``
+    /// for why running out must not be a crash.
+    static func nextInvite(claiming label: String) throws -> String {
+        try invites.next(claiming: label)
     }
 
     private static let invites = Invites(
@@ -117,6 +133,7 @@ private final class Invites: @unchecked Sendable {
 
     private let lock = NSLock()
     private var remaining: [String]
+    private var taken = 0
 
     init(_ list: String) {
         remaining = list
@@ -125,22 +142,21 @@ private final class Invites: @unchecked Sendable {
             .filter { !$0.isEmpty }
     }
 
-    func next() -> String {
+    /// The next unused token, or an error naming the claim that ran out.
+    ///
+    /// **Thrown, never `fatalError`.** A crash takes the whole test process
+    /// with it, and `xcodebuild` responds to a crashed bundle by relaunching it
+    /// and re-running what has not finished — which claims the *same* tokens
+    /// again from a pool that is already empty. One exhausted run becomes
+    /// several, and the report names a signal rather than a cause. A thrown
+    /// error fails one test with a sentence.
+    func next(claiming label: String) throws -> String {
         lock.lock()
         defer { lock.unlock() }
         guard !remaining.isEmpty else {
-            // Not an XCTAssert: this is called from set-up paths where the
-            // honest outcome is that the run cannot proceed, and a test that
-            // paired with an empty string would report a confusing `404` from
-            // the relay instead of the operator's mistake.
-            fatalError(
-                """
-                out of invite tokens. Each is single-use; the CI job mints one per claiming \
-                test with `node server/dist/index.js user create <name>` and passes them \
-                comma-separated as TEST_RUNNER_SHAREPASTE_INVITES.
-                """
-            )
+            throw InviterFailure.outOfInvites(claiming: label, taken: taken)
         }
+        taken += 1
         return remaining.removeFirst()
     }
 }
@@ -259,4 +275,28 @@ func freshDatabase(named name: String) throws -> URL {
         try? FileManager.default.removeItem(at: directory.appendingPathComponent(name + suffix))
     }
     return directory
+}
+
+/// A test that is allowed to take longer than the suite's default allowance,
+/// and says how much longer at the point it says why.
+///
+/// Only one test needs it: `ExpiredCodeTest` waits out a real 120-second
+/// pairing slot, which is the whole of what it proves. Raising the *default*
+/// for everything to cover that one wait would be raising the ceiling on every
+/// hang in the suite by two minutes, which is the opposite of what the
+/// allowance is for.
+///
+/// `executionTimeAllowance` is only honoured when `xcodebuild` is run with
+/// `-test-timeouts-enabled YES`, and it is clamped to
+/// `-maximum-test-execution-time-allowance`; both are set at the job.
+class SlowTestCase: XCTestCase {
+
+    /// How long this class's tests may take. Subclasses raise it before
+    /// `super.setUp()` returns.
+    class var allowance: TimeInterval { Suite.executionTimeAllowance }
+
+    override func setUp() {
+        super.setUp()
+        executionTimeAllowance = Self.allowance
+    }
 }

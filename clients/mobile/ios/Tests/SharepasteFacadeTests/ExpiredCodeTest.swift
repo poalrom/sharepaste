@@ -15,7 +15,11 @@ import XCTest
 /// the app maps to the same sentence but is a different journey through the
 /// relay. If the relay ever changes which status an expired slot gets, this test
 /// notices and that one would not.
-final class ExpiredCodeTest: XCTestCase {
+final class ExpiredCodeTest: SlowTestCase {
+
+    /// Two minutes of relay TTL, the claim that follows it, and room for a slow
+    /// pairing on top. Everything else in the suite lives inside the default.
+    override class var allowance: TimeInterval { 240 }
 
     private var phone: PhoneUnderTest!
 

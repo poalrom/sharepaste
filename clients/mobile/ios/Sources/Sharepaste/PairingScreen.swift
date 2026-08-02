@@ -118,8 +118,8 @@ struct PairingScreen: View {
                         )
                     }
 
-                    if case let .failed(message, detail) = state.attempt {
-                        Failure(message: message, detail: detail, onDismiss: actions.dismissPairFailure)
+                    if case let .failed(sentence, detail) = state.attempt {
+                        Failure(sentence: sentence, detail: detail, onDismiss: actions.dismissPairFailure)
                     }
 
                     // **No `XCHACHA20-POLY1305 / RELAY MUST BE HTTPS` footer band
@@ -168,10 +168,10 @@ struct PairingScreen: View {
         // Muted for the hardware, because there is nothing to act on; caution
         // for the permission, because there is.
         case .noCamera:
-            ViewfinderNote(message: Strings.cameraAbsent, mark: Fui.textMuted)
+            ViewfinderNote(sentence: Strings.cameraAbsent, mark: Fui.textMuted)
 
         case .permissionRefused:
-            ViewfinderNote(message: Strings.cameraPermissionRefused, mark: Fui.amber400) {
+            ViewfinderNote(sentence: Strings.cameraPermissionRefused, mark: Fui.amber400) {
                 HStack(spacing: 8) {
                     FuiButton(
                         text: Strings.cameraRecheck,
@@ -196,7 +196,7 @@ struct PairingScreen: View {
         case nil:
             if state.scanned {
                 ViewfinderNote(
-                    message: Strings.pairCodeScanned,
+                    sentence: Strings.pairCodeScanned,
                     mark: Fui.cyan400,
                     glyph: Glyphs.done
                 )
@@ -292,7 +292,7 @@ private struct Viewfinder: View {
 @MainActor
 private struct ViewfinderNote<Action: View>: View {
 
-    let message: String
+    let sentence: String
     let mark: Color
     var glyph: String = Glyphs.absent
     @ViewBuilder let action: Action
@@ -305,7 +305,7 @@ private struct ViewfinderNote<Action: View>: View {
                 // it. Read out, it would be "circled slash" before the words.
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 10) {
-                Text(message).fuiText(Fui.prose, color: Fui.textBody)
+                Text(sentence).fuiText(Fui.prose, color: Fui.textBody)
                 action
             }
         }
@@ -323,8 +323,8 @@ extension ViewfinderNote where Action == EmptyView {
     /// ``FuiPanel`` gives: a generic parameter cannot be defaulted, and the
     /// alternative is every plain note in this file writing
     /// `action: { EmptyView() }`.
-    init(message: String, mark: Color, glyph: String = Glyphs.absent) {
-        self.init(message: message, mark: mark, glyph: glyph, action: { EmptyView() })
+    init(sentence: String, mark: Color, glyph: String = Glyphs.absent) {
+        self.init(sentence: sentence, mark: mark, glyph: glyph, action: { EmptyView() })
     }
 }
 
@@ -352,14 +352,14 @@ extension ViewfinderNote where Action == EmptyView {
 @MainActor
 private struct Failure: View {
 
-    let message: String
+    let sentence: String
     let detail: String?
     let onDismiss: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             FuiBadge(text: Strings.pairFailedBadge, accent: .alert, solid: true)
-            Text(message).fuiText(Fui.prose, color: Fui.textPrimary)
+            Text(sentence).fuiText(Fui.prose, color: Fui.textPrimary)
             if let detail {
                 Text(detail).fuiText(Fui.data, color: Fui.textBody)
             }
@@ -449,39 +449,6 @@ private struct FuiField: View {
 
 #if DEBUG
 
-/// A bag that does nothing, so a preview needs no facade behind it.
-///
-/// Written out in full rather than reached for from somewhere shared: the point
-/// of the previews below is that this screen renders from a ``PairingState``
-/// and a set of closures, and a helper that filled the closures in from
-/// somewhere else would be the one part of that claim nobody could check.
-@MainActor
-private func previewActions() -> AppActions {
-    AppActions(
-        setDeviceLabel: { _ in },
-        setPairingCode: { _ in },
-        codeScanned: { _ in },
-        pairWithCode: {},
-        setCameraProblem: { _ in },
-        dismissPairFailure: {},
-        offerPasteboard: {},
-        recallLatest: {},
-        recall: { _ in },
-        deleteEntry: { _ in },
-        dismissNotice: {},
-        openSettings: {},
-        openHistory: {},
-        openAddPairing: {},
-        viewPairing: { _ in },
-        activatePairing: { _ in },
-        confirm: { _ in },
-        clearHistory: { _ in },
-        forgetPairing: { _ in },
-        setShowRecalled: { _ in },
-        dismissForegroundNote: {}
-    )
-}
-
 /// The five states of this screen, side by side.
 ///
 /// `PreviewProvider` and **not** `#Preview`, which does not compile here: the
@@ -507,7 +474,7 @@ struct PairingScreen_Previews: PreviewProvider {
             // viewfinder is live. On anything without a camera the frame draws
             // its hint over the void, which is the same thing this preview
             // shows.
-            PairingScreen(state: PairingState(), actions: previewActions(), onBack: nil)
+            PairingScreen(state: PairingState(), actions: .inert, onBack: nil)
                 .previewDisplayName("01 fresh")
 
             // A code read. The viewfinder has stood down, the field holds what
@@ -515,7 +482,7 @@ struct PairingScreen_Previews: PreviewProvider {
             // note says and why the button is still dead.
             PairingScreen(
                 state: PairingState(code: "K7QP2M4X", scanned: true),
-                actions: previewActions(),
+                actions: .inert,
                 onBack: nil
             )
             .previewDisplayName("02 scanned")
@@ -524,7 +491,7 @@ struct PairingScreen_Previews: PreviewProvider {
             // is the whole reason the slot is dashed rather than framed.
             PairingScreen(
                 state: PairingState(deviceLabel: "iPhone in my pocket", camera: .permissionRefused),
-                actions: previewActions(),
+                actions: .inert,
                 onBack: {}
             )
             .previewDisplayName("03 permission refused")
@@ -533,7 +500,7 @@ struct PairingScreen_Previews: PreviewProvider {
             // access on" is useless advice here.
             PairingScreen(
                 state: PairingState(camera: .noCamera),
-                actions: previewActions(),
+                actions: .inert,
                 onBack: nil
             )
             .previewDisplayName("04 no camera")
@@ -546,11 +513,11 @@ struct PairingScreen_Previews: PreviewProvider {
                     deviceLabel: "iPhone in my pocket",
                     code: "K7QP2M4X",
                     attempt: .failed(
-                        message: Strings.pairInsecureRelay,
+                        sentence: Strings.pairInsecureRelay,
                         detail: "relay http://relay.example.net is not https"
                     )
                 ),
-                actions: previewActions(),
+                actions: .inert,
                 onBack: {}
             )
             .previewDisplayName("05 did not pair")

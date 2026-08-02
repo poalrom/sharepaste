@@ -396,18 +396,41 @@ enum Strings {
     // fresh install, and a permanent banner for it would nag rather than report.
 
     static let shortcutsHeading = "STANDING ACTIONS"
+    /// What the two actions are, and the one thing this copy must not claim.
+    ///
+    /// An earlier draft said *"neither one touches the clipboard itself"*. That
+    /// is true of Offer and false of Recall: the core's `recall_latest` writes
+    /// the pasteboard as part of the operation, before anything is handed back,
+    /// and no shell can decline it without a core change. Saying otherwise on
+    /// the one screen that explains the feature would be the app lying about a
+    /// privacy property, which is worse than the property being weaker than
+    /// planned. See the finding recorded on ticket 07.
     static let shortcutsBody =
         "Sharepaste offers two actions to the Shortcuts app, and they do nothing until you "
-        + "build a shortcut around them. Neither one touches the clipboard itself — Shortcuts "
-        + "does, which is why the app can never read or write it behind your back."
+        + "build a shortcut around them. Offer never reads your clipboard — Shortcuts hands it "
+        + "over, which is why nothing here can read it behind your back."
     static let shortcutsOfferRecipe = "GET CLIPBOARD \u{2192} OFFER"
     static let shortcutsOfferNote =
         "Hands whatever you copied to Sharepaste. Build it once and it works from the Action "
         + "Button, Back Tap, Control Centre or the Lock Screen."
     static let shortcutsRecallRecipe = "RECALL LATEST \u{2192} COPY TO CLIPBOARD"
     static let shortcutsRecallNote =
-        "Fetches the newest Entry and hands it back for Shortcuts to copy. It will tell you if "
-        + "all it could reach was this phone\u{2019}s own cache."
+        "Fetches the newest Entry, puts it on the clipboard and hands it back for Shortcuts to "
+        + "copy as well. It will tell you if all it could reach was this phone\u{2019}s own cache."
+
+    /// What an Offer says when the queue did not empty before the shortcut
+    /// ended.
+    ///
+    /// The screen draws the depth as a readout beside ``pendingCount(_:)``, so
+    /// that sentence carries no number. A dialog has no readout beside it, and a
+    /// queue whose depth is not said is a queue nobody comes back for.
+    static func offerQueuedPending(_ count: Int64) -> String {
+        count == 1
+            ? "Offered. 1 Entry is still waiting for the Relay; Sharepaste sends it next time "
+                + "the app is open."
+            : "Offered. \(count) Entries are still waiting for the Relay; Sharepaste sends them "
+                + "next time the app is open."
+    }
 
     /// What an App Intent says when the facade did not answer in time.
     ///

@@ -280,17 +280,50 @@ if (import.meta.filename === process.argv[1]) {
   ].sort();
 
   const disagreements = [];
+  // Keyed by client, because that is how the list reads: "these are the tokens
+  // only the desktop declares" is a sentence a reader can act on, where a flat
+  // list of names is not.
+  const uncompared = Object.fromEntries(names.map((name) => [name, []]));
   let compared = 0;
-  let alone = 0;
   for (const token of everyToken) {
     const declaring = names.filter((name) => clients[name].palette.has(token));
     if (declaring.length === 1) {
-      alone += 1;
+      const only = declaring[0];
+      uncompared[only].push(clients[only].spellings.get(token) ?? token);
       continue;
     }
     compared += 1;
     const values = new Set(declaring.map((name) => clients[name].palette.get(token)));
     if (values.size > 1) disagreements.push(token);
+  }
+
+  /**
+   * The tokens nothing compares, named.
+   *
+   * Printed on the way out of both paths, because absence is the hole this gate
+   * cannot close and a reader has to be able to see it. A token one client
+   * *stops* declaring does not fail anything — it simply drops out of the
+   * comparison and lands in this list — and neither does a token one client
+   * renames, which becomes two entries here rather than one disagreement.
+   *
+   * It cannot be a gate. Ten of these are legitimate today: a client is allowed
+   * chrome the others do not have, and there is nothing in three text files
+   * that distinguishes a deliberate one from an accidental one. So the answer
+   * is to print them rather than to guess, and the list is short enough to read.
+   */
+  function reportUncompared(write) {
+    const total = Object.values(uncompared).reduce((sum, list) => sum + list.length, 0);
+    if (total === 0) return;
+    write("");
+    write(`${total} declarations are made by one client only, so nothing compares them:`);
+    for (const name of names) {
+      if (uncompared[name].length === 0) continue;
+      write(`  ${name.padEnd(column)}  ${uncompared[name].join(", ")}`);
+    }
+    write("This list is not a gate and cannot be one: a client is allowed chrome the others");
+    write("do not have, and nothing here tells a deliberate omission from a token somebody");
+    write("stopped declaring. Read it — an entry that has a near-twin on another client is");
+    write("either a rename or a divergence, and only a person can say which.");
   }
 
   // Nothing in common is a parser that has stopped working, not three palettes
@@ -326,12 +359,11 @@ if (import.meta.filename === process.argv[1]) {
     console.error("row height that drifted — all of those pass it cleanly. Geometry drift is");
     console.error("caught by looking at the device; a wrong hex digit never is. A green check");
     console.error("does not mean the three clients match.");
+    reportUncompared(console.error);
     process.exit(1);
   }
 
-  console.log(
-    `${compared} tokens agree across the clients that declare them; ` +
-      `${alone} are declared by one client only and are not compared.`,
-  );
+  console.log(`${compared} tokens agree across the clients that declare them.`);
   console.log("Colours only — geometry is not covered by this check.");
+  reportUncompared(console.log);
 }

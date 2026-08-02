@@ -250,7 +250,7 @@ enum Notice: Equatable {
     /// `detail` is the core's own sentence where the core had one worth
     /// repeating — a refused cleartext Relay names the Relay and the reason, and
     /// no wording here could be that specific.
-    case failed(message: String, detail: String? = nil)
+    case failed(sentence: String, detail: String? = nil)
 }
 
 /// Confirmation that a verb did what was asked, needing nothing back.
@@ -421,6 +421,40 @@ func toneOf(_ phase: SessionPhase) -> Tone {
     }
 }
 
+/// The core's connection reading, as a ``SessionPhase``.
+///
+/// The **one** place ``ConnectionState`` is turned into a phase. The phone-wide
+/// reading and one Pairing's card ask the same question of the same enum and
+/// differ only in what they say when there is no live session behind the
+/// reading, so they share this and pass that difference in. Two copies of the
+/// switch would be two places to answer a reading added to the core, which is
+/// the duplication the ``Tone`` note above argues against one layer up.
+///
+/// A revoked token is answered **before** ``dormant`` and never by it: no amount
+/// of not being connected fixes a refused token, so it is news whether the phone
+/// is in front, backgrounded, or looking at a Pairing it does not sync.
+///
+/// - Parameter dormant: what to say when nothing is connected behind the
+///   reading, or `nil` when there is and the reading stands. The callers do not
+///   arrive at it for the same reason, so each works it out for itself.
+func contactPhase(
+    _ connection: ConnectionState,
+    userId: String,
+    detail: String? = nil,
+    dormant: SessionPhase?
+) -> SessionPhase {
+    if connection == .authFailed { return .refused(userId: userId, detail: detail) }
+    if let dormant { return dormant }
+    switch connection {
+    case .online: return .inContact(userId: userId)
+    case .connecting: return .looking
+    case .disconnected: return .outOfContact(userId: userId)
+    // Answered above. Repeated rather than swept up by a `default`, so a reading
+    // added to the core arrives here as a compile error.
+    case .authFailed: return .refused(userId: userId, detail: detail)
+    }
+}
+
 /// What one Pairing's card says about itself.
 ///
 /// A Pairing that is not the Active one holds no session, so whatever the core
@@ -432,19 +466,21 @@ func toneOf(_ phase: SessionPhase) -> Tone {
 ///
 /// A revoked token is the one exception and is reported either way. No amount of
 /// not being connected fixes it, and it is the only thing on that screen a person
-/// has to act on.
+/// has to act on — ``contactPhase(_:userId:detail:dormant:)`` answers it ahead of
+/// anything passed in here.
 func pairingPhase(_ pairing: PairingSummary, foreground: Bool) -> SessionPhase {
-    if pairing.status == .authFailed { return .refused(userId: pairing.userId, detail: nil) }
-    if !pairing.isActive { return .notActive(userId: pairing.userId) }
-    if !foreground { return .resting(userId: pairing.userId) }
-    switch pairing.status {
-    case .online: return .inContact(userId: pairing.userId)
-    case .connecting: return .looking
-    case .disconnected: return .outOfContact(userId: pairing.userId)
-    // Answered above. Repeated rather than swept up by a `default`, so a reading
-    // added to the core arrives here as a compile error.
-    case .authFailed: return .refused(userId: pairing.userId, detail: nil)
-    }
+    // Not the Active Pairing outranks not being in front: both mean no session,
+    // but the card has to say *which*, and a person looking at a Pairing their
+    // phone does not sync is owed that reason rather than the app's own state.
+    let dormant: SessionPhase? =
+        if !pairing.isActive {
+            .notActive(userId: pairing.userId)
+        } else if !foreground {
+            .resting(userId: pairing.userId)
+        } else {
+            nil
+        }
+    return contactPhase(pairing.status, userId: pairing.userId, dormant: dormant)
 }
 
 /// The pairing flow.
@@ -499,5 +535,5 @@ enum PairAttempt: Equatable {
     /// `detail` carries the core's own sentence when the core had one worth
     /// repeating — `insecureRelay` names the relay and the reason, which no
     /// generic wording here could.
-    case failed(message: String, detail: String? = nil)
+    case failed(sentence: String, detail: String? = nil)
 }

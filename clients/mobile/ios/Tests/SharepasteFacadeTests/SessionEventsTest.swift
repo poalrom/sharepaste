@@ -49,7 +49,7 @@ final class SessionEventsTest: XCTestCase {
 
         let paired = try core.pairWithInvite(
             serverUrl: Suite.relayURL,
-            token: Suite.nextInvite(),
+            token: try Suite.nextInvite(claiming: "SessionEventsTest's own facade"),
             deviceLabel: "simulator under test"
         )
         pairedUserId = paired.userId

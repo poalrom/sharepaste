@@ -1,7 +1,6 @@
 import Foundation
 import SharepasteCore
 import SharepasteKit
-import UIKit
 import XCTest
 
 /// The three refusals an Offer can really receive, each on a real facade.
@@ -13,11 +12,19 @@ import XCTest
 /// half is here — spec row 10 buys no UI test, and the sentences are asserted by
 /// hand on the device.
 ///
-/// Every Offer here goes through the pasteboard, because that is the operation:
-/// ``SharepasteRepository/offerPasteboard()`` reads what is on the pasteboard
-/// and hands it to the core's one capture filter. A simulator's pasteboard is
-/// readable without window focus, so unlike Android this needs no activity in
-/// front of it.
+/// Every Offer here goes through ``SharepasteRepository/offerPasteboard()``,
+/// because that is the operation: it reads what is on the pasteboard and hands
+/// it to the core's one capture filter. The pasteboard it reads is the phone's
+/// ``TestPasteboard`` — `UIPasteboard` is not reachable from this bundle, and
+/// the reasoning is on that type.
+///
+/// One claim is therefore out of reach and is not pretended at: that
+/// ``IosPasteboard`` refuses to coerce a copied *image* into a string.
+/// `UIPasteboard.string` would happily answer with a description of something
+/// only this phone can open, which is why the shipped reader asks `hasStrings`
+/// first — and a fake pasteboard cannot exercise a real one's coercion rules.
+/// What is proven here is the half that lives in the core: handed nothing
+/// text-like, it answers `nonText` rather than uploading an empty Entry.
 final class OfferRefusalsTest: XCTestCase {
 
     private var phone: PhoneUnderTest!
@@ -44,7 +51,7 @@ final class OfferRefusalsTest: XCTestCase {
     /// an Offered Capture is the easiest way to send one twice — the button is
     /// right there and nothing about the pasteboard has changed.
     func testOfferingTheSameTextTwiceIsRefusedAsADuplicate() async throws {
-        UIPasteboard.general.string = "the same link twice \(Int(Date().timeIntervalSince1970 * 1000))"
+        phone.pasteboard.put("the same link twice \(Int(Date().timeIntervalSince1970 * 1000))")
 
         let first = try await phone.repo.offerPasteboard()
         guard case .settled(_, let taken) = first, case .queued = taken else {
@@ -60,24 +67,20 @@ final class OfferRefusalsTest: XCTestCase {
     /// one filter, and a test that offered a megabyte would pass under any cap
     /// at all.
     func testOfferingAnOverSizePayloadIsRefusedForItsSize() async throws {
-        UIPasteboard.general.string = String(repeating: "a", count: 64 * 1024 + 1)
+        phone.pasteboard.put(String(repeating: "a", count: 64 * 1024 + 1))
         try await assertRefused(.tooLarge, what: "over-size")
     }
 
     /// A pasteboard holding something that is not text.
     ///
-    /// An image, which is what copying a screenshot leaves behind. It matters
-    /// that this is an image and not an empty pasteboard: `UIPasteboard.string`
-    /// coerces, so a phone that trusted it could encrypt and upload a
-    /// description of something only this phone can open. ``IosPasteboard`` asks
-    /// `hasStrings` first and therefore hands the core nothing — and the core's
-    /// one filter is what calls that `nonText`.
+    /// `nil` is what ``IosPasteboard/readText()`` answers for a pasteboard
+    /// holding a screenshot, and ``SharepasteRepository/offerPasteboard()``
+    /// deliberately offers the **empty string** for it rather than deciding
+    /// "there is no text here" a second time up in the shell. The core's one
+    /// capture filter is what calls that `nonText`, and that filter is the thing
+    /// with the tests.
     func testOfferingANonTextPayloadIsRefusedAsNotText() async throws {
-        UIPasteboard.general.image = Self.oneOpaquePixel()
-        XCTAssertFalse(
-            UIPasteboard.general.hasStrings,
-            "the pasteboard still holds text, so this test would prove nothing"
-        )
+        phone.pasteboard.put(nil)
         try await assertRefused(.nonText, what: "non-text")
     }
 
@@ -95,17 +98,5 @@ final class OfferRefusalsTest: XCTestCase {
             return XCTFail("the \(what) Offer must be refused, and it was \(outcome)", file: file, line: line)
         }
         XCTAssertEqual(reason, expected, "the \(what) Offer was refused for the wrong reason", file: file, line: line)
-    }
-
-    /// The smallest thing that is unambiguously not text.
-    ///
-    /// Drawn rather than loaded: a test bundle resource would be one more file
-    /// for a one-pixel image, and `UIGraphicsImageRenderer` is on every iOS this
-    /// app supports.
-    private static func oneOpaquePixel() -> UIImage {
-        UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { context in
-            UIColor.black.setFill()
-            context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
-        }
     }
 }

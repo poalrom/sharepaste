@@ -2,40 +2,80 @@ import Foundation
 import SharepasteCore
 import SharepasteKit
 
-/// Swift implementations of the three platform traits, wrapped around the real
-/// ones where there is a real one worth exercising.
+/// Swift implementations of the three platform traits.
 ///
-/// These exist to make the crossing observable, not to avoid the platform:
-/// ``RecordingClipboard`` delegates every call to the shipped ``IosPasteboard``,
-/// and the keychain a phone-under-test uses is the shipped ``IosKeychain``. What
-/// is faked here is only ever the *other* device.
+/// The keychain a phone-under-test uses is the shipped ``IosKeychain``, because
+/// Keychain Services works in a test process and asserting on the real store is
+/// half of what `TwoPairingsTest` proves. The **pasteboard is not** — see
+/// ``TestPasteboard`` — and what is faked beyond that is only ever the other
+/// device.
 
-/// A pasteboard that records what the core wrote through it.
-final class RecordingClipboard: Clipboard, @unchecked Sendable {
+/// The pasteboard, as a process that has one would see it.
+///
+/// **`UIPasteboard` is unusable from this bundle, and that is a platform fact
+/// rather than a preference.** A SwiftPM test target has no host application, so
+/// `xcodebuild` runs it in the unit-test runner: a process with no app, no
+/// entitlements, and nothing on screen. Since iOS 16 a pasteboard *read* raises
+/// the system paste-permission prompt, and in that process the prompt has
+/// nobody to present it and nobody to tap it — so the call does not fail, it
+/// never returns. One run of this suite sat on `UIPasteboard.general` for
+/// thirty-six minutes before it was cancelled.
+///
+/// Android's suite records the same rule from the other side, and the note is
+/// already in its `FacadeSurfaceTest`: the clipboard is readable only by the
+/// focused app or the default IME, and an instrumentation run is neither. That
+/// suite therefore asserts on what the core *wrote*, and reads nothing back.
+/// Porting its assertion without porting that reasoning is precisely what hung
+/// this job, so the reasoning is written down here and the assertion follows
+/// from it.
+///
+/// What is lost is one claim, and it is named rather than papered over: that
+/// ``IosPasteboard`` refuses to coerce a copied image into a string. That lives
+/// in `hasStrings` and can only be exercised where there is a real pasteboard —
+/// on the device, by hand, as tickets 04 to 06 accept it.
+final class TestPasteboard: Clipboard, @unchecked Sendable {
 
-    private let delegate: Clipboard
     private let lock = NSLock()
+    private var contents: String?
     private var writes: [String] = []
 
-    init(_ delegate: Clipboard = IosPasteboard()) {
-        self.delegate = delegate
+    init(holding contents: String? = nil) {
+        self.contents = contents
     }
 
+    /// Everything written through this pasteboard, oldest first.
+    ///
+    /// A list rather than the last value: a test that asserted only on the
+    /// newest could not tell "the Recall wrote nothing" from "the Recall was
+    /// overtaken".
     var written: [String] {
         lock.lock()
         defer { lock.unlock() }
         return writes
     }
 
+    /// Put something on the pasteboard from outside, as a person copying would.
+    ///
+    /// `nil` is a pasteboard holding something that is not text at all — a
+    /// screenshot — which is what ``IosPasteboard/readText()`` answers for one
+    /// and what the core's capture filter calls `nonText`.
+    func put(_ text: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        contents = text
+    }
+
     func readText() throws -> String? {
-        try delegate.readText()
+        lock.lock()
+        defer { lock.unlock() }
+        return contents
     }
 
     func writeText(text: String) throws {
         lock.lock()
+        defer { lock.unlock() }
         writes.append(text)
-        lock.unlock()
-        try delegate.writeText(text: text)
+        contents = text
     }
 }
 

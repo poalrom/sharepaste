@@ -12,7 +12,10 @@ import SharepasteCore
 ///
 /// Called from whatever thread made the FFI call, which the chokepoint has
 /// already guaranteed is not the main thread.
-public final class IosKeychain: Keychain, @unchecked Sendable {
+/// Checked `Sendable`, not `@unchecked`: this type holds no state at all — the
+/// items live in the platform's keychain — so the compiler can prove it, and an
+/// `@unchecked` here would go on silencing the day somebody adds a cache.
+public final class IosKeychain: Keychain, Sendable {
 
     /// The service every item is filed under. One string, so a `delete` of an
     /// account cannot miss an item written under a different spelling.

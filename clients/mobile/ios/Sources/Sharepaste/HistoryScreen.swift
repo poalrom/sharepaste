@@ -519,39 +519,6 @@ private enum Sample {
     }
 }
 
-/// Every closure a no-op.
-///
-/// Private to this file so another screen's gallery can hold its own without two
-/// of them colliding. A preview that could reach the facade would be a preview
-/// that needs a paired phone to draw.
-private extension AppActions {
-    static var inert: AppActions {
-        AppActions(
-            setDeviceLabel: { _ in },
-            setPairingCode: { _ in },
-            codeScanned: { _ in },
-            pairWithCode: {},
-            setCameraProblem: { _ in },
-            dismissPairFailure: {},
-            offerPasteboard: {},
-            recallLatest: {},
-            recall: { _ in },
-            deleteEntry: { _ in },
-            dismissNotice: {},
-            openSettings: {},
-            openHistory: {},
-            openAddPairing: {},
-            viewPairing: { _ in },
-            activatePairing: { _ in },
-            confirm: { _ in },
-            clearHistory: { _ in },
-            forgetPairing: { _ in },
-            setShowRecalled: { _ in },
-            dismissForegroundNote: {}
-        )
-    }
-}
-
 /// The six Notices, one under another.
 ///
 /// Eight bands for six variants: ``Notice/offerRefused(reason:)`` and
@@ -575,7 +542,7 @@ struct NoticeGallery: View {
         (
             "FAILED",
             .failed(
-                message: Strings.deleteFailed,
+                sentence: Strings.deleteFailed,
                 detail: "relay.example.invalid: connection refused"
             )
         ),

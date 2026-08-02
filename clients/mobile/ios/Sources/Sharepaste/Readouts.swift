@@ -195,16 +195,16 @@ struct ContactReadout: View {
     var onPairAgain: (() -> Void)?
 
     var body: some View {
-        if let message = phaseMessage(phase) {
+        if let readout = phaseReadout(phase) {
             switch toneOf(phase) {
             case .nominal:
                 ChromeBand(height: 30, scanlines: true) {
-                    StatusLight(signal: signalOf(phase), label: message)
+                    StatusLight(signal: signalOf(phase), label: readout)
                 }
             case .fault:
                 VStack(spacing: 0) {
                     ChromeBand(height: 30, background: Fui.alertA16) {
-                        StatusLight(signal: .alert, label: message)
+                        StatusLight(signal: .alert, label: readout)
                     }
                     VStack(alignment: .leading, spacing: 10) {
                         Text(Strings.contactRefused)
@@ -243,13 +243,13 @@ struct PairingStatus: View {
     let phase: SessionPhase
 
     var body: some View {
-        if let message = phaseMessage(phase) {
+        if let readout = phaseReadout(phase) {
             switch toneOf(phase) {
             case .nominal:
-                StatusLight(signal: signalOf(phase), label: message)
+                StatusLight(signal: signalOf(phase), label: readout)
             case .fault:
                 VStack(alignment: .leading, spacing: 6) {
-                    StatusLight(signal: .alert, label: message)
+                    StatusLight(signal: .alert, label: readout)
                     Text(Strings.contactRefused)
                         .fuiText(Fui.prose, color: Fui.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -269,7 +269,7 @@ struct PairingStatus: View {
 /// "say nothing": an unpaired phone is on the pairing flow, where a status line
 /// would be noise, and both callers return on it rather than inventing words for
 /// a Pairing that does not exist.
-private func phaseMessage(_ phase: SessionPhase) -> String? {
+private func phaseReadout(_ phase: SessionPhase) -> String? {
     switch phase {
     case .unpaired: nil
     case .looking: Strings.contactLooking
@@ -374,77 +374,104 @@ struct NoticeBand: View {
     let notice: Notice
     let onDismiss: () -> Void
 
-    /// The one notice that is about the pasteboard rather than about the app.
-    private var stale: Bool { notice == .recalledFromCache }
-
-    private var label: String {
-        switch notice {
-        case let .offerRefused(reason): offerRefusalLabel(reason)
-        case .recalledFromCache: Strings.recallFromCacheBadge
-        case .unpaired: Strings.noticeNotPaired
-        case .historyCleared: Strings.noticeCleared
-        case .pairingForgotten: Strings.noticeForgotten
-        case .failed: Strings.noticeFailed
-        }
+    /// Everything one notice's appearance turns on, named once.
+    ///
+    /// A type with named fields rather than a bare tuple, and one `switch` in
+    /// place of five. The label, the accent, the sentence, the left-edge rule
+    /// and the tint were each decided in their own exhaustive `switch` over the
+    /// same value, so working out what one notice looks like meant assembling it
+    /// from five places and adding an outcome meant editing five. The point of
+    /// those switches survives the collapse: this one is exhaustive too, so an
+    /// outcome added without words for it still does not compile — that
+    /// property is what they were bought for, and nothing else about them was.
+    private struct Face {
+        let label: String
+        let accent: Accent
+        /// Ruled down its left edge in the colour of what to do about it. A
+        /// refusal is; an outcome that simply happened is not.
+        let ruled: Bool
+        /// The one notice that is about the pasteboard rather than about the
+        /// app, and therefore the only one that tints its whole band and wears
+        /// its badge solid.
+        let stale: Bool
+        let sentence: String
     }
 
-    private var accent: Accent {
-        switch notice {
-        case .recalledFromCache: .caution
-        case let .offerRefused(reason): offerRefusalAccent(reason)
-        case .failed: .caution
-        case .unpaired, .historyCleared, .pairingForgotten: .emitter
-        }
-    }
-
-    private var sentence: String {
+    private var face: Face {
         switch notice {
         case let .offerRefused(reason):
-            offerRefusalMessage(reason)
+            Face(
+                label: offerRefusalLabel(reason),
+                accent: offerRefusalAccent(reason),
+                ruled: true,
+                stale: false,
+                sentence: offerRefusalMessage(reason)
+            )
         case .recalledFromCache:
-            Strings.recallFromCache
+            Face(
+                label: Strings.recallFromCacheBadge,
+                accent: .caution,
+                ruled: false,
+                stale: true,
+                sentence: Strings.recallFromCache
+            )
         case .unpaired:
-            Strings.actionUnpaired
+            Face(
+                label: Strings.noticeNotPaired,
+                accent: .emitter,
+                ruled: false,
+                stale: false,
+                sentence: Strings.actionUnpaired
+            )
         case let .historyCleared(pairing):
-            Strings.historyCleared(pairing)
+            Face(
+                label: Strings.noticeCleared,
+                accent: .emitter,
+                ruled: false,
+                stale: false,
+                sentence: Strings.historyCleared(pairing)
+            )
         case let .pairingForgotten(pairing, promoted):
-            if let promoted {
-                Strings.pairingForgottenPromoted(pairing, promoted)
-            } else {
-                Strings.pairingForgottenLast(pairing)
-            }
-        case let .failed(message, detail):
-            if let detail { "\(message)\n\(detail)" } else { message }
-        }
-    }
-
-    /// A refusal is ruled down its left edge in the colour of what to do about
-    /// it; an outcome that simply happened is not.
-    private var ruled: Bool {
-        switch notice {
-        case .offerRefused, .failed: true
-        case .recalledFromCache, .unpaired, .historyCleared, .pairingForgotten: false
+            Face(
+                label: Strings.noticeForgotten,
+                accent: .emitter,
+                ruled: false,
+                stale: false,
+                sentence: promoted.map { Strings.pairingForgottenPromoted(pairing, $0) }
+                    ?? Strings.pairingForgottenLast(pairing)
+            )
+        case let .failed(sentence, detail):
+            Face(
+                label: Strings.noticeFailed,
+                accent: .caution,
+                ruled: true,
+                stale: false,
+                sentence: detail.map { "\(sentence)\n\($0)" } ?? sentence
+            )
         }
     }
 
     var body: some View {
+        // Read once, so the six things drawn from it are demonstrably the same
+        // decision rather than six evaluations that agree.
+        let face = self.face
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                if ruled {
+                if face.ruled {
                     Rectangle()
-                        .fill(accent.ink)
+                        .fill(face.accent.ink)
                         .frame(width: 2)
                         .frame(maxHeight: .infinity)
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    FuiBadge(text: label, accent: accent, solid: stale)
-                    Text(sentence)
-                        .fuiText(Fui.prose, color: stale ? Fui.textPrimary : Fui.textBody)
+                    FuiBadge(text: face.label, accent: face.accent, solid: face.stale)
+                    Text(face.sentence)
+                        .fuiText(Fui.prose, color: face.stale ? Fui.textPrimary : Fui.textBody)
                         .fixedSize(horizontal: false, vertical: true)
                     FuiButton(
                         text: Strings.noticeDismiss,
                         action: onDismiss,
-                        accent: accent,
+                        accent: face.accent,
                         height: Fui.targetSmall
                     )
                     .frame(maxWidth: .infinity, alignment: .trailing)
@@ -456,8 +483,8 @@ struct NoticeBand: View {
             // `fixedSize` above, not here: the rule stretches to whatever the
             // sentence needs, and a band that sized itself to the rule would
             // clip the sentence instead.
-            .background(stale ? Fui.amberA16 : Fui.band)
-            Hairline(color: stale ? Fui.amberA40 : Fui.hairline)
+            .background(face.stale ? Fui.amberA16 : Fui.band)
+            Hairline(color: face.stale ? Fui.amberA40 : Fui.hairline)
         }
     }
 }

@@ -21,14 +21,24 @@ final class PhoneUnderTest {
 
     let repo: SharepasteRepository
 
+    /// This phone's pasteboard, which every Offer reads and every Recall writes.
+    ///
+    /// Handed to the repository rather than left to default, because
+    /// `UIPasteboard` is not a pasteboard a host-less test bundle has — the
+    /// reasoning is on ``TestPasteboard``. It is the same object the core was
+    /// given, so what a Recall wrote is readable here without asking the core
+    /// anything.
+    let pasteboard: TestPasteboard
+
     /// Every Pairing this phone joined here, in the order it joined them.
     private(set) var pairedUserIds: [String] = []
 
     /// The Pairing this phone joined most recently, once it has one.
     var userId: String? { pairedUserIds.last }
 
-    private init(repo: SharepasteRepository) {
+    private init(repo: SharepasteRepository, pasteboard: TestPasteboard) {
         self.repo = repo
+        self.pasteboard = pasteboard
     }
 
     /// A phone with an empty database, in the app's own container.
@@ -50,13 +60,16 @@ final class PhoneUnderTest {
         let directory = try fresh
             ? freshDatabase(named: databaseName)
             : AppContainer.databaseDirectory()
+        let pasteboard = TestPasteboard()
         return PhoneUnderTest(
             repo: SharepasteRepository(
                 directory: directory,
                 requireHttps: false,
                 databaseName: databaseName,
-                keychain: keychain
-            )
+                keychain: keychain,
+                clipboard: pasteboard
+            ),
+            pasteboard: pasteboard
         )
     }
 

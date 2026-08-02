@@ -212,7 +212,7 @@ final class SharepasteViewModel: ObservableObject {
         guard pairing.attempt != .working else { return }
         guard !pairing.code.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         guard !pairing.deviceLabel.trimmingCharacters(in: .whitespaces).isEmpty else {
-            state.pairing.attempt = .failed(message: Strings.pairNeedsAName)
+            state.pairing.attempt = .failed(sentence: Strings.pairNeedsAName)
             return
         }
         state.pairing.attempt = .working
@@ -277,7 +277,7 @@ final class SharepasteViewModel: ObservableObject {
                     }
                 }
             } catch {
-                raise(.failed(message: Strings.offerFailed, detail: explain(error)))
+                raise(.failed(sentence: Strings.offerFailed, detail: explain(error)))
             }
         }
     }
@@ -335,7 +335,7 @@ final class SharepasteViewModel: ObservableObject {
             do {
                 try await repo.deleteEntry(userId: entry.userId, entryId: entry.id)
             } catch {
-                raise(.failed(message: Strings.deleteFailed, detail: explain(error)))
+                raise(.failed(sentence: Strings.deleteFailed, detail: explain(error)))
             }
         }
     }
@@ -467,7 +467,7 @@ final class SharepasteViewModel: ObservableObject {
                 }
                 try await repo.setActivePairing(userId: userId)
             } catch {
-                state.notice = .failed(message: Strings.pairingUseFailed, detail: explain(error))
+                state.notice = .failed(sentence: Strings.pairingUseFailed, detail: explain(error))
                 return
             }
             state.activeUserId = userId
@@ -495,7 +495,7 @@ final class SharepasteViewModel: ObservableObject {
             do {
                 try await repo.clearHistory(userId: userId)
             } catch {
-                state.notice = .failed(message: Strings.clearHistoryFailed, detail: explain(error))
+                state.notice = .failed(sentence: Strings.clearHistoryFailed, detail: explain(error))
                 return
             }
             state.notice = .historyCleared(pairing: name)
@@ -518,7 +518,7 @@ final class SharepasteViewModel: ObservableObject {
             do {
                 try await repo.forgetPairing(userId: userId)
             } catch {
-                state.notice = .failed(message: Strings.forgetFailed, detail: explain(error))
+                state.notice = .failed(sentence: Strings.forgetFailed, detail: explain(error))
                 return
             }
             let active = try? await repo.activePairing()
@@ -671,22 +671,20 @@ final class SharepasteViewModel: ObservableObject {
     ///
     /// A revoked Pairing is the exception, and it is not a wording exception: no
     /// amount of waiting or reconnecting fixes it, so it is news whether the app
-    /// is in front or not.
+    /// is in front or not. That exception is not restated here —
+    /// ``contactPhase(_:userId:detail:dormant:)`` answers it ahead of whatever
+    /// this passes in, and it is the same reading one Pairing's card takes.
     private func phase(
         for userId: String,
         state connection: ConnectionState,
         lastError: String?
     ) -> SessionPhase {
-        if connection == .authFailed { return .refused(userId: userId, detail: lastError) }
-        if !state.foreground { return .resting(userId: userId) }
-        switch connection {
-        case .online: return .inContact(userId: userId)
-        case .connecting: return .looking
-        case .disconnected: return .outOfContact(userId: userId)
-        // Answered above. Repeated rather than swept up, so a reading added to
-        // the core arrives here as a compile error.
-        case .authFailed: return .refused(userId: userId, detail: lastError)
-        }
+        contactPhase(
+            connection,
+            userId: userId,
+            detail: lastError,
+            dormant: state.foreground ? nil : .resting(userId: userId)
+        )
     }
 
     /// The phase a failed `startSession` leaves the phone in.
@@ -708,21 +706,21 @@ final class SharepasteViewModel: ObservableObject {
     private func pairFailure(for error: Error) -> PairAttempt {
         switch error {
         case AppError.PairExpired:
-            .failed(message: Strings.pairCodeExpired)
+            .failed(sentence: Strings.pairCodeExpired)
         case let AppError.InsecureRelay(detail):
-            .failed(message: Strings.pairInsecureRelay, detail: detail)
+            .failed(sentence: Strings.pairInsecureRelay, detail: detail)
         case AppError.BadInput:
-            .failed(message: Strings.pairNotACode)
+            .failed(sentence: Strings.pairNotACode)
         case AppError.Auth:
-            .failed(message: Strings.pairRefused)
+            .failed(sentence: Strings.pairRefused)
         // The Relay answers a claim for a slot it has already expired with a 404,
         // so this is the same news as `PairExpired` and gets the same sentence.
         case AppError.NotFound:
-            .failed(message: Strings.pairCodeExpired)
+            .failed(sentence: Strings.pairCodeExpired)
         case AppError.Network:
-            .failed(message: Strings.pairUnreachable)
+            .failed(sentence: Strings.pairUnreachable)
         default:
-            .failed(message: Strings.pairFailed)
+            .failed(sentence: Strings.pairFailed)
         }
     }
 
@@ -736,11 +734,11 @@ final class SharepasteViewModel: ObservableObject {
     private func recallFailure(for error: Error) -> Notice {
         switch error {
         case AppError.NotFound:
-            .failed(message: Strings.recallNothingToRecall)
+            .failed(sentence: Strings.recallNothingToRecall)
         case let AppError.InsecureRelay(detail):
-            .failed(message: Strings.recallFailed, detail: detail)
+            .failed(sentence: Strings.recallFailed, detail: detail)
         default:
-            .failed(message: Strings.recallFailed, detail: explain(error))
+            .failed(sentence: Strings.recallFailed, detail: explain(error))
         }
     }
 }

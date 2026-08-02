@@ -201,7 +201,7 @@ final class ScannerSession: NSObject, AVCaptureMetadataOutputObjectsDelegate, @u
     var onCode: (String) -> Void
 
     private let session = AVCaptureSession()
-    private let queue = DispatchQueue(label: "net.sharepaste.scanner.session")
+    private let queue = DispatchQueue(label: "com.sharepaste.ios.scanner")
 
     /// **One code per arming.** The state holder latches as well —
     /// ``SharepasteViewModel/codeScanned(_:)`` ignores everything after the

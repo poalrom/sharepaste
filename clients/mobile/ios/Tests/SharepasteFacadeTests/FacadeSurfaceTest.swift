@@ -21,13 +21,13 @@ import XCTest
 final class FacadeSurfaceTest: XCTestCase {
 
     private var keychain: IosKeychain!
-    private var clipboard: RecordingClipboard!
+    private var clipboard: TestPasteboard!
     private var sink: RecordingSink!
     private var core: Sharepaste!
 
     override func setUpWithError() throws {
         keychain = IosKeychain()
-        clipboard = RecordingClipboard()
+        clipboard = TestPasteboard()
         sink = RecordingSink()
         // `false` on purpose: this suite reaches the cleartext test relay, which
         // the shipped app's `true` would refuse. That the app itself passes
@@ -61,12 +61,25 @@ final class FacadeSurfaceTest: XCTestCase {
         XCTAssertNil(try keychain.get(account: "surface-test"))
     }
 
+    /// Swift supplies the clipboard, and the core reaches it.
+    ///
+    /// The claim is about the **trait**, not about `UIPasteboard`: the crossing
+    /// under test is Rust calling out to a Swift object, and which object that
+    /// is belongs to whoever opened the facade. `UIPasteboard` is not reachable
+    /// from this bundle at all — see ``TestPasteboard`` for why, and for the
+    /// thirty-six-minute hang that established it.
+    ///
+    /// `writeClipboard` is the one exported method that does not `block_on`; it
+    /// calls the core, which calls straight back out here on the same thread.
+    /// So this is also the narrowest test of that re-entrant hop.
     func testSwiftSuppliesTheClipboard() throws {
+        clipboard.put("what was here before")
         try core.writeClipboard(text: "clipboard crossing")
         XCTAssertEqual(clipboard.written, ["clipboard crossing"])
-        // And the read comes back through the same object, which is what makes
-        // an Offered Capture of the pasteboard possible at all. Unlike Android,
-        // a simulator's pasteboard is readable without window focus.
+        // And a read comes back through the same object, which is what makes an
+        // Offered Capture of the pasteboard possible at all: a Recall writes
+        // through the object an Offer reads through, so there is one set of
+        // rules about what this platform calls text.
         XCTAssertEqual(try clipboard.readText(), "clipboard crossing")
     }
 

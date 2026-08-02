@@ -17,9 +17,12 @@
 //    linked. Both directories are produced elsewhere and gitignored: run
 //    `make ios-vendor` before the first build.
 //  * `SharepasteKit` is the chokepoint. Every FFI call in this application
-//    goes through `SharepasteFacade`, which is an actor, which is what keeps
-//    the boundary's one rule — nothing on the main thread — true by
-//    construction rather than by review.
+//    goes through one private method on `SharepasteRepository`, which hops to
+//    a serial `DispatchQueue` of its own — not an actor, and its own doc says
+//    why: both are off the main thread, but a blocking relay round trip parks
+//    a cooperative-pool thread for seconds and Swift's runtime assumes forward
+//    progress there. One private method is what keeps the boundary's one rule
+//    — nothing on the main thread — true by construction rather than by review.
 //  * `Sharepaste` is the app: two screens, `Fui.swift`, and the two App
 //    Intents. The intents are inside it rather than beside it because ADR 0007
 //    wants them in the main binary, and a target of their own would have to

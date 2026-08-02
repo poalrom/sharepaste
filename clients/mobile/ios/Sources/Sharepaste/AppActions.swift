@@ -81,3 +81,47 @@ func appActions(_ model: SharepasteViewModel) -> AppActions {
         dismissForegroundNote: { model.dismissForegroundNote() }
     )
 }
+
+#if DEBUG
+
+extension AppActions {
+
+    /// A bag whose every action does nothing, for previews.
+    ///
+    /// One shared bag rather than one per gallery. Three previews each wrote all
+    /// twenty-one closures out, so a twenty-second action broke three files at
+    /// once and adding an action was four edits; it is now one. What the
+    /// previews were demonstrating survives the move: a screen still renders
+    /// from a value and a set of closures, with no facade behind it and nothing
+    /// that needs a paired phone to draw.
+    ///
+    /// `#if DEBUG` so nothing shipped can hold a bag that does nothing. A screen
+    /// wired to this one draws perfectly and answers no press, which is the
+    /// hardest sort of wiring mistake to notice; keeping it out of the release
+    /// build makes that mistake a link error rather than a silent screen.
+    static let inert = AppActions(
+        setDeviceLabel: { _ in },
+        setPairingCode: { _ in },
+        codeScanned: { _ in },
+        pairWithCode: {},
+        setCameraProblem: { _ in },
+        dismissPairFailure: {},
+        offerPasteboard: {},
+        recallLatest: {},
+        recall: { _ in },
+        deleteEntry: { _ in },
+        dismissNotice: {},
+        openSettings: {},
+        openHistory: {},
+        openAddPairing: {},
+        viewPairing: { _ in },
+        activatePairing: { _ in },
+        confirm: { _ in },
+        clearHistory: { _ in },
+        forgetPairing: { _ in },
+        setShowRecalled: { _ in },
+        dismissForegroundNote: {}
+    )
+}
+
+#endif
