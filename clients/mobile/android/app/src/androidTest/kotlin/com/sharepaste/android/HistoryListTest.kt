@@ -242,14 +242,14 @@ class HistoryListTest {
      * Each refusal an Offer can receive says something different.
      *
      * A rejection with no reason is a button that appears to do nothing, which is
-     * the one outcome a person cannot act on. The three reachable reasons need
-     * three sentences because each one needs a different thing done about it.
+     * the one outcome a person cannot act on. The two reachable reasons need two
+     * sentences because each one needs a different thing done about it.
      */
     @Test
     fun each_offer_refusal_reads_as_its_own_sentence() {
-        val reachable = listOf(SkipReason.NON_TEXT, SkipReason.TOO_LARGE, SkipReason.DUPLICATE)
+        val reachable = listOf(SkipReason.NON_TEXT, SkipReason.TOO_LARGE)
         val sentences = reachable.map { resources.getString(offerRefusalMessage(it)) }
-        assertEquals("each reachable refusal needs its own words", 3, sentences.toSet().size)
+        assertEquals("each reachable refusal needs its own words", 2, sentences.toSet().size)
 
         reachable.forEach { reason ->
             show(

@@ -12,7 +12,8 @@
 use sharepaste_core::capture::filter::SkipReason as CoreSkipReason;
 use sharepaste_core::event::{CoreEvent as CoreCoreEvent, Entry as CoreEntry};
 use sharepaste_core::facade::{
-    Contact as CoreContact, OfferOutcome as CoreOfferOutcome, PairedDevice as CorePairedDevice,
+    Contact as CoreContact, HistoryCursor as CoreHistoryCursor,
+    OfferOutcome as CoreOfferOutcome, PairedDevice as CorePairedDevice,
     PairingSummary as CorePairingSummary, RecallSource as CoreRecallSource,
     Recalled as CoreRecalled, SettingsPatch as CoreSettingsPatch, ShortCode as CoreShortCode,
 };
@@ -83,6 +84,10 @@ pub struct Entry {
     pub preview: String,
     pub plaintext: Option<String>,
     pub created_at: i64,
+    /// The moment of this entry's most recent **Use** — what the History is
+    /// ordered by, and what a row's age should read. Equal to `created_at` for
+    /// an entry never used since capture.
+    pub last_use: i64,
     pub device_id: String,
     pub device_label: Option<String>,
     pub origin_label: String,
@@ -97,6 +102,7 @@ impl From<CoreEntry> for Entry {
             preview,
             plaintext,
             created_at,
+            last_use,
             device_id,
             device_label,
             origin_label,
@@ -108,11 +114,30 @@ impl From<CoreEntry> for Entry {
             preview,
             plaintext,
             created_at,
+            last_use,
             device_id,
             device_label,
             origin_label,
             undecryptable,
         }
+    }
+}
+
+/// Where a page of the History resumes from: the `last_use` and `id` of the
+/// last row of the page before it.
+///
+/// A pair and not an id, because id is no longer the order. Paging by it alone
+/// would skip and repeat rows the moment anything was used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct HistoryCursor {
+    pub last_use: i64,
+    pub id: i64,
+}
+
+impl From<HistoryCursor> for CoreHistoryCursor {
+    fn from(c: HistoryCursor) -> Self {
+        let HistoryCursor { last_use, id } = c;
+        CoreHistoryCursor { last_use, id }
     }
 }
 
@@ -255,13 +280,17 @@ impl From<CoreRecalled> for Recalled {
 
 /// Why the capture filter refused text.
 ///
-/// Only three of these are reachable through [`crate::Sharepaste::offer`],
-/// which is the only way a phone hands text in: `NonText`, `TooLarge` and
-/// `Duplicate`. The other four describe Watched Capture, which a phone never
-/// does — `Disabled` because an Offer is honoured regardless of the setting,
-/// `DenyList` and `SelfWrite` and `Transient` because there is no frontmost
-/// application, no watcher and no pasteboard sniff on a phone. They are carried
-/// anyway so the enum is the core's, whole.
+/// Only two of these are reachable through [`crate::Sharepaste::offer`], which
+/// is the only way a phone hands text in: `NonText` and `TooLarge`. The other
+/// four describe Watched Capture, which a phone never does — `Disabled`
+/// because an Offer is honoured regardless of the setting, `DenyList` and
+/// `SelfWrite` and `Transient` because there is no frontmost application, no
+/// watcher and no pasteboard sniff on a phone. They are carried anyway so the
+/// enum is the core's, whole.
+///
+/// There is no `Duplicate`. A repeat copy is not a refusal: it is a **Use** of
+/// the entry this device already holds, and it arrives as
+/// [`OfferOutcome::Recognised`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum SkipReason {
     Disabled,
@@ -270,7 +299,6 @@ pub enum SkipReason {
     TooLarge,
     DenyList,
     SelfWrite,
-    Duplicate,
 }
 
 impl From<CoreSkipReason> for SkipReason {
@@ -282,7 +310,6 @@ impl From<CoreSkipReason> for SkipReason {
             CoreSkipReason::TooLarge => SkipReason::TooLarge,
             CoreSkipReason::DenyList => SkipReason::DenyList,
             CoreSkipReason::SelfWrite => SkipReason::SelfWrite,
-            CoreSkipReason::Duplicate => SkipReason::Duplicate,
         }
     }
 }
@@ -292,6 +319,16 @@ impl From<CoreSkipReason> for SkipReason {
 pub enum OfferOutcome {
     /// Queued for upload. `pending` is the depth of the queue afterwards.
     Queued { pending: i64 },
+    /// This phone already held the same text, so nothing was captured: the
+    /// entry it matched is now the head of the History. `pending` is the depth
+    /// of the queue afterwards, exactly as on `Queued` — recognition queues no
+    /// capture, but the **Use** it records queues when the relay is out of
+    /// reach.
+    ///
+    /// A separate case, and a separate **Receipt**, because reporting it as
+    /// `Queued` would claim content was saved when nothing was — on a list the
+    /// person can immediately check.
+    Recognised { pending: i64 },
     Rejected { reason: SkipReason },
 }
 
@@ -299,6 +336,7 @@ impl From<CoreOfferOutcome> for OfferOutcome {
     fn from(o: CoreOfferOutcome) -> Self {
         match o {
             CoreOfferOutcome::Queued { pending } => OfferOutcome::Queued { pending },
+            CoreOfferOutcome::Recognised { pending } => OfferOutcome::Recognised { pending },
             CoreOfferOutcome::Rejected(reason) => {
                 OfferOutcome::Rejected { reason: reason.into() }
             }

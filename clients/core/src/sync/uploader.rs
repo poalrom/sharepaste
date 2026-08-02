@@ -4,7 +4,7 @@ use crate::event::{CoreEvent, Entry};
 use crate::http::dto::EntryRow;
 use crate::pairing::payload::base64_encode;
 use crate::platform::EventSink;
-use crate::storage::{accounts, devices, pending};
+use crate::storage::{accounts, devices, entries_cache, pending};
 use crate::sync::decryptor;
 use async_trait::async_trait;
 use rusqlite::Connection;
@@ -17,16 +17,40 @@ use tokio_util::sync::CancellationToken;
 /// The id alone used to be enough, and it was thrown away. It is not enough
 /// now: the uploader caches the Entry itself rather than waiting for the relay
 /// to echo it back, and a cached Entry needs the relay's `created_at` — the
-/// number every other device will see it ordered and dated by.
+/// number every other device will see it ordered and dated by — its `seq` and
+/// its `last_use`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Uploaded {
     pub id: i64,
     pub created_at: i64,
+    pub seq: i64,
+    pub last_use: i64,
+}
+
+/// What the relay recorded for a **Use**.
+///
+/// `seq` is carried because the route answers it and this type mirrors the
+/// wire, and it is deliberately never applied: a sequence is a *watermark*
+/// value, and the watermark means "everything up to here has been fetched".
+/// This device fetched nothing — it wrote — and the relay may hold entries from
+/// other devices below this sequence that it has never seen. The same rule
+/// [`Uploader::cache_own_entry`] states at length, for the same reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Used {
+    pub seq: i64,
+    pub last_use: i64,
 }
 
 #[async_trait]
 pub trait UploadTransport: Send + Sync {
     async fn upload(&self, ciphertext_b64: &str) -> Result<Uploaded, AppError>;
+    /// Record a **Use** of an entry the relay already holds.
+    ///
+    /// `AppError::NotFound` covers both an entry that is gone and a relay too
+    /// old to have the route. Neither is worth distinguishing: skew is not
+    /// handled here (the relay is updated first), and a use nobody can record
+    /// is a use with nothing to reorder.
+    async fn use_entry(&self, entry_id: i64) -> Result<Used, AppError>;
 }
 
 /// Why the uploader stopped.
@@ -42,6 +66,19 @@ pub enum UploaderExit {
     Cancelled,
     /// The relay rejected this device's token.
     AuthFailed,
+}
+
+/// What the relay did with one pending, carried from the network call to the
+/// database write that records it.
+///
+/// A value rather than two branches doing their own thing, so the ack, the
+/// queue-depth read and the sink emission happen once for both kinds and
+/// cannot drift apart.
+enum Sent {
+    Capture { b64: String, uploaded: Uploaded },
+    Use { entry_id: i64, used: Used },
+    /// A queued use naming an entry the relay no longer has.
+    UseVanished { entry_id: i64 },
 }
 
 pub struct Uploader {
@@ -83,6 +120,13 @@ impl Uploader {
         });
     }
 
+    /// Drain the queue head-first, whatever kind each act is.
+    ///
+    /// One loop and one set of failure arms for both kinds, because the failure
+    /// rules are the same rules: a rejected token stops everything, malformed
+    /// input is dropped rather than retried forever, and anything else leaves
+    /// the row where it is for the next trigger. What differs is only what the
+    /// relay is asked to do and what the answer is recorded against.
     async fn flush_once(&self) -> Result<(), AppError> {
         loop {
             let head = {
@@ -90,21 +134,63 @@ impl Uploader {
                 pending::head(&conn, &self.user_id)?
             };
             let Some(item) = head else { break; };
-            let b64 = base64_encode(&item.ciphertext);
-            match self.transport.upload(&b64).await {
-                Ok(uploaded) => {
+            let sent = match &item.kind {
+                pending::PendingKind::Capture(ciphertext) => {
+                    let b64 = base64_encode(ciphertext);
+                    self.transport
+                        .upload(&b64)
+                        .await
+                        .map(|uploaded| Sent::Capture { b64, uploaded })
+                }
+                pending::PendingKind::Use(entry_id) => {
+                    let entry_id = *entry_id;
+                    match self.transport.use_entry(entry_id).await {
+                        Ok(used) => Ok(Sent::Use { entry_id, used }),
+                        // The entry no longer exists, so there is nothing to
+                        // reorder and nothing to tell anyone. Ack it and drop it.
+                        Err(AppError::NotFound(_)) => Ok(Sent::UseVanished { entry_id }),
+                        Err(e) => Err(e),
+                    }
+                }
+            };
+            match sent {
+                Ok(sent) => {
                     // Scoped so the database guard is gone before anything
                     // reaches the sink: see [`EventSink`].
-                    let (count, cached) = {
+                    let (count, cached, reordered) = {
                         let conn = self.conn.lock().await;
                         pending::ack(&conn, item.rowid)?;
-                        let cached = self.cache_own_entry(&conn, &b64, uploaded);
-                        (pending::count(&conn, &self.user_id)?, cached)
+                        let (cached, reordered) = match sent {
+                            Sent::Capture { b64, uploaded } => {
+                                (self.cache_own_entry(&conn, &b64, uploaded), false)
+                            }
+                            Sent::Use { entry_id, used } => {
+                                let moved = entries_cache::set_last_use(
+                                    &conn, &self.user_id, entry_id, used.last_use,
+                                )? > 0;
+                                (None, moved)
+                            }
+                            Sent::UseVanished { entry_id } => {
+                                tracing::info!(
+                                    entry_id,
+                                    "dropped a queued use of an entry the relay no longer has"
+                                );
+                                (None, false)
+                            }
+                        };
+                        (pending::count(&conn, &self.user_id)?, cached, reordered)
                     };
                     if let Some(entry) = cached {
                         self.events.emit(CoreEvent::EntryAdded {
                             user_id: self.user_id.clone(),
                             entry,
+                        });
+                    }
+                    // A use raises no `EntryAdded`: nothing was created, and the
+                    // only thing that changed is where the row sits.
+                    if reordered {
+                        self.events.emit(CoreEvent::HistoryChanged {
+                            user_id: self.user_id.clone(),
                         });
                     }
                     self.pending_count(count);
@@ -145,7 +231,7 @@ impl Uploader {
     /// That is the offline-burst-then-reconnect path, which is exactly when a
     /// person is most likely to be watching.
     ///
-    /// **The watermark is deliberately not advanced.** `last_seen_id` means
+    /// **The watermark is deliberately not advanced.** `last_seen_seq` means
     /// "everything up to here has been fetched", and the relay may hold Entries
     /// from other devices with *lower* ids that this device has never seen —
     /// moving it past them skips them for good, because the next `since=` fetch
@@ -175,13 +261,15 @@ impl Uploader {
             ciphertext: ciphertext_b64.to_string(),
             created_at: uploaded.created_at,
             device_id: account.device_id.clone(),
+            seq: uploaded.seq,
+            last_use: uploaded.last_use,
         };
         match decryptor::ingest(conn, &self.user_key, &self.user_id, &row, crate::now_ms()) {
             // Only on a genuine first insert. The relay's echo ingests the same
             // id a moment later, and two `EntryAdded`s for one Entry is a
             // duplicate row on screen — a more visible bug than the missing row
             // this method exists to prevent.
-            Ok(out) if out.first_insert => {
+            Ok(out) if out.stored.first_insert => {
                 let device_label =
                     devices::label_for(conn, &self.user_id, &account.device_id).unwrap_or_default();
                 Some(Entry::new(
@@ -189,6 +277,7 @@ impl Uploader {
                     self.user_id.clone(),
                     out.plaintext,
                     uploaded.created_at,
+                    uploaded.last_use,
                     account.device_id,
                     device_label,
                 ))
@@ -213,7 +302,19 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    struct OkTransport { count: AtomicUsize }
+    struct OkTransport { count: AtomicUsize, uses: Mutex<Vec<i64>>, entry_gone: bool }
+
+    impl OkTransport {
+        fn new() -> Self {
+            OkTransport { count: AtomicUsize::new(0), uses: Mutex::new(Vec::new()), entry_gone: false }
+        }
+
+        /// A relay that no longer has whatever entry a queued use names — the
+        /// same answer a relay too old for the route gives.
+        fn without_the_entry() -> Self {
+            OkTransport { entry_gone: true, ..Self::new() }
+        }
+    }
 
     #[async_trait]
     impl UploadTransport for OkTransport {
@@ -221,7 +322,16 @@ mod tests {
             let n = self.count.fetch_add(1, Ordering::SeqCst) as i64;
             // `now_ms`, not a fixed date: `upsert_and_prune` drops anything older
             // than 30 days, so a cached Entry stamped in 2023 vanishes as it is written.
-            Ok(Uploaded { id: 42 + n, created_at: crate::now_ms() + n })
+            let at = crate::now_ms() + n;
+            Ok(Uploaded { id: 42 + n, created_at: at, seq: 42 + n, last_use: at })
+        }
+
+        async fn use_entry(&self, entry_id: i64) -> Result<Used, AppError> {
+            self.uses.lock().await.push(entry_id);
+            if self.entry_gone {
+                return Err(AppError::NotFound("entry not found".into()));
+            }
+            Ok(Used { seq: 900, last_use: crate::now_ms() })
         }
     }
 
@@ -229,6 +339,10 @@ mod tests {
     #[async_trait]
     impl UploadTransport for AuthFail {
         async fn upload(&self, _ct: &str) -> Result<Uploaded, AppError> {
+            Err(AppError::Auth("revoked".into()))
+        }
+
+        async fn use_entry(&self, _entry_id: i64) -> Result<Used, AppError> {
             Err(AppError::Auth("revoked".into()))
         }
     }
@@ -260,8 +374,20 @@ mod tests {
             &crate::storage::accounts::Account {
                 user_id: "u".into(), device_id: "this-phone".into(),
                 device_label: "this phone".into(), server_url: "https://srv".into(),
-                last_seen_id: 0, created_at: 1, username: None, last_contact_at: None,
+                last_seen_seq: 0, created_at: 1, username: None, last_contact_at: None,
             },
+        )
+        .unwrap();
+    }
+
+    /// Queue a capture, encrypting it as the facade does.
+    async fn queue_capture(conn: &Arc<Mutex<Connection>>, text: &str) {
+        let sealed = crate::crypto::encrypt(&crate::testing::test_user_key(), "u", text.as_bytes()).unwrap();
+        let c = conn.lock().await;
+        pending::enqueue_capture(
+            &c, "u", &sealed,
+            &crate::storage::entries_cache::plaintext_sha256(text),
+            1,
         )
         .unwrap();
     }
@@ -270,10 +396,9 @@ mod tests {
     async fn flush_drains_in_fifo_order() {
         let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
         for i in 0..3i64 {
-            let c = conn.lock().await;
-            pending::enqueue(&c, "u", &[i as u8], i).unwrap();
+            queue_capture(&conn, &format!("t{i}")).await;
         }
-        let transport = Arc::new(OkTransport { count: AtomicUsize::new(0) });
+        let transport = Arc::new(OkTransport::new());
         let (up, sink) = uploader(conn.clone(), transport.clone());
         up.flush_once().await.unwrap();
         assert_eq!(transport.count.load(Ordering::SeqCst), 3);
@@ -286,13 +411,80 @@ mod tests {
         );
     }
 
+    /// The reason there is one queue: a use made during an outage reaches the
+    /// relay in the position it was made in, between the two captures.
+    #[tokio::test]
+    async fn a_queued_use_is_sent_in_the_order_it_was_made() {
+        let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
+        paired(&conn).await;
+        queue_capture(&conn, "before").await;
+        // Dated inside the 30-day window, or `upsert_and_prune` deletes it with
+        // the very write that stores it.
+        let captured_at = crate::now_ms() - 60_000;
+        {
+            let c = conn.lock().await;
+            crate::storage::entries_cache::upsert_and_prune(
+                &c,
+                crate::storage::entries_cache::NewCachedEntry {
+                    user_id: "u", id: 7, ciphertext: b"ct", plaintext: Some("older"),
+                    plaintext_sha256: None, created_at: captured_at, last_use: captured_at,
+                    device_id: "d",
+                },
+                crate::now_ms(),
+            )
+            .unwrap();
+            pending::enqueue_use(&c, "u", 7, 2).unwrap();
+        }
+        queue_capture(&conn, "after").await;
+
+        let transport = Arc::new(OkTransport::new());
+        let (up, sink) = uploader(conn.clone(), transport.clone());
+        up.flush_once().await.unwrap();
+
+        assert_eq!(transport.count.load(Ordering::SeqCst), 2, "both captures uploaded");
+        assert_eq!(*transport.uses.lock().await, vec![7], "and the use went with them");
+        let c = conn.lock().await;
+        assert_eq!(pending::count(&c, "u").unwrap(), 0);
+        let used = crate::storage::entries_cache::list_recent(&c, "u", None, 10)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.id == 7)
+            .expect("the used entry is still cached");
+        assert!(
+            used.last_use > captured_at,
+            "the relay's stamp reached the cached row: {}",
+            used.last_use
+        );
+        assert_eq!(used.created_at, captured_at, "and left its identity alone");
+        assert_eq!(
+            sink.entries().len(),
+            2,
+            "two captures are two EntryAddeds; a use creates nothing and announces none"
+        );
+    }
+
+    /// A queued use whose entry is gone by the time the queue drains: there is
+    /// nothing to reorder and nothing to tell anyone, so it leaves quietly.
+    #[tokio::test]
+    async fn a_queued_use_of_a_vanished_entry_is_acked_and_dropped() {
+        let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
+        paired(&conn).await;
+        {
+            let c = conn.lock().await;
+            pending::enqueue_use(&c, "u", 7, 2).unwrap();
+        }
+        let (up, sink) = uploader(conn.clone(), Arc::new(OkTransport::without_the_entry()));
+        up.flush_once().await.unwrap();
+
+        let c = conn.lock().await;
+        assert_eq!(pending::count(&c, "u").unwrap(), 0, "it must not retry forever");
+        assert!(sink.entries().is_empty());
+    }
+
     #[tokio::test]
     async fn auth_failure_propagates_and_keeps_row() {
         let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
-        {
-            let c = conn.lock().await;
-            pending::enqueue(&c, "u", b"x", 1).unwrap();
-        }
+        queue_capture(&conn, "x").await;
         let (up, sink) = uploader(conn.clone(), Arc::new(AuthFail));
         let err = up.flush_once().await.unwrap_err();
         assert!(matches!(err, AppError::Auth(_)));
@@ -311,10 +503,7 @@ mod tests {
     #[tokio::test]
     async fn a_revoked_token_stops_the_uploader_and_is_reported_to_its_session() {
         let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
-        {
-            let c = conn.lock().await;
-            pending::enqueue(&c, "u", b"x", 1).unwrap();
-        }
+        queue_capture(&conn, "x").await;
         let (up, sink) = uploader(conn.clone(), Arc::new(AuthFail));
         up.trigger.notify_one();
         assert_eq!(up.run(CancellationToken::new()).await, UploaderExit::AuthFailed);
@@ -339,14 +528,9 @@ mod tests {
     async fn an_entry_this_device_uploaded_is_cached_without_any_relay_echo() {
         let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
         paired(&conn).await;
-        let key = crate::testing::test_user_key();
-        let sealed = crate::crypto::encrypt(&key, "u", b"copied on this phone").unwrap();
-        {
-            let c = conn.lock().await;
-            pending::enqueue(&c, "u", &sealed, 1).unwrap();
-        }
+        queue_capture(&conn, "copied on this phone").await;
 
-        let (up, sink) = uploader(conn.clone(), Arc::new(OkTransport { count: AtomicUsize::new(0) }));
+        let (up, sink) = uploader(conn.clone(), Arc::new(OkTransport::new()));
         up.flush_once().await.unwrap();
 
         let c = conn.lock().await;
@@ -364,7 +548,7 @@ mod tests {
         // with lower ids that this device has never seen: advancing past them
         // skips them for good, because the next `since=` fetch starts after it.
         assert_eq!(
-            crate::storage::accounts::find(&c, "u").unwrap().unwrap().last_seen_id,
+            crate::storage::accounts::find(&c, "u").unwrap().unwrap().last_seen_seq,
             0,
             "caching an Entry is not the same as having fetched everything before it"
         );
@@ -388,11 +572,8 @@ mod tests {
         paired(&conn).await;
         let key = crate::testing::test_user_key();
         let sealed = crate::crypto::encrypt(&key, "u", b"offered here").unwrap();
-        {
-            let c = conn.lock().await;
-            pending::enqueue(&c, "u", &sealed, 1).unwrap();
-        }
-        let (up, sink) = uploader(conn.clone(), Arc::new(OkTransport { count: AtomicUsize::new(0) }));
+        queue_capture(&conn, "offered here").await;
+        let (up, sink) = uploader(conn.clone(), Arc::new(OkTransport::new()));
         up.flush_once().await.unwrap();
 
         // The echo, ingested exactly as `run_sse_loop` ingests it.
@@ -406,13 +587,15 @@ mod tests {
                 ciphertext: base64_encode(&sealed),
                 created_at: crate::now_ms(),
                 device_id: "this-phone".into(),
+                seq: 42,
+                last_use: crate::now_ms(),
             },
             crate::now_ms(),
         )
         .unwrap();
 
         assert!(
-            !echoed.first_insert,
+            !echoed.stored.first_insert,
             "the cache must report the echo as a repeat, or the session emits a second EntryAdded"
         );
         assert_eq!(
@@ -430,7 +613,7 @@ mod tests {
     #[tokio::test]
     async fn cancelling_a_session_stops_its_uploader() {
         let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
-        let (up, _sink) = uploader(conn, Arc::new(OkTransport { count: AtomicUsize::new(0) }));
+        let (up, _sink) = uploader(conn, Arc::new(OkTransport::new()));
         let cancel = CancellationToken::new();
         cancel.cancel();
         assert_eq!(up.run(cancel).await, UploaderExit::Cancelled);

@@ -11,7 +11,12 @@ export const cmd = {
                          tauri.invoke<{ user_id: string; device_id: string }>("pair_with_code", { args }),
   forgetPairing:       (args: { user_id: string }) => tauri.invoke<void>("forget_pairing", { args }),
   setActivePairing:    (args: { user_id: string }) => tauri.invoke<void>("set_active_pairing", { args }),
-  listHistory:         (args: { user_id: string; before_id?: number; limit: number }) =>
+  /**
+   * `before` is a `(last_use, id)` cursor and not an id: id stopped being the
+   * order (ADR 0011), so paging by it alone would both skip and repeat rows.
+   * Nothing passes it — the cache holds 100 and `list_recent` clamps there.
+   */
+  listHistory:         (args: { user_id: string; before?: { last_use: number; id: number }; limit: number }) =>
                          tauri.invoke<EntryView[]>("list_history", { args }),
   copyToClipboard:     (args: { user_id: string; entry_id: number }) => tauri.invoke<void>("copy_to_clipboard", { args }),
   deleteEntry:         (args: { user_id: string; entry_id: number }) => tauri.invoke<void>("delete_entry", { args }),

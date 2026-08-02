@@ -83,12 +83,16 @@ fun entry(
     undecryptable: Boolean = false,
     userId: String = "u",
     createdAt: Long = 1_700_000_000_000,
+    // An Entry never used since capture, which is the ordinary case and the one
+    // a test that says nothing about use means.
+    lastUse: Long = createdAt,
 ) = Entry(
     id = id,
     userId = userId,
     preview = preview,
     plaintext = plaintext,
     createdAt = createdAt,
+    lastUse = lastUse,
     deviceId = deviceId,
     deviceLabel = deviceLabel,
     originLabel = originLabel,

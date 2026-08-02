@@ -114,6 +114,14 @@ export default function EntryDetail({ entry, index, ownDeviceId, now }: Props) {
           {elsewhere && `${entry.origin_label} · `}
           CAPTURED {capturedAt(entry.created_at, now)} ·{" "}
           <span className="normal-case">{agePhrase(entry.created_at, now)}</span>
+          {/*
+            Only when the two differ. An entry never used since capture carries
+            `last_use == created_at`, and a USED reading back the capture time
+            would state a second event that never happened. The age beside
+            CAPTURED stays the capture's: the row in the list already says how
+            long ago the Use was, and this pane is where the other fact lives.
+          */}
+          {entry.last_use !== entry.created_at && ` · USED ${capturedAt(entry.last_use, now)}`}
         </span>
         <span className="flex items-center gap-2">
           {/*

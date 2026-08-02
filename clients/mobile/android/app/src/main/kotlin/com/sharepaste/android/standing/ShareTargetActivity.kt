@@ -137,6 +137,8 @@ class ShareTargetActivity : Activity() {
 
             is OfferAttempt.Settled -> when (val outcome = attempt.outcome) {
                 is OfferOutcome.Queued -> Receipt.Offered(outcome.pending) to attempt.userId
+                is OfferOutcome.Recognised ->
+                    Receipt.Recognised(outcome.pending) to attempt.userId
 
                 is OfferOutcome.Rejected -> Receipt.Aloud(
                     offerRefusalLabel(outcome.reason),

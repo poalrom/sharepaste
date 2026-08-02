@@ -33,6 +33,20 @@ sealed interface Receipt {
     data class Offered(val pending: Long) : Receipt
 
     /**
+     * An Offered Capture turned out to be text this device already held, so
+     * nothing was captured and the Entry it matched now leads the History.
+     * [pending] is the queue depth afterwards, exactly as on [Offered] —
+     * recognition queues no capture, but the Use it records queues when the
+     * Relay is out of reach.
+     *
+     * **Not an [Offered] with different words.** The ordinary Receipt says the
+     * content was saved, and here nothing was saved — on a list the person can
+     * turn to and check a second later, so a Receipt that overstated it would
+     * be caught being wrong. ADR 0012.
+     */
+    data class Recognised(val pending: Long) : Receipt
+
+    /**
      * An Entry is on this device's clipboard, and — when it can be said — which
      * one.
      *
@@ -74,6 +88,7 @@ sealed interface Receipt {
 @StringRes
 fun receiptLabel(receipt: Receipt): Int = when (receipt) {
     is Receipt.Offered -> R.string.notice_offered
+    is Receipt.Recognised -> R.string.notice_already_saved
     is Receipt.Recalled -> R.string.notice_recalled
     is Receipt.Aloud -> receipt.label
 }
@@ -87,6 +102,7 @@ fun receiptLabel(receipt: Receipt): Int = when (receipt) {
  */
 fun receiptSentence(context: Context, receipt: Receipt): String = when (receipt) {
     is Receipt.Offered -> context.getString(R.string.offer_queued)
+    is Receipt.Recognised -> context.getString(R.string.offer_recognised)
     is Receipt.Recalled -> receipt.preview
         ?.takeIf { it.isNotBlank() }
         ?.let { context.getString(R.string.receipt_recalled, it) }
@@ -109,6 +125,7 @@ fun receiptSentence(context: Context, receipt: Receipt): String = when (receipt)
 @StringRes
 fun receiptLogged(receipt: Receipt): Int = when (receipt) {
     is Receipt.Offered -> R.string.offer_queued
+    is Receipt.Recognised -> R.string.offer_recognised
     is Receipt.Recalled -> R.string.recall_done
     is Receipt.Aloud -> receipt.sentence
 }

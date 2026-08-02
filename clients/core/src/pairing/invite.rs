@@ -42,7 +42,7 @@ pub fn persist_claimed_pairing(
         device_id: claimed.device_id.clone(),
         device_label: device_label.into(),
         server_url: claimed.server_url.clone(),
-        last_seen_id: 0,
+        last_seen_seq: 0,
         created_at: now_ms,
         username: None,
         last_contact_at: None,

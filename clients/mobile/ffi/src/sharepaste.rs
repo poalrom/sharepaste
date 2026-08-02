@@ -5,8 +5,8 @@ use crate::platform::{
     Clipboard, ClipboardBridge, EventSink, EventSinkBridge, Keychain, KeychainBridge,
 };
 use crate::types::{
-    Contact, ConnectionState, Entry, OfferOutcome, PairedDevice, PairingSummary, Recalled,
-    Settings, SettingsPatch, ShortCode,
+    Contact, ConnectionState, Entry, HistoryCursor, OfferOutcome, PairedDevice, PairingSummary,
+    Recalled, Settings, SettingsPatch, ShortCode,
 };
 use std::future::Future;
 use std::path::PathBuf;
@@ -175,14 +175,16 @@ impl Sharepaste {
 
     // -- history and clipboard --------------------------------------------
 
-    /// One page of cached entries, newest first. `before_id` pages backwards.
+    /// One page of the History, last use first. `before` resumes after the last
+    /// row of the previous page.
     pub fn list_history(
         &self,
         user_id: String,
-        before_id: Option<i64>,
+        before: Option<HistoryCursor>,
         limit: i64,
     ) -> Result<Vec<Entry>, AppError> {
-        let entries = self.block_on(self.inner.list_history(&user_id, before_id, limit))?;
+        let entries =
+            self.block_on(self.inner.list_history(&user_id, before.map(Into::into), limit))?;
         Ok(entries.into_iter().map(Into::into).collect())
     }
 
@@ -194,7 +196,8 @@ impl Sharepaste {
         Ok(self.block_on(self.inner.read_entry(&user_id, entry_id))?)
     }
 
-    /// Put one entry back on the clipboard.
+    /// Put one entry back on the clipboard, and record the **Use**: it becomes
+    /// the head of the History on every device.
     pub fn recall(&self, user_id: String, entry_id: i64) -> Result<(), AppError> {
         Ok(self.block_on(self.inner.recall(&user_id, entry_id))?)
     }
@@ -212,8 +215,9 @@ impl Sharepaste {
     ///
     /// Honoured regardless of the capture setting — that setting governs the
     /// desktop's Watched Capture, and refusing content a person just handed
-    /// over is indefensible. It can still be rejected as non-text, too large,
-    /// or a duplicate of the last capture.
+    /// over is indefensible. It can still be rejected as non-text or too large,
+    /// and text this phone already holds comes back `Recognised` rather than
+    /// queued.
     pub fn offer(&self, user_id: String, text: String) -> Result<OfferOutcome, AppError> {
         Ok(self.block_on(self.inner.offer(&user_id, &text))?.into())
     }

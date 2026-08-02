@@ -9,6 +9,7 @@ import com.sharepaste.core.Clipboard
 import com.sharepaste.core.ConnectionState
 import com.sharepaste.core.CoreEvent
 import com.sharepaste.core.Entry
+import com.sharepaste.core.HistoryCursor
 import com.sharepaste.core.OfferOutcome
 import com.sharepaste.core.PairedDevice
 import com.sharepaste.core.PairingSummary
@@ -53,7 +54,10 @@ sealed interface OfferAttempt {
     /** No Active Pairing, so there is nothing to offer to. */
     data object Unpaired : OfferAttempt
 
-    /** The core's own verdict on the text: queued, or refused with a reason. */
+    /**
+     * The core's own verdict on the text: queued, recognised as something this
+     * device already held, or refused with a reason.
+     */
     data class Settled(val userId: String, val outcome: OfferOutcome) : OfferAttempt
 }
 
@@ -204,8 +208,20 @@ class SharepasteRepository private constructor(
 
     // -- history and clipboard ----------------------------------------------
 
-    suspend fun listHistory(userId: String, beforeId: Long? = null, limit: Long = 50): List<Entry> =
-        io { it.listHistory(userId, beforeId, limit) }
+    /**
+     * One page of the History, last use first.
+     *
+     * [before] is the `lastUse` and `id` of the last row already shown, and not
+     * an id on its own: id stopped being the order when the History started
+     * following Last Use, so paging by it alone would skip and repeat rows.
+     * Nothing on this phone pages — the cache holds a hundred Entries and the
+     * screen shows them all — but the boundary carries the shape the core has.
+     */
+    suspend fun listHistory(
+        userId: String,
+        before: HistoryCursor? = null,
+        limit: Long = 50,
+    ): List<Entry> = io { it.listHistory(userId, before, limit) }
 
     suspend fun readEntry(userId: String, entryId: Long): String? = io { it.readEntry(userId, entryId) }
 
@@ -257,8 +273,9 @@ class SharepasteRepository private constructor(
      * What counts as offerable text is **not** decided here. Whether the sending
      * app marked its content sensitive is the share target's question, because
      * only it can see the `Intent`; everything after that is the core's one
-     * capture filter, which is where `NonText`, `TooLarge` and `Duplicate` are
-     * decided for every Offer this app makes.
+     * capture filter, which is where `NonText` and `TooLarge` are decided — and
+     * where text this device already holds becomes a Use of the Entry holding
+     * it rather than an Offer at all.
      */
     suspend fun offerText(text: String): OfferAttempt = io { it.offerOnTheActivePairing(text) }
 

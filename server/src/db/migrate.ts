@@ -4,7 +4,8 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id          TEXT PRIMARY KEY,
   username    TEXT UNIQUE NOT NULL,
-  created_at  INTEGER NOT NULL
+  created_at  INTEGER NOT NULL,
+  next_seq    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS invites (
@@ -45,9 +46,13 @@ CREATE TABLE IF NOT EXISTS entries (
   device_id      TEXT NOT NULL,
   ciphertext_b64 TEXT NOT NULL,
   size           INTEGER NOT NULL,
-  created_at     INTEGER NOT NULL
+  created_at     INTEGER NOT NULL,
+  -- DEFAULT 0 matches what the ALTER path below can produce: SQLite refuses to
+  -- add a NOT NULL column without a default, so an installed database would
+  -- otherwise end at a different shape from a fresh one.
+  last_use       INTEGER NOT NULL DEFAULT 0,
+  seq            INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS entries_user_id_id ON entries (user_id, id);
 `;
 
 const columnsOf = (db: Db, table: string): Set<string> => {
@@ -106,4 +111,38 @@ export const migrate = (db: Db): void => {
     })();
     db.exec("ALTER TABLE entries DROP COLUMN ciphertext");
   }
+  if (!entries.has("last_use")) {
+    // SQLite refuses to add a NOT NULL column without a default, so the column
+    // arrives at 0 and the backfill is what makes the declared shape true.
+    db.exec("ALTER TABLE entries ADD COLUMN last_use INTEGER NOT NULL DEFAULT 0");
+    db.exec("UPDATE entries SET last_use = created_at WHERE last_use = 0");
+  }
+  if (!entries.has("seq")) {
+    db.exec("ALTER TABLE entries ADD COLUMN seq INTEGER NOT NULL DEFAULT 0");
+    // Seeding from `id` is what keeps every watermark already stored on every
+    // installed client valid: ids are globally monotonic, so a per-user sequence
+    // seeded from them starts above anything that client has already fetched.
+    db.exec("UPDATE entries SET seq = id WHERE seq = 0");
+  }
+  if (!columnsOf(db, "users").has("next_seq")) {
+    db.exec("ALTER TABLE users ADD COLUMN next_seq INTEGER NOT NULL DEFAULT 0");
+  }
+  // After the seq backfill, and every boot: the counter has to start above every
+  // sequence already handed out, and it is what makes a sequence unrepeatable
+  // once a delete has taken the row wearing it. Idempotent because it only ever
+  // raises the counter.
+  db.exec(
+    `UPDATE users SET next_seq = MAX(
+       next_seq,
+       COALESCE((SELECT MAX(seq) FROM entries WHERE entries.user_id = users.id), 0)
+     )`
+  );
+  // These indexes live here rather than in SCHEMA because `db.exec(SCHEMA)` runs
+  // first, and on an installed database the columns they name do not exist yet.
+  db.exec("DROP INDEX IF EXISTS entries_user_id_id");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS entries_user_id_seq ON entries (user_id, seq)");
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS entries_user_last_use
+     ON entries (user_id, last_use DESC, id DESC)`
+  );
 };

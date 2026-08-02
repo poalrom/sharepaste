@@ -17,11 +17,11 @@ export interface TempDb {
   close: () => void;
 }
 
-export const openTempDb = (): TempDb => {
+/** A temp database with no schema at all — for tests that seed a pre-migration shape. */
+export const openRawTempDb = (): TempDb => {
   const dir = mkdtempSync(path.join(tmpdir(), "sp-test-"));
   const dbPath = path.join(dir, "t.sqlite");
   const db = openDb(dbPath);
-  migrate(db);
   return {
     dbPath,
     db,
@@ -31,6 +31,12 @@ export const openTempDb = (): TempDb => {
       rmSync(dir, { recursive: true, force: true });
     },
   };
+};
+
+export const openTempDb = (): TempDb => {
+  const t = openRawTempDb();
+  migrate(t.db);
+  return t;
 };
 
 export interface TestApp {

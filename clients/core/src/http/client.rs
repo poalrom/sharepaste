@@ -178,9 +178,34 @@ impl ServerClient {
         self.json_post("/entries", &PostEntryReq { ciphertext: ciphertext_b64 }, true).await
     }
 
-    pub async fn list_entries(&self, since: i64, limit: u32) -> Result<Vec<EntryRow>, AppError> {
+    /// Everything past `since_seq`, in sequence order.
+    ///
+    /// A sequence and not an entry id: an entry moves in the order when it is
+    /// used, and the relay re-allocates its sequence so it rises above every
+    /// device's watermark and comes back down this one pipe.
+    pub async fn list_entries(&self, since_seq: i64, limit: u32) -> Result<Vec<EntryRow>, AppError> {
         let resp = self.http.get(self.url("/entries"))
-            .query(&[("since", &since.to_string()), ("limit", &limit.to_string())])
+            .query(&[("since", &since_seq.to_string()), ("limit", &limit.to_string())])
+            .headers(self.auth_headers()?)
+            .send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(Self::map_status(status, body));
+        }
+        resp.json().await.map_err(|e| AppError::Network(e.to_string()))
+    }
+
+    /// Record a **Use** of one entry: it becomes the head of the History on
+    /// every device.
+    ///
+    /// A relay older than this client has no such route and answers 404, which
+    /// is indistinguishable here from an entry that is gone. Both are handled
+    /// the same way by the caller and deliberately so: skew is not handled
+    /// (the relay is updated first), and a failed use never fails the Recall
+    /// that provoked it.
+    pub async fn use_entry(&self, id: i64) -> Result<UseEntryResp, AppError> {
+        let resp = self.http.post(self.url(&format!("/entries/{id}/use")))
             .headers(self.auth_headers()?)
             .send().await?;
         let status = resp.status();

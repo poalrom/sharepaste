@@ -207,12 +207,12 @@ A **Receipt** confirms that a verb did what was asked and needs nothing back, so
 it does not wait: a Toast, the label over the sentence, `LENGTH_LONG` because a
 Preview is a line of text somebody has to read rather than a tick to glance at.
 A **Notice** says something needs doing or knowing, so it takes the band and
-stays until it is dismissed. `Offered` and `Recalled` are Receipts. Six outcomes
-keep the band — `OfferRefused`, `RecalledFromCache`, `Unpaired`,
-`HistoryCleared`, `PairingForgotten`, `Failed` — and each still carries a label
-naming the outcome: `NOT PAIRED`, `MAY BE STALE`, `CLEARED`, `FORGOTTEN`,
-`DID NOT WORK`, and one per reachable refusal (`NOTHING TO SEND`,
-`TOO BIG · 64 KB CAP`, `ALREADY HERE`).
+stays until it is dismissed. `Offered`, `Recognised` and `Recalled` are
+Receipts. Six outcomes keep the band — `OfferRefused`, `RecalledFromCache`,
+`Unpaired`, `HistoryCleared`, `PairingForgotten`, `Failed` — and each still
+carries a label naming the outcome: `NOT PAIRED`, `MAY BE STALE`, `CLEARED`,
+`FORGOTTEN`, `DID NOT WORK`, and one per reachable refusal (`NOTHING TO SEND`,
+`TOO BIG · 64 KB CAP`).
 
 The argument that used to sit here was about the **invocation path**: a Standing
 Action and an in-app press are the same operation, and reporting it in two
@@ -230,8 +230,11 @@ have permitted it into something that vanishes while unread; two types make that
 unrepresentable. It also stays the one Notice that tints its whole band: it is
 the only one about *what is now on the clipboard* rather than about what the app
 just did. A refusal is ruled down its left edge instead, in the colour of what
-to do about it — amber for the two that need something done, inert for
-`ALREADY HERE`, which is the app working correctly and costs the person nothing.
+to do about it — amber, because both refusals an Offer can still receive need
+something done about them. The one that did not, `ALREADY HERE`, is no longer a
+refusal at all: under [ADR 0012](adr/0012-a-repeat-copy-is-a-use.md) a repeat
+copy is a **Use** of the Entry the phone already holds, and it draws the
+`ALREADY SAVED` Receipt rather than a Notice.
 
 **Only the Recall Receipt names an Entry**, and only while the `THIS PHONE`
 switch allows it. The Offer Receipt does not: the person supplied that content a

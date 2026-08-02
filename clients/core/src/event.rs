@@ -58,6 +58,10 @@ pub struct Entry {
     /// The whole decrypted text. Whatever the person copied — do not log it.
     pub plaintext: Option<String>,
     pub created_at: i64,
+    /// The moment of this entry's most recent **Use** — the fact the History is
+    /// ordered by, and the one a list row's age column reads. Equal to
+    /// `created_at` for an entry never used since capture.
+    pub last_use: i64,
     pub device_id: String,
     pub device_label: Option<String>,
     pub origin_label: String,
@@ -79,6 +83,7 @@ impl Entry {
         user_id: String,
         plaintext: Option<String>,
         created_at: i64,
+        last_use: i64,
         device_id: String,
         device_label: Option<String>,
     ) -> Self {
@@ -91,6 +96,7 @@ impl Entry {
             user_id,
             plaintext,
             created_at,
+            last_use,
             device_id,
             device_label,
         }

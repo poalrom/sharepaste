@@ -1,5 +1,13 @@
 export type SseEvent =
-  | { type: "entry"; id: number; ciphertext: string; created_at: number; device_id: string }
+  | {
+      type: "entry";
+      id: number;
+      ciphertext: string;
+      created_at: number;
+      device_id: string;
+      seq: number;
+      last_use: number;
+    }
   | { type: "delete"; id: number };
 
 export type SseListener = (event: SseEvent) => void;

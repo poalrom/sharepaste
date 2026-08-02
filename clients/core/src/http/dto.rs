@@ -34,7 +34,22 @@ pub struct DevicesResp { pub device_token: String, pub device_id: String, pub us
 pub(crate) struct PostEntryReq<'a> { pub ciphertext: &'a str }
 
 #[derive(Deserialize)]
-pub struct PostEntryResp { pub id: i64, pub created_at: i64 }
+pub struct PostEntryResp {
+    pub id: i64,
+    pub created_at: i64,
+    pub seq: i64,
+    pub last_use: i64,
+}
+
+/// What the relay recorded for a **Use**.
+///
+/// A fresh sequence, so the used entry rises above every device's watermark
+/// and comes back down the one pipe there is, and the moment it stamped.
+#[derive(Deserialize, Debug)]
+pub struct UseEntryResp {
+    pub seq: i64,
+    pub last_use: i64,
+}
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct EntryRow {
@@ -42,6 +57,11 @@ pub struct EntryRow {
     pub ciphertext: String,
     pub created_at: i64,
     pub device_id: String,
+    /// This entry's place in the relay's per-user sequence, re-allocated on
+    /// every use. What `GET /entries?since=` filters on, and what the sync
+    /// watermark counts.
+    pub seq: i64,
+    pub last_use: i64,
 }
 
 #[derive(Deserialize)]

@@ -129,11 +129,12 @@
 
     <!--
       Every notice is labelled with the outcome it reports, in one or two words,
-      before the sentence that explains it. The same four the invisible activity
+      before the sentence that explains it. The same five the invisible activity
       shows over whatever a person was doing — a Standing Action and an in-app
       press are the same operation and must not report it in two idioms.
     -->
     <string name="notice_offered">OFFERED</string>
+    <string name="notice_already_saved">ALREADY SAVED</string>
     <string name="notice_recalled">RECALLED</string>
     <string name="notice_not_paired">NOT PAIRED</string>
     <string name="notice_cleared">CLEARED</string>
@@ -142,7 +143,6 @@
     <!-- One per reachable refusal, naming what to do about it. -->
     <string name="notice_nothing_to_send">NOTHING TO SEND</string>
     <string name="notice_too_big">TOO BIG · 64 KB CAP</string>
-    <string name="notice_already_here">ALREADY HERE</string>
     <string name="notice_refused">REFUSED</string>
     <string name="notice_nothing_to_recall">NOTHING TO RECALL</string>
     <!-- The share sheet's own refusal, per the mock's off-app surface. -->
@@ -150,12 +150,14 @@
 
     <string name="offer_queued">Offered. Sharepaste sends it to the Relay while this app is
         open.</string>
+    <string name="offer_recognised">Already saved. Sharepaste moved it to the top of your
+        History.</string>
     <string name="offer_failed">Sharepaste could not offer that.</string>
     <string name="action_unpaired">This phone is not paired yet, so there is nothing to offer to
         and nothing to recall. Pair it with your computer first.</string>
 
     <!--
-      The three refusals an Offer can actually receive, each needing a different
+      The two refusals an Offer can actually receive, each needing a different
       thing done about it. A rejection with no reason is a button that does
       nothing, which is the one outcome a person cannot act on.
     -->
@@ -163,8 +165,6 @@
         It syncs text — copy a link, a note or a code and offer that.</string>
     <string name="offer_refused_too_large">That is too big to send. An Entry can be up to 64 KB;
         put the long version somewhere else and offer a link to it.</string>
-    <string name="offer_refused_duplicate">That is the same text you just offered, so there is
-        nothing new to send. It is already in your History.</string>
     <!--
       Unreachable by construction: the four remaining reasons describe Watched
       Capture, which a phone never performs, and the facade passes their inputs

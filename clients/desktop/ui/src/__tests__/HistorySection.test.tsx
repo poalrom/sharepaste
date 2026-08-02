@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { mockIpc, type MockIpc } from "./helpers";
+import { capturedAt } from "../lib/format";
 import { useContactStore, useHistoryStore, usePairingsStore, useUiStore } from "../store";
 import type { Contact, EntryView, Pairing } from "../types";
 import HistorySection from "../views/main/HistorySection";
@@ -68,10 +69,17 @@ const LONG_PREVIEW =
 /** Longer than the render cap, with a marker on each side of the cut. */
 const OVERSIZE = `HEAD-${"A".repeat(RENDER_CAP)}-TAIL`;
 
+/**
+ * In the order the facade hands them back, which is Last Use first (ADR 0011).
+ *
+ * Entry 12 was captured six hours ago and used half an hour ago: the one row
+ * here whose two facts differ, and the reason it sits above an entry captured
+ * more recently than it was.
+ */
 const entriesA: EntryView[] = [
-  { id: 11, user_id: "u-a", preview: MULTILINE_PREVIEW, plaintext: MULTILINE, created_at: NOW - 2 * MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
-  { id: 12, user_id: "u-a", preview: "bravo", plaintext: "bravo", created_at: NOW - 6 * HOUR, device_id: "dev-phone", device_label: "IPHONE-15", origin_label: "IPHONE-15", undecryptable: false },
-  { id: 13, user_id: "u-a", preview: "charlie", plaintext: "charlie", created_at: NOW - 3 * HOUR, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
+  { id: 11, user_id: "u-a", preview: MULTILINE_PREVIEW, plaintext: MULTILINE, created_at: NOW - 2 * MINUTE, last_use: NOW - 2 * MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
+  { id: 12, user_id: "u-a", preview: "bravo", plaintext: "bravo", created_at: NOW - 6 * HOUR, last_use: NOW - 30 * MINUTE, device_id: "dev-phone", device_label: "IPHONE-15", origin_label: "IPHONE-15", undecryptable: false },
+  { id: 13, user_id: "u-a", preview: "charlie", plaintext: "charlie", created_at: NOW - 3 * HOUR, last_use: NOW - 3 * HOUR, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
 ];
 
 /**
@@ -79,8 +87,8 @@ const entriesA: EntryView[] = [
  * id, so a seed that outlives its one hydration would land on this row.
  */
 const entriesB: EntryView[] = [
-  { id: 21, user_id: "u-b", preview: "from the laptop", plaintext: "from the laptop", created_at: NOW - MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
-  { id: 13, user_id: "u-b", preview: "same id other pairing", plaintext: "same id other pairing", created_at: NOW - 2 * MINUTE, device_id: "dev-b", device_label: "PIXEL-9", origin_label: "PIXEL-9", undecryptable: false },
+  { id: 21, user_id: "u-b", preview: "from the laptop", plaintext: "from the laptop", created_at: NOW - MINUTE, last_use: NOW - MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
+  { id: 13, user_id: "u-b", preview: "same id other pairing", plaintext: "same id other pairing", created_at: NOW - 2 * MINUTE, last_use: NOW - 2 * MINUTE, device_id: "dev-b", device_label: "PIXEL-9", origin_label: "PIXEL-9", undecryptable: false },
 ];
 
 const bulkEntries = (count: number): EntryView[] =>
@@ -90,6 +98,7 @@ const bulkEntries = (count: number): EntryView[] =>
     preview: `entry-${i}`,
     plaintext: `entry-${i}`,
     created_at: NOW - i * MINUTE,
+    last_use: NOW - i * MINUTE,
     device_id: "dev-a",
     origin_label: "dev-",
     undecryptable: false,
@@ -201,7 +210,7 @@ describe("HistorySection — the reader", () => {
   it("matches a query against a word past the Preview's cap on an entry's third line", async () => {
     expect(LONG_PREVIEW).not.toContain(THIRD_LINE_WORD);
     historyByUser["u-a"] = [
-      { id: 14, user_id: "u-a", preview: LONG_PREVIEW, plaintext: LONG_PLAINTEXT, created_at: NOW - 4 * MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
+      { id: 14, user_id: "u-a", preview: LONG_PREVIEW, plaintext: LONG_PLAINTEXT, created_at: NOW - 4 * MINUTE, last_use: NOW - MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
       ...entriesA,
     ];
     await renderPane();
@@ -215,6 +224,34 @@ describe("HistorySection — the reader", () => {
     expect(rows[0]!.textContent).toContain(LONG_PREVIEW);
     // And the reader beside it still holds the whole entry, third line included.
     expect(screen.getByTestId("entry-detail-body").textContent).toBe(LONG_PLAINTEXT);
+  });
+
+  /*
+    Two facts where the row can only show one. The row's age is the Use
+    (ADR 0011), so a six-hour-old entry recalled half an hour ago reads as
+    `30m` there — and without the capture time stated here, nothing on any
+    surface would say how old the entry actually is.
+  */
+  it("states when a reordered entry was used beside when it was captured", async () => {
+    await renderPane();
+    fireEvent.click(screen.getAllByTestId("main-entry-row")[1]!);
+
+    expect(screen.getAllByTestId("main-entry-row")[1]!).toHaveTextContent("30m");
+    const meta = screen.getByText(/CAPTURED/);
+    expect(meta).toHaveTextContent(`CAPTURED ${capturedAt(NOW - 6 * HOUR, NOW)}`);
+    expect(meta).toHaveTextContent("6h ago");
+    expect(meta).toHaveTextContent(`USED ${capturedAt(NOW - 30 * MINUTE, NOW)}`);
+  });
+
+  // An entry never used since capture has `last_use == created_at`, and a USED
+  // reading back the capture time would state a second event that never
+  // happened.
+  it("says nothing about use for an entry never used since capture", async () => {
+    await renderPane();
+
+    const meta = screen.getByText(/CAPTURED/);
+    expect(meta).toHaveTextContent(`CAPTURED ${capturedAt(NOW - 2 * MINUTE, NOW)}`);
+    expect(meta).not.toHaveTextContent("USED");
   });
 
   it("falls back to a prompt when the addressed position holds no entry", async () => {
@@ -462,6 +499,7 @@ describe("HistorySection — undecryptable entries", () => {
     preview: "",
     plaintext: null,
     created_at: NOW - MINUTE,
+    last_use: NOW - MINUTE,
     device_id: "dev-a",
     origin_label: "dev-",
     undecryptable: true,

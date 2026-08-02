@@ -266,10 +266,12 @@ sealed interface Notice {
 /**
  * Each refusal an Offer can actually receive, in its own words.
  *
- * Three of the seven [SkipReason]s are reachable through an Offer, and each one
- * needs its own sentence because each needs a different thing done about it: put
- * something else on the clipboard, send something smaller, or nothing at all
- * because it is already here.
+ * Two of the six [SkipReason]s are reachable through an Offer, and each one
+ * needs its own sentence because each needs a different thing done about it:
+ * put something else on the clipboard, or send something smaller. A repeat
+ * copy was the third until ADR 0012 stopped calling it a refusal — it is a Use
+ * of the Entry this device already holds, and it draws [Receipt.Recognised]
+ * instead of anything here.
  *
  * The other four describe Watched Capture, which a phone never performs (ADR
  * 0007) — the facade passes their inputs in inert, so they are unreachable by
@@ -282,7 +284,6 @@ sealed interface Notice {
 fun offerRefusalMessage(reason: SkipReason): Int = when (reason) {
     SkipReason.NON_TEXT -> R.string.offer_refused_non_text
     SkipReason.TOO_LARGE -> R.string.offer_refused_too_large
-    SkipReason.DUPLICATE -> R.string.offer_refused_duplicate
 
     SkipReason.DISABLED,
     SkipReason.DENY_LIST,
@@ -295,40 +296,18 @@ fun offerRefusalMessage(reason: SkipReason): Int = when (reason) {
  * The same refusal in one or two words, for the label above the sentence.
  *
  * Not a shortening of the sentence: it names *what to do about it*, which is the
- * only reason the three reachable reasons are three reasons.
+ * only reason the two reachable reasons are two reasons.
  */
 @StringRes
 fun offerRefusalLabel(reason: SkipReason): Int = when (reason) {
     SkipReason.NON_TEXT -> R.string.notice_nothing_to_send
     SkipReason.TOO_LARGE -> R.string.notice_too_big
-    SkipReason.DUPLICATE -> R.string.notice_already_here
 
     SkipReason.DISABLED,
     SkipReason.DENY_LIST,
     SkipReason.SELF_WRITE,
     SkipReason.TRANSIENT,
     -> R.string.notice_refused
-}
-
-/**
- * How loudly a refusal is drawn.
- *
- * `ALREADY HERE` is the one that is not a caution: a duplicate Offer is the app
- * working correctly and a person who tapped Offer twice has lost nothing, so it
- * reads as a fact rather than as something to fix. The other two each need
- * something done — put different content on the clipboard, or send something
- * smaller — and wear the caution rule that says so.
- */
-fun offerRefusalAccent(reason: SkipReason): Accent = when (reason) {
-    SkipReason.DUPLICATE -> Accent.Neutral
-
-    SkipReason.NON_TEXT,
-    SkipReason.TOO_LARGE,
-    SkipReason.DISABLED,
-    SkipReason.DENY_LIST,
-    SkipReason.SELF_WRITE,
-    SkipReason.TRANSIENT,
-    -> Accent.Caution
 }
 
 /**

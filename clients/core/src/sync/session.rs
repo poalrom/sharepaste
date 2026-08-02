@@ -19,7 +19,7 @@
 //! one kind of comment the code cannot contradict, which is why the list is
 //! here.
 //!
-//! 1. **The watermark only advances past a row that stored.** `last_seen_id`
+//! 1. **The watermark only advances past a row that stored.** `last_seen_seq`
 //!    means "everything up to here has been fetched", so moving it past a row
 //!    that failed to ingest loses that row for good — the next `since=` fetch
 //!    starts after it. [`backfill`] stops at the first failure and the whole
@@ -57,7 +57,7 @@ use crate::platform::EventSink;
 use crate::storage::devices::DeviceRecord;
 use crate::storage::{accounts, devices, entries_cache};
 use crate::sync::state::should_persist_contact;
-use crate::sync::uploader::{UploadTransport, Uploaded, Uploader, UploaderExit};
+use crate::sync::uploader::{UploadTransport, Uploaded, Uploader, UploaderExit, Used};
 use crate::sync::{decryptor, sse, BackoffPlan, ConnectionState};
 use async_trait::async_trait;
 use parking_lot::Mutex;
@@ -91,7 +91,7 @@ const BACKFILL_LIMIT: u32 = 500;
 /// [`ServerSession`].
 #[async_trait]
 pub trait SessionTransport: Send + Sync {
-    async fn list_entries(&self, since: i64, limit: u32) -> Result<Vec<EntryRow>, AppError>;
+    async fn list_entries(&self, since_seq: i64, limit: u32) -> Result<Vec<EntryRow>, AppError>;
     async fn me(&self) -> Result<MeResp, AppError>;
     /// Stream server events until cancelled or the connection drops.
     ///
@@ -104,6 +104,8 @@ pub trait SessionTransport: Send + Sync {
         contact: Arc<AtomicI64>,
     ) -> Result<(), AppError>;
     async fn upload(&self, ciphertext_b64: &str) -> Result<Uploaded, AppError>;
+    /// Record a **Use**: the entry becomes the head of the History everywhere.
+    async fn use_entry(&self, entry_id: i64) -> Result<Used, AppError>;
 }
 
 /// The one production [`SessionTransport`]: a session over the pairing's
@@ -112,8 +114,8 @@ pub struct ServerSession(pub ServerClient);
 
 #[async_trait]
 impl SessionTransport for ServerSession {
-    async fn list_entries(&self, since: i64, limit: u32) -> Result<Vec<EntryRow>, AppError> {
-        self.0.list_entries(since, limit).await
+    async fn list_entries(&self, since_seq: i64, limit: u32) -> Result<Vec<EntryRow>, AppError> {
+        self.0.list_entries(since_seq, limit).await
     }
 
     async fn me(&self) -> Result<MeResp, AppError> {
@@ -133,7 +135,19 @@ impl SessionTransport for ServerSession {
         self.0
             .post_entry(ciphertext_b64)
             .await
-            .map(|r| Uploaded { id: r.id, created_at: r.created_at })
+            .map(|r| Uploaded {
+                id: r.id,
+                created_at: r.created_at,
+                seq: r.seq,
+                last_use: r.last_use,
+            })
+    }
+
+    async fn use_entry(&self, entry_id: i64) -> Result<Used, AppError> {
+        self.0
+            .use_entry(entry_id)
+            .await
+            .map(|r| Used { seq: r.seq, last_use: r.last_use })
     }
 }
 
@@ -148,6 +162,10 @@ struct UploadVia(Arc<dyn SessionTransport>);
 impl UploadTransport for UploadVia {
     async fn upload(&self, ciphertext_b64: &str) -> Result<Uploaded, AppError> {
         self.0.upload(ciphertext_b64).await
+    }
+
+    async fn use_entry(&self, entry_id: i64) -> Result<Used, AppError> {
+        self.0.use_entry(entry_id).await
     }
 }
 
@@ -523,7 +541,7 @@ pub(crate) fn spawn_session(
 /// The one implementation of invariant 1, and the reason it is a function rather
 /// than a fragment of the loop: `recall_latest` performs the same round trip for
 /// its own reasons, and a second copy of this is how the watermark rule would
-/// come to differ between the two. `last_seen_id` is re-read here rather than
+/// come to differ between the two. `last_seen_seq` is re-read here rather than
 /// remembered by the caller, so a stream that dropped resumes from the last
 /// entry actually ingested.
 ///
@@ -543,7 +561,7 @@ pub(crate) async fn backfill(
         accounts::find(&conn, user_id)
             .ok()
             .flatten()
-            .map(|a| a.last_seen_id)
+            .map(|a| a.last_seen_seq)
             .unwrap_or(0)
     };
     let rows = transport.list_entries(last_seen, BACKFILL_LIMIT).await?;
@@ -553,20 +571,20 @@ pub(crate) async fn backfill(
         let conn = state.conn.lock().await;
         let mut new_last = last_seen;
         for row in rows {
-            let id = row.id;
-            // The last-seen id is a watermark, not a counter. Advancing it past a row
+            let (id, seq) = (row.id, row.seq);
+            // The watermark is a watermark, not a counter. Advancing it past a row
             // we failed to store loses that row for good, because the next `since=`
             // fetch starts after it — so the first failure ends the run and the whole
             // tail is re-fetched on the next iteration.
             if let Err(e) = decryptor::ingest(&conn, user_key, user_id, &row, crate::now_ms()) {
                 tracing::warn!(
                     err = %e, entry_id = id,
-                    "backfill ingest failed; leaving last_seen_id where it was"
+                    "backfill ingest failed; leaving last_seen_seq where it was"
                 );
                 break;
             }
-            if id > new_last {
-                new_last = id;
+            if seq > new_last {
+                new_last = seq;
             }
         }
         let advanced = new_last != last_seen;
@@ -583,7 +601,7 @@ pub(crate) async fn backfill(
 
 /// Backfill, then stream, for as long as the session lives.
 ///
-/// Every iteration re-reads `last_seen_id` from the database, so a stream that
+/// Every iteration re-reads `last_seen_seq` from the database, so a stream that
 /// drops resumes from the last entry actually ingested rather than replaying or
 /// skipping. A failed backfill retries on the shared backoff; a successful one
 /// resets it and marks the pairing online.
@@ -661,47 +679,63 @@ async fn run_sse_loop(
                 _ = cancel.cancelled() => return,
                 ev = rx.recv() => match ev {
                     None => break 'recv,
-                    Some(sse::ServerEvent::Entry { id, ciphertext, created_at, device_id }) => {
+                    Some(sse::ServerEvent::Entry { id, ciphertext, created_at, device_id, seq, last_use }) => {
                         refresh_mirror_if_unknown(&ctx, transport.as_ref(), &device_id).await;
-                        let row = EntryRow { id, ciphertext, created_at, device_id: device_id.clone() };
+                        let row = EntryRow {
+                            id, ciphertext, created_at, device_id: device_id.clone(), seq, last_use,
+                        };
                         // Scoped so the database guard is gone before anything
                         // reaches the sink: see `EventSink`.
-                        let added = {
+                        let (added, reordered) = {
                             let conn = ctx.state.conn.lock().await;
                             match decryptor::ingest(&conn, &user_key, &ctx.user_id, &row, crate::now_ms()) {
                                 Ok(out) => {
-                                    let _ = accounts::set_last_seen(&conn, &ctx.user_id, id);
+                                    let _ = accounts::set_last_seen(&conn, &ctx.user_id, seq);
                                     let device_label =
                                         devices::label_for(&conn, &ctx.user_id, &device_id)
                                             .unwrap_or_default();
-                                    // Announced only when the cache did not
-                                    // already hold this id. The uploader caches
+                                    // `EntryAdded` only when the cache did not
+                                    // already hold this id, and `HistoryChanged`
+                                    // only when a row it did hold changed place.
+                                    // Three paths reach the same id and the two
+                                    // facts keep them apart: the uploader caches
                                     // Entries this device created, so the relay's
-                                    // echo of one of them arrives here as a second
-                                    // ingest — and a second `EntryAdded` would be
-                                    // a duplicate row on screen. The watermark
-                                    // advances either way: that is about what has
-                                    // been *fetched*.
-                                    out.first_insert.then(|| {
+                                    // echo of one arrives here as a repeat ingest
+                                    // that moved nothing — announcing it would be
+                                    // a duplicate row on screen, and reporting a
+                                    // reorder would cost both shells a refetch
+                                    // for something that did not happen. A
+                                    // **Use** is the repeat ingest that *did*
+                                    // move the row. The watermark advances for
+                                    // all of them: that is about what has been
+                                    // *fetched*.
+                                    let added = out.stored.first_insert.then(|| {
                                         Entry::new(
                                             id,
                                             ctx.user_id.clone(),
                                             out.plaintext,
                                             created_at,
+                                            last_use,
                                             device_id,
                                             device_label,
                                         )
-                                    })
+                                    });
+                                    (added, out.stored.moved)
                                 }
                                 Err(e) => {
                                     tracing::warn!(err = %e, "ingest failed");
-                                    None
+                                    (None, false)
                                 }
                             }
                         };
                         if let Some(entry) = added {
                             ctx.events.emit(CoreEvent::EntryAdded {
                                 user_id: ctx.user_id.clone(), entry,
+                            });
+                        }
+                        if reordered {
+                            ctx.events.emit(CoreEvent::HistoryChanged {
+                                user_id: ctx.user_id.clone(),
                             });
                         }
                     }
@@ -777,7 +811,7 @@ mod tests {
             conn,
             &accounts::Account {
                 user_id: "u".into(), device_id: "d".into(), device_label: "mac".into(),
-                server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                server_url: "https://srv".into(), last_seen_seq: 0, created_at: 1,
                 username: None, last_contact_at: None,
             },
         )
@@ -887,7 +921,7 @@ mod tests {
 
     async fn last_seen(ctx: &SessionCtx) -> i64 {
         let conn = ctx.state.conn.lock().await;
-        accounts::find(&conn, "u").unwrap().unwrap().last_seen_id
+        accounts::find(&conn, "u").unwrap().unwrap().last_seen_seq
     }
 
     /// Run the loop until it is quiescent, then cancel it and wait for it to
@@ -943,12 +977,12 @@ mod tests {
     }
 
     /*
-     * The invariant: `last_seen_id` is a watermark, not a counter. A row that
+     * The invariant: `last_seen_seq` is a watermark, not a counter. A row that
      * would not store must leave it alone — otherwise the next `since=` fetch
      * starts past that row and it is lost for good.
      */
     #[tokio::test(start_paused = true)]
-    async fn a_failed_ingest_does_not_advance_the_last_seen_id() {
+    async fn a_failed_ingest_does_not_advance_the_last_seen_seq() {
         let conn = open_in_memory().unwrap();
         paired(&conn);
         let (ctx, _sink) = ctx_over(conn);
@@ -971,12 +1005,73 @@ mod tests {
     }
 
     /*
+     * A **Use** arrives as the row it always was, with a later Last Use and a
+     * fresh sequence. Nothing was created, so no `EntryAdded`; the row moved,
+     * so `HistoryChanged`. Both halves matter: announcing it would put a
+     * duplicate on screen, and saying nothing would leave every other device
+     * holding the right entries in the wrong order.
+     */
+    #[tokio::test(start_paused = true)]
+    async fn a_use_arriving_over_sse_reorders_the_history_without_adding_a_row() {
+        let conn = open_in_memory().unwrap();
+        paired(&conn);
+        let (ctx, sink) = ctx_over(conn);
+        let captured = good_row(1, "ssh admin@10.0.0.4");
+        let used = crate::testing::live_use(&captured, 99, captured.last_use + 60_000);
+        let relay = ScriptedRelay::new(
+            vec![Ok(vec![captured.clone()])],
+            vec![Wire::Holds(vec![used])],
+        );
+
+        drive(&ctx, relay).await;
+
+        assert!(
+            sink.entry_previews().is_empty(),
+            "a use creates nothing, so it announces nothing: {:?}",
+            sink.entry_previews()
+        );
+        assert!(sink.saw_history_changed("u"), "but the reorder has to reach the shell");
+        assert_eq!(last_seen(&ctx).await, 99, "and the watermark follows the new sequence");
+
+        let conn = ctx.state.conn.lock().await;
+        let head = entries_cache::list_recent(&conn, "u", None, 1).unwrap();
+        assert_eq!(head[0].last_use, captured.last_use + 60_000);
+        assert_eq!(head[0].created_at, captured.created_at, "a use leaves identity alone");
+    }
+
+    /*
+     * The other repeat ingest, and the one that must *not* look like a use: the
+     * relay echoing back an Entry this device uploaded and already cached. It
+     * carries the same Last Use, so nothing moved — and a `HistoryChanged` here
+     * would cost both shells a full refetch on every single capture.
+     */
+    #[tokio::test(start_paused = true)]
+    async fn the_relays_echo_of_an_unchanged_entry_reports_no_reorder() {
+        let conn = open_in_memory().unwrap();
+        paired(&conn);
+        let (ctx, sink) = ctx_over(conn);
+        let row = good_row(1, "offered here");
+        // Backfilled, then echoed verbatim on the stream.
+        let echo = crate::testing::live_use(&row, row.seq, row.last_use);
+        let relay = ScriptedRelay::new(vec![Ok(vec![row])], vec![Wire::Holds(vec![echo])]);
+
+        drive(&ctx, relay).await;
+
+        assert!(sink.entry_previews().is_empty(), "the echo adds nothing");
+        assert_eq!(
+            sink.history_changes("u"),
+            1,
+            "one history change, from the backfill that stored the row — not two"
+        );
+    }
+
+    /*
      * The reconnect re-reads the watermark from the database rather than
      * carrying it in a local, so a stream that drops resumes from what was
      * ingested instead of replaying or skipping.
      */
     #[tokio::test(start_paused = true)]
-    async fn every_reconnect_iteration_re_reads_the_last_seen_id() {
+    async fn every_reconnect_iteration_re_reads_the_last_seen_seq() {
         let conn = open_in_memory().unwrap();
         paired(&conn);
         let (ctx, _sink) = ctx_over(conn);

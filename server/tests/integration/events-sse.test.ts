@@ -53,6 +53,15 @@ describe("GET /events (SSE)", () => {
       expect(buf).toMatch(/event: entry/);
       expect(buf).not.toMatch(/nope/);
 
+      const frame = JSON.parse(/^data: (.*)$/m.exec(buf)![1]!) as Record<string, unknown>;
+      expect(frame).toMatchObject({
+        type: "entry",
+        ciphertext: Buffer.from("hi").toString("base64"),
+        device_id: a.device_id,
+        seq: 1,
+      });
+      expect(frame.last_use).toBe(frame.created_at);
+
       ctrl.abort();
     }, {}, { listen: true }));
 });

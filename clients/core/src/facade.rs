@@ -151,13 +151,44 @@ pub enum RecallSource {
     Cache,
 }
 
+/// Where a page of the History resumes from: the `(last_use, id)` of the last
+/// row of the page before it.
+///
+/// A pair and not an id, because id is no longer the order. Paging by it alone
+/// would skip and repeat rows the moment anything was used, and the id half is
+/// what keeps the order total when two entries share a millisecond.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+pub struct HistoryCursor {
+    pub last_use: i64,
+    pub id: i64,
+}
+
 /// What became of text handed to [`Sharepaste::offer`] or
 /// [`Sharepaste::capture_watched`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OfferOutcome {
     /// Queued for upload. `pending` is the depth of the queue afterwards.
     Queued { pending: i64 },
+    /// This device already held the same text, so nothing was captured: the
+    /// entry it matched is now the head of the History. `pending` is the depth
+    /// of the queue afterwards, exactly as on [`Self::Queued`] — recognition
+    /// itself queues nothing, but the **Use** it records does when the relay is
+    /// out of reach.
+    ///
+    /// Distinct from [`Self::Queued`] because a shell that reported them alike
+    /// would claim content was saved when nothing was, on a list the person can
+    /// immediately check.
+    Recognised { pending: i64 },
     Rejected(SkipReason),
+}
+
+/// What this device already holds that matches the text just copied.
+enum Held {
+    Nothing,
+    /// An entry, which can be used.
+    Entry(i64),
+    /// A queued capture, which cannot: it has no relay id yet.
+    Pending(i64),
 }
 
 /// A change to the Settings, one `Option` per field: `None` leaves what is
@@ -192,9 +223,6 @@ pub struct Sharepaste {
     /// for a session.
     transport: TransportPolicy,
     last_self_write: Arc<Mutex<Option<(Instant, String)>>>,
-    /// Plaintext of the last clipboard capture that was enqueued, used to drop
-    /// consecutive duplicates before they cost an encrypt, upload or server row.
-    last_capture: Arc<Mutex<Option<String>>>,
     /// The runtime every background task runs on.
     ///
     /// Private and owned: `async fn` operations are awaited on whatever runtime
@@ -248,7 +276,6 @@ impl Sharepaste {
             events: cfg.events,
             transport,
             last_self_write: Arc::new(Mutex::new(None)),
-            last_capture: Arc::new(Mutex::new(None)),
             runtime,
         }))
     }
@@ -606,7 +633,7 @@ impl Sharepaste {
                     // The relay's address as the *inviter* knows it, which is
                     // what travelled inside the code.
                     server_url: payload.server_url.clone(),
-                    last_seen_id: 0,
+                    last_seen_seq: 0,
                     created_at: crate::now_ms(),
                     username: None,
                     last_contact_at: None,
@@ -731,17 +758,19 @@ impl Sharepaste {
 
     // -- history ----------------------------------------------------------
 
-    /// One page of cached entries, newest first.
+    /// One page of the History, last use first.
     ///
-    /// `before_id` pages backwards; `limit` is clamped to the cache's own cap.
+    /// `before` resumes after the last row of the previous page; `limit` is
+    /// clamped to the cache's own cap.
     pub async fn list_history(
         &self,
         user_id: &str,
-        before_id: Option<i64>,
+        before: Option<HistoryCursor>,
         limit: i64,
     ) -> Result<Vec<Entry>, AppError> {
         let conn = self.state.conn.lock().await;
-        let rows = entries_cache::list_recent(&conn, user_id, before_id, limit)?;
+        let cursor = before.map(|c| (c.last_use, c.id));
+        let rows = entries_cache::list_recent(&conn, user_id, cursor, limit)?;
         let labels = devices::map_for(&conn, user_id)?;
         Ok(to_entries(rows, &labels))
     }
@@ -760,16 +789,77 @@ impl Sharepaste {
         entries_cache::get_full(&conn, user_id, entry_id)
     }
 
-    /// Put one entry back on the clipboard.
+    /// Put one entry back on the clipboard, and record the **Use**.
+    ///
+    /// Returns as soon as the clipboard has the text. The use goes to the relay
+    /// on the facade's own runtime, because this is the popover's paste-and-go
+    /// path: it awaits this call before it hides, and the HTTP client has no
+    /// request timeout, so awaiting a round trip here would let a relay that
+    /// accepts a connection and never answers hang the paste. Nothing is lost
+    /// by not waiting — [`UseRecorder::record`] returns nothing, and what it
+    /// changes reaches a shell on `HistoryChanged` and `PendingCount`.
+    ///
+    /// The **Offer** path awaits its use instead, and says why: see
+    /// [`Self::capture_or_use`].
     pub async fn recall(&self, user_id: &str, entry_id: i64) -> Result<(), AppError> {
+        self.place_on_clipboard(user_id, entry_id).await?;
+        // Only once the clipboard actually took it. A Recall that failed put
+        // nothing anywhere, and nothing is not a use of anything.
+        self.spawn_use(user_id, entry_id);
+        Ok(())
+    }
+
+    /// The same recall over a transport the caller supplies, awaited rather
+    /// than spawned — the seam the use-recording tests drive, for the reason
+    /// [`Self::recall_latest_over`] exists.
+    #[cfg(any(test, feature = "testing"))]
+    pub async fn recall_over(
+        &self,
+        user_id: &str,
+        entry_id: i64,
+        transport: &dyn SessionTransport,
+    ) -> Result<(), AppError> {
+        self.place_on_clipboard(user_id, entry_id).await?;
+        self.use_recorder().record_over(user_id, entry_id, transport).await;
+        Ok(())
+    }
+
+    /// Read one entry's plaintext and put it on the clipboard — everything a
+    /// Recall is before the use is recorded.
+    ///
+    /// One body, so the seam above cannot come to differ from the operation it
+    /// stands in for. The self-write marker ordering lives in `write_clipboard`
+    /// and only there; nothing may reach the clipboard by another route.
+    async fn place_on_clipboard(&self, user_id: &str, entry_id: i64) -> Result<(), AppError> {
         let plaintext = {
             let conn = self.state.conn.lock().await;
             entries_cache::get_full(&conn, user_id, entry_id)?
                 .ok_or_else(|| AppError::NotFound("plaintext unavailable".into()))?
         };
-        // The self-write marker ordering lives in `write_clipboard` and only
-        // there; nothing may reach the clipboard by another route.
         self.write_clipboard(&plaintext)
+    }
+
+    /// Everything [`UseRecorder`] needs, taken off this facade.
+    fn use_recorder(&self) -> UseRecorder {
+        UseRecorder {
+            state: self.state.clone(),
+            registry: self.registry.clone(),
+            events: self.events.clone(),
+        }
+    }
+
+    /// Record a use on the facade's runtime, so the caller does not wait for a
+    /// relay it has no answer to act on.
+    ///
+    /// The task carries a [`UseRecorder`] and never an `Arc<Sharepaste>`: this
+    /// facade owns the runtime, and a task holding the last reference to it
+    /// would drop that runtime from inside one of its own workers.
+    fn spawn_use(&self, user_id: &str, entry_id: i64) {
+        let recorder = self.use_recorder();
+        let user_id = user_id.to_string();
+        self.runtime.spawn(async move {
+            recorder.record(&user_id, entry_id).await;
+        });
     }
 
     /// Put the newest entry on the clipboard, fetching first.
@@ -856,6 +946,14 @@ impl Sharepaste {
             .plaintext
             .ok_or_else(|| AppError::NotFound("plaintext unavailable".into()))?;
         self.write_clipboard(&text)?;
+        // After the clipboard, and over the transport this recall already
+        // holds: the entry it handed back becomes the head of the History on
+        // every device. Awaited rather than spawned, unlike `recall`: this
+        // operation performs a relay round trip by design — the backfill above
+        // — so its caller is already prepared for one.
+        self.use_recorder()
+            .record_over(user_id, entry_id, transport)
+            .await;
         Ok(Recalled {
             text,
             entry_id,
@@ -929,11 +1027,10 @@ impl Sharepaste {
     ///
     /// Honoured whether or not capture is enabled: refusing content someone just
     /// chose to share is indefensible, and `capture_enabled` governs Watched
-    /// Capture — which a phone never performs. Over-size, non-text and
-    /// duplicate-of-last still reject, because those are properties of the text
-    /// itself rather than of a watcher.
+    /// Capture — which a phone never performs. Over-size and non-text still
+    /// reject, because those are properties of the text itself rather than of a
+    /// watcher.
     pub async fn offer(&self, user_id: &str, text: &str) -> Result<OfferOutcome, AppError> {
-        let last_capture = self.last_capture.lock().clone();
         let ctx = CaptureContext {
             // An Offered Capture is honoured regardless of the setting; see above.
             capture_enabled: true,
@@ -947,17 +1044,14 @@ impl Sharepaste {
             // app's own clipboard write — see `write_clipboard`. With nothing
             // watching there is nothing to suppress.
             last_self_write: None,
-            // Live: a repeat of the last thing captured still costs nothing to
-            // drop, and an Offered Capture is the easiest way to send one twice.
-            last_capture: last_capture.as_deref(),
         };
         // Written out rather than forked away, so there is exactly one filter:
-        // `NonText`, `TooLarge` and `Duplicate` stay reachable here, and
-        // `Disabled`, `DenyList` and `SelfWrite` are unreachable by construction —
-        // as is `Transient`, because nothing sniffs a pasteboard on this path.
+        // `NonText` and `TooLarge` stay reachable here, and `Disabled`,
+        // `DenyList` and `SelfWrite` are unreachable by construction — as is
+        // `Transient`, because nothing sniffs a pasteboard on this path.
         match filter::evaluate_text(&ctx, text.to_string(), Instant::now()) {
             FilterDecision::Skip(reason) => Ok(OfferOutcome::Rejected(reason)),
-            FilterDecision::Capture(text) => self.enqueue_capture(user_id, text).await,
+            FilterDecision::Capture(text) => self.capture_or_use(user_id, text).await,
         }
     }
 
@@ -980,50 +1074,102 @@ impl Sharepaste {
             settings::load(&conn)?
         };
         let last_self_write = self.last_self_write.lock().clone();
-        let last_capture = self.last_capture.lock().clone();
         let ctx = CaptureContext {
             capture_enabled: settings.capture_enabled,
             deny_list: &settings.deny_list,
             frontmost_bundle_id: frontmost,
             last_self_write: last_self_write.as_ref().map(|(at, text)| (*at, text.as_str())),
-            last_capture: last_capture.as_deref(),
         };
         match filter::evaluate(&ctx, sniff, Instant::now()) {
             FilterDecision::Skip(reason) => Ok(OfferOutcome::Rejected(reason)),
-            FilterDecision::Capture(text) => self.enqueue_capture(user_id, text).await,
+            FilterDecision::Capture(text) => self.capture_or_use(user_id, text).await,
         }
     }
 
-    /// Encrypt, queue, report — the tail Offered and Watched Capture share.
+    /// Recognise, or take — the tail Offered and Watched Capture share.
+    ///
+    /// Runs after the filter has said `Capture` and **before** anything is
+    /// encrypted, because the whole point is to spend nothing on text this
+    /// device already holds. The relay cannot make this judgement:
+    /// `crypto::encrypt` draws a fresh nonce every call, so the same plaintext
+    /// never produces the same ciphertext. See ADR 0012.
+    ///
+    /// Entries first, then pendings. A matched pending has no relay id and so
+    /// cannot be used; moving it to the back of the queue is what "re-copying
+    /// it is the same act as copying it" looks like when the order is the only
+    /// record there is.
+    ///
+    /// **The use is awaited here, unlike [`Self::recall`]'s.** Both outcomes
+    /// report `pending`, and a depth read while a use was still being queued
+    /// behind it would be a number the very next `PendingCount` contradicts —
+    /// on a phone whose Share Sheet then drains the queue and stops when it
+    /// reads zero, leaving the use behind. An Offer is already a slow path:
+    /// `enqueue_capture` unlocks the pairing and encrypts, and the Android
+    /// caller drains the queue over the network immediately afterwards. A
+    /// Recall is not, which is why the two differ.
+    async fn capture_or_use(
+        &self,
+        user_id: &str,
+        text: String,
+    ) -> Result<OfferOutcome, AppError> {
+        let hash = entries_cache::plaintext_sha256(&text);
+        let held = {
+            let conn = self.state.conn.lock().await;
+            match entries_cache::find_by_hash(&conn, user_id, &hash)? {
+                Some(entry_id) => Held::Entry(entry_id),
+                None => match pending::find_by_hash(&conn, user_id, &hash)? {
+                    Some(rowid) => Held::Pending(rowid),
+                    None => Held::Nothing,
+                },
+            }
+        };
+        match held {
+            Held::Nothing => self.enqueue_capture(user_id, text, &hash).await,
+            Held::Entry(entry_id) => {
+                self.use_recorder().record(user_id, entry_id).await;
+                Ok(OfferOutcome::Recognised {
+                    pending: self.pending_depth(user_id).await?,
+                })
+            }
+            Held::Pending(rowid) => {
+                let pending = {
+                    let conn = self.state.conn.lock().await;
+                    pending::requeue_to_back(&conn, rowid, crate::now_ms())?;
+                    // Unchanged: the act moved, it did not multiply, so there is
+                    // nothing to report on `PendingCount`.
+                    pending::count(&conn, user_id)?
+                };
+                Ok(OfferOutcome::Recognised { pending })
+            }
+        }
+    }
+
+    async fn pending_depth(&self, user_id: &str) -> Result<i64, AppError> {
+        let conn = self.state.conn.lock().await;
+        pending::count(&conn, user_id)
+    }
+
+    /// Encrypt, queue, report.
     async fn enqueue_capture(
         &self,
         user_id: &str,
         text: String,
+        plaintext_sha256: &str,
     ) -> Result<OfferOutcome, AppError> {
         let m = self.registry.load_active_membership(user_id).await?;
         let ciphertext = crate::crypto::encrypt(&m.user_key, user_id, text.as_bytes())?;
         let count = {
             let conn = self.state.conn.lock().await;
-            let queued = pending::enqueue(&conn, user_id, &ciphertext, crate::now_ms())?;
-            if queued.dropped_oldest > 0 {
-                // The queue is at its per-user cap, so the oldest copies made
-                // while offline have just been discarded un-uploaded. Nothing
-                // else surfaces that loss at all.
-                tracing::warn!(
-                    %user_id,
-                    dropped = queued.dropped_oldest,
-                    "pending upload queue full; evicted oldest un-uploaded entries"
-                );
-            }
+            let queued = pending::enqueue_capture(
+                &conn, user_id, &ciphertext, plaintext_sha256, crate::now_ms(),
+            )?;
+            warn_if_dropped(user_id, queued.dropped_oldest);
             pending::count(&conn, user_id)?
         };
         self.events.emit(CoreEvent::PendingCount {
             user_id: user_id.to_string(),
             count,
         });
-        // Only remembered once the entry is durably queued, so a failed enqueue
-        // does not suppress the person's next copy of the same text.
-        *self.last_capture.lock() = Some(text);
         self.nudge_uploader(user_id);
         Ok(OfferOutcome::Queued { pending: count })
     }
@@ -1107,6 +1253,124 @@ impl Sharepaste {
     }
 }
 
+/// Recording a **Use**, apart from the facade that provokes one.
+///
+/// Its own type for two reasons. It is spawned: `Sharepaste` owns the runtime
+/// these tasks run on, and a task holding the last `Arc<Sharepaste>` would drop
+/// that runtime from inside one of its own workers — the same reason
+/// [`SessionState`] exists. And there are three provokers — a Recall, a Recall
+/// Latest, and a copy of text the device already holds — so a second copy of
+/// these rules is how they would come to disagree about what a use costs when
+/// it fails.
+#[derive(Clone)]
+struct UseRecorder {
+    state: SessionState,
+    registry: Arc<PairingRegistry>,
+    events: Arc<dyn EventSink>,
+}
+
+impl UseRecorder {
+    /// Record a **Use** of one entry: it becomes the head of the History on
+    /// every device.
+    ///
+    /// **Never fails the operation that provoked it**, which is why it returns
+    /// nothing. A Recall has already reached the clipboard by the time this
+    /// runs and a recognised copy has already decided nothing needs storing;
+    /// neither is undone by a relay that will not answer.
+    async fn record(&self, user_id: &str, entry_id: i64) {
+        let m = match self.registry.load_active_membership(user_id).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(err = %e, %user_id, "no pairing to record a use against");
+                return;
+            }
+        };
+        self.record_over(user_id, entry_id, &ServerSession(m.server))
+            .await;
+    }
+
+    /// The same, over a transport the caller already holds — `recall_latest`
+    /// has one, and building a second is a second round trip for nothing.
+    ///
+    /// The relay's `last_use` is applied to the local row directly rather than
+    /// waited for on the echo — the rule [`crate::sync::uploader::Uploader`]
+    /// states for an Entry this device created, applied to a Use this device
+    /// made. The watermark is deliberately not advanced with it, for the same
+    /// reason: it means "everything up to here has been fetched", and this
+    /// device has fetched nothing.
+    async fn record_over(&self, user_id: &str, entry_id: i64, transport: &dyn SessionTransport) {
+        match transport.use_entry(entry_id).await {
+            Ok(used) => {
+                let moved = {
+                    let conn = self.state.conn.lock().await;
+                    match entries_cache::set_last_use(&conn, user_id, entry_id, used.last_use) {
+                        Ok(rows) => rows > 0,
+                        // Logged rather than swallowed: a cache write that
+                        // failed must not be indistinguishable from a use of an
+                        // entry this device no longer holds. The relay has the
+                        // use either way, and the next backfill brings the row
+                        // down with its new Last Use.
+                        Err(e) => {
+                            tracing::warn!(err = %e, entry_id, "the relay recorded this use but the cache did not");
+                            false
+                        }
+                    }
+                };
+                if moved {
+                    self.events.emit(CoreEvent::HistoryChanged {
+                        user_id: user_id.to_string(),
+                    });
+                }
+            }
+            // The relay does not have this entry — or is older than this client
+            // and does not have the route. Neither earns a queued retry: skew is
+            // not handled here, the relay is updated first, and an entry that is
+            // gone has nothing left to reorder.
+            Err(AppError::NotFound(e)) => {
+                tracing::info!(err = %e, entry_id, "the relay did not record this use");
+            }
+            Err(e) => {
+                tracing::warn!(err = %e, entry_id, "queuing a use the relay could not be told about");
+                if let Err(e) = self.queue(user_id, entry_id).await {
+                    tracing::warn!(err = %e, entry_id, "and it could not be queued either");
+                }
+            }
+        }
+    }
+
+    /// Put a use in the pending queue, beside the captures, so an outage cannot
+    /// reorder what happened during it.
+    async fn queue(&self, user_id: &str, entry_id: i64) -> Result<(), AppError> {
+        let count = {
+            let conn = self.state.conn.lock().await;
+            let queued = pending::enqueue_use(&conn, user_id, entry_id, crate::now_ms())?;
+            warn_if_dropped(user_id, queued.dropped_oldest);
+            pending::count(&conn, user_id)?
+        };
+        self.events.emit(CoreEvent::PendingCount {
+            user_id: user_id.to_string(),
+            count,
+        });
+        match self.state.upload_triggers.lock().get(user_id) {
+            Some(trigger) => trigger.notify_one(),
+            None => tracing::warn!(%user_id, "no uploader trigger registered"),
+        }
+        Ok(())
+    }
+}
+
+/// The queue is at its per-user cap, so the oldest acts made while offline have
+/// just been discarded unsent. Nothing else surfaces that loss at all.
+fn warn_if_dropped(user_id: &str, dropped: usize) {
+    if dropped > 0 {
+        tracing::warn!(
+            %user_id,
+            dropped,
+            "pending upload queue full; evicted oldest unsent acts"
+        );
+    }
+}
+
 /// Cached rows as a shell renders them, with each Origin resolved against the
 /// Device mirror.
 ///
@@ -1125,6 +1389,7 @@ fn to_entries(
                 r.user_id,
                 r.plaintext,
                 r.created_at,
+                r.last_use,
                 r.device_id,
                 device_label,
             )
@@ -1247,7 +1512,7 @@ mod tests {
                     device_id: "d".into(),
                     device_label: "mac".into(),
                     server_url: server_url.into(),
-                    last_seen_id: 0,
+                    last_seen_seq: 0,
                     created_at: 1,
                     username: None,
                     last_contact_at: None,
@@ -1694,12 +1959,13 @@ mod tests {
     }
 
     /*
-     * The rules divide. Over-size, non-text and duplicate-of-last are properties
-     * of the text and still reject; the deny-list is matched against a frontmost
-     * application, of which an Offered Capture has none — so it cannot refuse one.
+     * The rules divide. Over-size and non-text are properties of the text and
+     * still reject; the deny-list is matched against a frontmost application, of
+     * which an Offered Capture has none — so it cannot refuse one. A repeat is
+     * no longer a refusal at all: see `an_offer_of_something_already_pending_...`.
      */
     #[test]
-    fn an_offer_rejects_over_size_non_text_and_a_duplicate_but_never_the_deny_list() {
+    fn an_offer_rejects_over_size_and_non_text_but_never_the_deny_list() {
         let Rig { sp, .. } = rig();
         sp.runtime
             .block_on(sp.update_settings(SettingsPatch {
@@ -1714,15 +1980,249 @@ mod tests {
             OfferOutcome::Queued { pending: 1 },
             "the deny-list must not reject an Offered Capture"
         );
-        assert_eq!(
-            offer("straight out of a password manager"),
-            OfferOutcome::Rejected(SkipReason::Duplicate),
-            "but the same text twice in a row still costs nothing to drop"
-        );
         assert_eq!(offer(""), OfferOutcome::Rejected(SkipReason::NonText));
         assert_eq!(
             offer(&"a".repeat(MAX_BYTES + 1)),
             OfferOutcome::Rejected(SkipReason::TooLarge)
+        );
+    }
+
+    /*
+     * A repeat copy of something still queued has no relay id to use, so the act
+     * is carried by the queue's order: the pending moves to the back rather than
+     * a second identical row being created.
+     */
+    #[test]
+    fn an_offer_of_something_already_pending_moves_it_rather_than_queueing_a_second() {
+        let Rig { sp, sink, .. } = rig();
+        let offer = |text: &str| sp.runtime.block_on(sp.offer("u", text)).unwrap();
+
+        assert_eq!(offer("ssh admin@10.0.0.4"), OfferOutcome::Queued { pending: 1 });
+        assert_eq!(offer("a second thing"), OfferOutcome::Queued { pending: 2 });
+        assert_eq!(
+            offer("ssh admin@10.0.0.4"),
+            OfferOutcome::Recognised { pending: 2 },
+            "recognised, and the queue is no deeper for it"
+        );
+
+        let conn = sp.runtime.block_on(sp.state.conn.lock());
+        let head = pending::head(&conn, "u").unwrap().unwrap();
+        assert!(
+            matches!(&head.kind, pending::PendingKind::Capture(_)),
+            "the head is still a capture"
+        );
+        drop(conn);
+        assert_eq!(
+            sink.pending_counts(),
+            vec![1, 2],
+            "a move is not a queue depth change and must not be reported as one"
+        );
+    }
+
+    /*
+     * Exact bytes. A trailing newline makes it a different entry, because a
+     * Recall hands back the *stored* text and in a shell that newline is the
+     * difference between a command that runs and one that waits. See ADR 0012.
+     */
+    #[test]
+    fn a_trailing_newline_is_a_different_capture() {
+        let Rig { sp, .. } = rig();
+        let offer = |text: &str| sp.runtime.block_on(sp.offer("u", text)).unwrap();
+        assert_eq!(offer("https://example.test"), OfferOutcome::Queued { pending: 1 });
+        assert_eq!(offer("https://example.test\n"), OfferOutcome::Queued { pending: 2 });
+    }
+
+    /// Put one entry in the cache with an explicit age, so a use stamped from
+    /// the clock can be shown to move it.
+    fn seed_entry_at(sp: &Sharepaste, id: i64, plaintext: &str, at: i64) {
+        let mut row = encrypted_row(id, "u", plaintext, "d");
+        row.created_at = at;
+        row.last_use = at;
+        sp.runtime.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            crate::sync::decryptor::ingest(
+                &conn,
+                &crate::testing::test_user_key(),
+                "u",
+                &row,
+                crate::now_ms(),
+            )
+            .unwrap();
+        });
+    }
+
+    fn history_ids(sp: &Sharepaste) -> Vec<i64> {
+        sp.runtime
+            .block_on(sp.list_history("u", None, 100))
+            .unwrap()
+            .iter()
+            .map(|e| e.id)
+            .collect()
+    }
+
+    /*
+     * The decision, end to end on one device: a Recall of a buried entry puts it
+     * at the head, tells the relay, and leaves the entry's identity alone. The
+     * relay's answer is applied to the local row directly — no SSE frame is
+     * delivered anywhere in this test.
+     */
+    #[test]
+    fn a_recall_moves_the_entry_to_the_head_and_records_the_use() {
+        let Rig { sp, sink, clipboard } = rig();
+        let long_ago = crate::now_ms() - 3 * 24 * 60 * 60 * 1000;
+        seed_entry_at(&sp, 1, "ssh admin@10.0.0.4", long_ago);
+        seed_entry_at(&sp, 2, "captured since", crate::now_ms() - 1000);
+        assert_eq!(history_ids(&sp), vec![2, 1], "precondition: 1 is buried");
+
+        let relay = ScriptedRelay::new(Vec::new(), Vec::new());
+        sp.runtime
+            .block_on(sp.recall_over("u", 1, relay.as_ref()))
+            .unwrap();
+
+        assert_eq!(clipboard.writes(), vec!["ssh admin@10.0.0.4".to_string()]);
+        assert_eq!(relay.uses(), vec![1], "the relay was told, so every device reorders");
+        assert_eq!(history_ids(&sp), vec![1, 2], "and this device did not wait to be told back");
+        assert!(sink.saw_history_changed("u"));
+
+        let recalled = sp.runtime.block_on(sp.list_history("u", None, 1)).unwrap();
+        assert_eq!(recalled[0].created_at, long_ago, "a use leaves identity alone");
+        assert!(recalled[0].last_use > long_ago);
+    }
+
+    /*
+     * Recalling the head is still a use. It cannot move the order; it renews
+     * tenure, and an exception here would let a daily-recalled entry age out at
+     * thirty days.
+     */
+    #[test]
+    fn recalling_the_entry_already_on_top_is_still_a_use() {
+        let Rig { sp, .. } = rig();
+        seed_entry_at(&sp, 1, "the only one", crate::now_ms() - 1000);
+        let relay = ScriptedRelay::new(Vec::new(), Vec::new());
+        sp.runtime
+            .block_on(sp.recall_over("u", 1, relay.as_ref()))
+            .unwrap();
+        assert_eq!(relay.uses(), vec![1]);
+    }
+
+    /*
+     * Skew is not handled: a relay without the route answers exactly as a relay
+     * without the entry does, and neither earns a queued retry that could never
+     * succeed. The Recall itself never needed the relay and still stands.
+     */
+    #[test]
+    fn a_relay_that_will_not_record_the_use_neither_fails_nor_queues_it() {
+        let Rig { sp, clipboard, .. } = rig();
+        seed_entry_at(&sp, 1, "recalled anyway", crate::now_ms() - 1000);
+        let relay =
+            ScriptedRelay::new(Vec::new(), Vec::new()).answering_uses(crate::testing::UseAnswer::Gone);
+
+        sp.runtime
+            .block_on(sp.recall_over("u", 1, relay.as_ref()))
+            .unwrap();
+
+        assert_eq!(clipboard.writes(), vec!["recalled anyway".to_string()]);
+        let conn = sp.runtime.block_on(sp.state.conn.lock());
+        assert_eq!(pending::count(&conn, "u").unwrap(), 0, "a 404 is not worth retrying");
+    }
+
+    /*
+     * An outage does not lose the use. It queues beside the captures and reaches
+     * the relay in the order it was made.
+     */
+    #[test]
+    fn a_use_the_relay_cannot_be_told_about_is_queued() {
+        let Rig { sp, sink, .. } = rig();
+        seed_entry_at(&sp, 1, "recalled offline", crate::now_ms() - 1000);
+        let relay = ScriptedRelay::new(Vec::new(), Vec::new())
+            .answering_uses(crate::testing::UseAnswer::Unreachable);
+
+        sp.runtime
+            .block_on(sp.recall_over("u", 1, relay.as_ref()))
+            .unwrap();
+
+        let conn = sp.runtime.block_on(sp.state.conn.lock());
+        let head = pending::head(&conn, "u").unwrap().unwrap();
+        assert_eq!(head.kind, pending::PendingKind::Use(1));
+        drop(conn);
+        assert_eq!(sink.pending_counts(), vec![1], "and the queue depth is reported");
+    }
+
+    /*
+     * A Recall that never reached the clipboard put nothing anywhere, and
+     * nothing is not a use of anything.
+     */
+    #[test]
+    fn a_recall_whose_clipboard_write_fails_records_no_use() {
+        let Rig { sp, clipboard, .. } = rig();
+        seed_entry_at(&sp, 1, "never arrived", crate::now_ms() - 1000);
+        clipboard.on_write(|_| Err(AppError::Storage("clipboard failed".into())));
+        let relay = ScriptedRelay::new(Vec::new(), Vec::new());
+
+        let err = sp
+            .runtime
+            .block_on(sp.recall_over("u", 1, relay.as_ref()))
+            .unwrap_err();
+
+        assert!(matches!(err, AppError::Storage(_)));
+        assert!(relay.uses().is_empty());
+    }
+
+    /*
+     * ADR 0012's half: text this device already holds is a use of the entry that
+     * is there, not a second identical row. Nothing is encrypted and nothing is
+     * queued as a capture — the queued act here is the *use*, because this rig's
+     * relay refuses instantly.
+     */
+    #[test]
+    fn offering_text_already_in_the_history_is_a_use_and_not_a_capture() {
+        let Rig { sp, sink, .. } = rig();
+        let long_ago = crate::now_ms() - 3 * 24 * 60 * 60 * 1000;
+        seed_entry_at(&sp, 1, "ssh admin@10.0.0.4", long_ago);
+        seed_entry_at(&sp, 2, "captured since", crate::now_ms() - 1000);
+
+        let out = sp
+            .runtime
+            .block_on(sp.offer("u", "ssh admin@10.0.0.4"))
+            .unwrap();
+
+        assert_eq!(
+            out,
+            OfferOutcome::Recognised { pending: 1 },
+            "nothing was encrypted and nothing was queued as a capture; the one \
+             queued act is the use, which this rig's relay could not be told about"
+        );
+        assert_eq!(
+            sink.pending_counts(),
+            vec![1],
+            "and the depth the caller was handed is the one the sink reports"
+        );
+        let conn = sp.runtime.block_on(sp.state.conn.lock());
+        let head = pending::head(&conn, "u").unwrap().unwrap();
+        assert_eq!(
+            head.kind,
+            pending::PendingKind::Use(1),
+            "the one thing queued is the use, not a duplicate capture"
+        );
+        assert_eq!(pending::count(&conn, "u").unwrap(), 1);
+    }
+
+    /*
+     * An Undecryptable entry has no plaintext and so no hash: it must never
+     * swallow a copy of text this device cannot prove it holds.
+     */
+    #[test]
+    fn an_undecryptable_entry_never_recognises_a_copy() {
+        let Rig { sp, .. } = rig();
+        seed_entry_at(&sp, 1, "readable", crate::now_ms() - 1000);
+        sp.runtime.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            entries_cache::mark_undecryptable(&conn, "u", 1).unwrap();
+        });
+
+        assert_eq!(
+            sp.runtime.block_on(sp.offer("u", "readable")).unwrap(),
+            OfferOutcome::Queued { pending: 1 }
         );
     }
 
@@ -1785,6 +2285,7 @@ mod tests {
             ciphertext: vec![1],
             plaintext: Some(format!("entry {id}")),
             created_at: 1_000 + id,
+            last_use: 1_000 + id,
             device_id: device_id.into(),
         }
     }
@@ -2025,7 +2526,9 @@ mod tests {
         let history = rt.block_on(sp.list_history("u", None, 50)).unwrap();
         assert_eq!(history.len(), 1);
         assert!(!history[0].undecryptable);
-        assert!(rt.block_on(sp.list_history("u", Some(4), 50)).unwrap().is_empty());
+        let tail = history.last().unwrap();
+        let cursor = HistoryCursor { last_use: tail.last_use, id: tail.id };
+        assert!(rt.block_on(sp.list_history("u", Some(cursor), 50)).unwrap().is_empty());
         assert_eq!(
             rt.block_on(sp.read_entry("u", 4)).unwrap().as_deref(),
             Some("a cached entry")

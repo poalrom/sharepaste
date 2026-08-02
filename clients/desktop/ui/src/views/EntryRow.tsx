@@ -122,7 +122,7 @@ const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
               {" · "}
             </>
           )}
-          {relativeAge(entry.created_at, now)}
+          {relativeAge(entry.last_use, now)}
         </span>
       )}
 

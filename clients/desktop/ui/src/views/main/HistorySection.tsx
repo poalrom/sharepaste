@@ -239,7 +239,7 @@ export default function HistorySection({ now }: { now: number }) {
                       {" · "}
                     </>
                   )}
-                  {relativeAge(entry.created_at, now)}
+                  {relativeAge(entry.last_use, now)}
                 </span>
               )}
             </li>

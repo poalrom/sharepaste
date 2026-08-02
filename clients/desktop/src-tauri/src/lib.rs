@@ -350,6 +350,11 @@ fn spawn_clipboard_capture(state: Arc<AppState>) {
                 .await
             {
                 Ok(OfferOutcome::Queued { .. }) => {}
+                // Text this device already holds: a Use of the entry that is
+                // there, recorded by the core. A Watched Capture is silent
+                // either way — nothing on screen distinguishes the two, and
+                // ADR 0012 keeps it that way deliberately.
+                Ok(OfferOutcome::Recognised { .. }) => {}
                 Ok(OfferOutcome::Rejected(reason)) => {
                     tracing::debug!(?reason, "clipboard skip");
                 }

@@ -9,6 +9,12 @@ use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 
+/// One frame from the relay's fan-out.
+///
+/// There is no `use` frame and there must not be one: a **Use** is an entry row
+/// whose `last_use` and `seq` moved, and the relay says so by re-sending the
+/// row on this same `entry` frame. The cache's upsert on `(user_id, id)` lands
+/// it in place.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ServerEvent {
@@ -17,6 +23,8 @@ pub enum ServerEvent {
         ciphertext: String,
         created_at: i64,
         device_id: String,
+        seq: i64,
+        last_use: i64,
     },
     Delete { id: i64 },
 }
@@ -91,6 +99,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Pins the frame the relay publishes for both a capture and a use. The
+    /// relay compiles separately, so nothing but a test catches a drift here.
     #[test]
     fn parse_entry_event() {
         let data = json!({
@@ -99,10 +109,14 @@ mod tests {
             "ciphertext": "AAAA",
             "created_at": 100,
             "device_id": "d1",
+            "seq": 42,
+            "last_use": 900,
         });
         let parsed: ServerEvent = serde_json::from_value(data).unwrap();
         match parsed {
-            ServerEvent::Entry { id, .. } => assert_eq!(id, 7),
+            ServerEvent::Entry { id, seq, last_use, created_at, .. } => {
+                assert_eq!((id, seq, last_use, created_at), (7, 42, 900, 100));
+            }
             _ => panic!("wrong variant"),
         }
     }

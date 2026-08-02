@@ -355,6 +355,18 @@ class SharepasteViewModel(
                             _receipts.emit(Receipt.Offered(settled.pending))
                         }
 
+                        // A Receipt and not a Notice: the phone already held
+                        // that text, the Entry it matched is now at the head of
+                        // the History, and there is nothing for the person to
+                        // do about it. `pending` is carried through for the
+                        // same reason as above — recognition queues a Use when
+                        // the Relay is out of reach, and that is a depth this
+                        // arm knows before any event does.
+                        is OfferOutcome.Recognised -> {
+                            _state.update { it.copy(notice = null, pending = settled.pending) }
+                            _receipts.emit(Receipt.Recognised(settled.pending))
+                        }
+
                         is OfferOutcome.Rejected -> raise(Notice.OfferRefused(settled.reason))
                     }
                 }

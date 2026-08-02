@@ -10,15 +10,32 @@ describe("SseHub", () => {
     const unsubA = hub.subscribe("user-a", (e) => aReceived.push(e));
     const unsubB = hub.subscribe("user-b", (e) => bReceived.push(e));
 
-    hub.publish("user-a", { type: "entry", id: 1, ciphertext: "AAAA", created_at: 1, device_id: "d1" });
+    const first: SseEvent = {
+      type: "entry",
+      id: 1,
+      ciphertext: "AAAA",
+      created_at: 1,
+      device_id: "d1",
+      seq: 1,
+      last_use: 1,
+    };
+    hub.publish("user-a", first);
     hub.publish("user-b", { type: "delete", id: 7 });
 
-    expect(aReceived).toEqual([{ type: "entry", id: 1, ciphertext: "AAAA", created_at: 1, device_id: "d1" }]);
+    expect(aReceived).toEqual([first]);
     expect(bReceived).toEqual([{ type: "delete", id: 7 }]);
 
     unsubA();
-    hub.publish("user-a", { type: "entry", id: 2, ciphertext: "BBBB", created_at: 2, device_id: "d2" });
-    expect(aReceived).toEqual([{ type: "entry", id: 1, ciphertext: "AAAA", created_at: 1, device_id: "d1" }]);
+    hub.publish("user-a", {
+      type: "entry",
+      id: 2,
+      ciphertext: "BBBB",
+      created_at: 2,
+      device_id: "d2",
+      seq: 2,
+      last_use: 2,
+    });
+    expect(aReceived).toEqual([first]);
     unsubB();
   });
 
@@ -28,8 +45,17 @@ describe("SseHub", () => {
     const r2: unknown[] = [];
     hub.subscribe("user-a", (e) => r1.push(e));
     hub.subscribe("user-a", (e) => r2.push(e));
-    hub.publish("user-a", { type: "entry", id: 5, ciphertext: "AAAA", created_at: 5, device_id: "d1" });
-    expect(r1).toEqual([{ type: "entry", id: 5, ciphertext: "AAAA", created_at: 5, device_id: "d1" }]);
-    expect(r2).toEqual([{ type: "entry", id: 5, ciphertext: "AAAA", created_at: 5, device_id: "d1" }]);
+    const event: SseEvent = {
+      type: "entry",
+      id: 5,
+      ciphertext: "AAAA",
+      created_at: 5,
+      device_id: "d1",
+      seq: 5,
+      last_use: 5,
+    };
+    hub.publish("user-a", event);
+    expect(r1).toEqual([event]);
+    expect(r2).toEqual([event]);
   });
 });

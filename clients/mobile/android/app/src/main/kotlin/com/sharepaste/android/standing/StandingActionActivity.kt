@@ -51,7 +51,7 @@ import kotlinx.coroutines.launch
  * It uses `SharepasteApplication.repository` — the process's one facade, and
  * whatever session an open screen already has. Opening a second one over the
  * same database would put two tokio runtimes, two SQLite connections and two
- * uploaders in a race over one `last_seen_id`.
+ * uploaders in a race over one `last_seen_seq`.
  */
 class StandingActionActivity : Activity() {
 
@@ -190,7 +190,14 @@ class StandingActionActivity : Activity() {
 
             is OfferAttempt.Settled -> when (val outcome = attempt.outcome) {
                 is OfferOutcome.Queued -> Receipt.Offered(outcome.pending) to attempt.userId
-                // The same three sentences the screen uses, under the same three
+                // Carries the Pairing exactly as a queued Offer does. Nothing
+                // was captured, but a recognition still records a Use, and a
+                // Use made with the Relay out of reach is queued and wants the
+                // same flush.
+                is OfferOutcome.Recognised ->
+                    Receipt.Recognised(outcome.pending) to attempt.userId
+
+                // The same two sentences the screen uses, under the same two
                 // labels, from the same two functions. A refusal a person cannot
                 // act on is a control that did nothing.
                 is OfferOutcome.Rejected -> Receipt.Aloud(

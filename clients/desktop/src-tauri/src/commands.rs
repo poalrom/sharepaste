@@ -12,7 +12,7 @@ use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use sharepaste_core::errors::AppError;
 use sharepaste_core::event::Entry;
-use sharepaste_core::facade::SettingsPatch;
+use sharepaste_core::facade::{HistoryCursor, SettingsPatch};
 use sharepaste_core::storage::settings::Settings;
 use sharepaste_core::sync::ConnectionState;
 use std::sync::Arc;
@@ -164,7 +164,9 @@ pub async fn set_active_pairing(
 #[derive(Deserialize)]
 pub(crate) struct ListHistoryArgs {
     pub(crate) user_id: String,
-    pub(crate) before_id: Option<i64>,
+    /// Where to resume: the `last_use` and `id` of the last row already shown.
+    /// A pair and not an id, because id is no longer the order.
+    pub(crate) before: Option<HistoryCursor>,
     pub(crate) limit: i64,
 }
 
@@ -175,7 +177,7 @@ pub async fn list_history(
 ) -> Result<Vec<Entry>, AppError> {
     state
         .core
-        .list_history(&args.user_id, args.before_id, args.limit)
+        .list_history(&args.user_id, args.before, args.limit)
         .await
 }
 

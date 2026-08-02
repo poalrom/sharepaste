@@ -11,32 +11,39 @@ pub struct Account {
     pub device_id: String,
     pub device_label: String,
     pub server_url: String,
-    pub last_seen_id: i64,
+    /// The sync watermark: everything up to this relay sequence has been
+    /// fetched.
+    ///
+    /// A sequence and not an entry id, because an entry moves in the order
+    /// when it is used and has to come back down the same pipe. The relay
+    /// re-allocates a sequence on every **Use**, so a used entry rises above
+    /// this number again and the next fetch sees it.
+    pub last_seen_seq: i64,
     pub created_at: i64,
     pub username: Option<String>,
     pub last_contact_at: Option<i64>,
 }
 
 const COLUMNS: &str =
-    "user_id, device_id, device_label, server_url, last_seen_id, created_at, username, last_contact_at";
+    "user_id, device_id, device_label, server_url, last_seen_seq, created_at, username, last_contact_at";
 
 fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
     Ok(Account {
         user_id: r.get(0)?, device_id: r.get(1)?, device_label: r.get(2)?,
-        server_url: r.get(3)?, last_seen_id: r.get(4)?, created_at: r.get(5)?,
+        server_url: r.get(3)?, last_seen_seq: r.get(4)?, created_at: r.get(5)?,
         username: r.get(6)?, last_contact_at: r.get(7)?,
     })
 }
 
 pub fn upsert(conn: &Connection, a: &Account) -> Result<(), AppError> {
     conn.execute(
-        "INSERT INTO accounts (user_id, device_id, device_label, server_url, last_seen_id, created_at, username, last_contact_at)
+        "INSERT INTO accounts (user_id, device_id, device_label, server_url, last_seen_seq, created_at, username, last_contact_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT (user_id) DO UPDATE SET
             device_id    = excluded.device_id,
             device_label = excluded.device_label,
             server_url   = excluded.server_url",
-        params![a.user_id, a.device_id, a.device_label, a.server_url, a.last_seen_id, a.created_at,
+        params![a.user_id, a.device_id, a.device_label, a.server_url, a.last_seen_seq, a.created_at,
                 a.username, a.last_contact_at],
     )?;
     Ok(())
@@ -59,10 +66,10 @@ pub fn find(conn: &Connection, user_id: &str) -> Result<Option<Account>, AppErro
     Ok(row)
 }
 
-pub fn set_last_seen(conn: &Connection, user_id: &str, last_seen_id: i64) -> Result<(), AppError> {
+pub fn set_last_seen(conn: &Connection, user_id: &str, last_seen_seq: i64) -> Result<(), AppError> {
     let n = conn.execute(
-        "UPDATE accounts SET last_seen_id = ?2 WHERE user_id = ?1",
-        params![user_id, last_seen_id],
+        "UPDATE accounts SET last_seen_seq = ?2 WHERE user_id = ?1",
+        params![user_id, last_seen_seq],
     )?;
     if n == 0 {
         return Err(AppError::NotFound(format!("account {user_id}")));
@@ -107,7 +114,7 @@ mod tests {
     fn acct(uid: &str) -> Account {
         Account {
             user_id: uid.into(), device_id: "d1".into(), device_label: "mac".into(),
-            server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+            server_url: "https://srv".into(), last_seen_seq: 0, created_at: 1,
             username: None, last_contact_at: None,
         }
     }
@@ -128,12 +135,12 @@ mod tests {
         let mut a = acct("u");
         a.device_label = "renamed".into();
         a.server_url = "https://other".into();
-        a.last_seen_id = 0;
+        a.last_seen_seq = 0;
         upsert(&c, &a).unwrap();
         let got = find(&c, "u").unwrap().unwrap();
         assert_eq!(got.device_label, "renamed");
         assert_eq!(got.server_url, "https://other");
-        assert_eq!(got.last_seen_id, 42);
+        assert_eq!(got.last_seen_seq, 42);
     }
 
     #[test]

@@ -226,7 +226,7 @@ Endpoints:
 - `POST /claim-invite`
 - `POST /pair/start`, `POST /pair/claim`, `POST /pair/payload`, `GET /pair/payload`, `GET /pair/poll`
 - `POST /devices`, `DELETE /devices/:id`
-- `POST /entries`, `GET /entries`, `DELETE /entries/:id`, `DELETE /entries`
+- `POST /entries`, `GET /entries`, `POST /entries/:id/use`, `DELETE /entries/:id`, `DELETE /entries`
 - `GET /events` (SSE)
 
 All authenticated endpoints take `Authorization: Bearer <device_token>`.

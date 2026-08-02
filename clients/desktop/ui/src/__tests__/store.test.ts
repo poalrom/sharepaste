@@ -8,9 +8,9 @@ describe("history store", () => {
 
   it("add prepends and dedupes by id", () => {
     const { add } = useHistoryStore.getState();
-    add({ id: 1, user_id: "u", preview: "a", plaintext: "a", created_at: 1, device_id: "d", origin_label: "d", undecryptable: false });
-    add({ id: 2, user_id: "u", preview: "b", plaintext: "b", created_at: 2, device_id: "d", origin_label: "d", undecryptable: false });
-    add({ id: 1, user_id: "u", preview: "a-new", plaintext: "a-new", created_at: 3, device_id: "d", origin_label: "d", undecryptable: false });
+    add({ id: 1, user_id: "u", preview: "a", plaintext: "a", created_at: 1, last_use: 1, device_id: "d", origin_label: "d", undecryptable: false });
+    add({ id: 2, user_id: "u", preview: "b", plaintext: "b", created_at: 2, last_use: 2, device_id: "d", origin_label: "d", undecryptable: false });
+    add({ id: 1, user_id: "u", preview: "a-new", plaintext: "a-new", created_at: 3, last_use: 3, device_id: "d", origin_label: "d", undecryptable: false });
     const state = useHistoryStore.getState();
     expect(state.entries.map((e) => e.id)).toEqual([1, 2]);
     expect(state.entries[0]?.preview).toBe("a-new");
@@ -18,7 +18,7 @@ describe("history store", () => {
 
   it("remove filters by id", () => {
     const { add, remove } = useHistoryStore.getState();
-    add({ id: 1, user_id: "u", preview: "a", plaintext: "a", created_at: 1, device_id: "d", origin_label: "d", undecryptable: false });
+    add({ id: 1, user_id: "u", preview: "a", plaintext: "a", created_at: 1, last_use: 1, device_id: "d", origin_label: "d", undecryptable: false });
     remove(1);
     expect(useHistoryStore.getState().entries.length).toBe(0);
   });

@@ -14,7 +14,7 @@ use crate::http::dto::{EntryRow, MeResp};
 use crate::platform::{Clipboard, EventSink};
 use crate::pairing::payload::{PairClaim, PairTransport};
 use crate::sync::session::SessionTransport;
-use crate::sync::uploader::Uploaded;
+use crate::sync::uploader::{Uploaded, Used};
 use crate::sync::{sse, ConnectionState};
 use async_trait::async_trait;
 use parking_lot::Mutex;
@@ -116,6 +116,15 @@ impl RecordingSink {
             .iter()
             .any(|e| matches!(e, CoreEvent::HistoryChanged { user_id: u } if u == user_id))
     }
+
+    /// How many reorders were reported, for the tests that care that a repeat
+    /// ingest which moved nothing announced nothing.
+    pub fn history_changes(&self, user_id: &str) -> usize {
+        self.events()
+            .iter()
+            .filter(|e| matches!(e, CoreEvent::HistoryChanged { user_id: u } if u == user_id))
+            .count()
+    }
 }
 
 type WriteHook = Box<dyn Fn(&str) -> Result<(), AppError> + Send + Sync>;
@@ -213,6 +222,19 @@ pub enum Wire {
     Drops(Vec<sse::ServerEvent>),
 }
 
+/// What a [`ScriptedRelay`] does when asked to record a **Use**.
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub enum UseAnswer {
+    /// Stamp it, the way a relay with the route and the entry does.
+    #[default]
+    Record,
+    /// 404: the entry is gone, or this relay is older than the client and has
+    /// no such route. The client must not queue either.
+    Gone,
+    /// The relay could not be reached at all, which is what queues a use.
+    Unreachable,
+}
+
 /// A relay that answers from a script instead of a socket.
 ///
 /// The seam that makes the session loop testable at all. An exhausted script
@@ -228,6 +250,8 @@ pub struct ScriptedRelay {
     wires: Mutex<VecDeque<Wire>>,
     closed: AtomicI64,
     uploaded: Mutex<Vec<String>>,
+    uses: Mutex<Vec<i64>>,
+    use_answer: Mutex<UseAnswer>,
     pair_payloads: Mutex<Vec<String>>,
     polls: Mutex<VecDeque<Result<PairClaim, AppError>>>,
     put_payload_hook: Mutex<Option<PutPayloadHook>>,
@@ -267,6 +291,17 @@ impl ScriptedRelay {
 
     pub fn uploaded(&self) -> Vec<String> {
         self.uploaded.lock().clone()
+    }
+
+    /// Every entry id a **Use** was recorded against, in order.
+    pub fn uses(&self) -> Vec<i64> {
+        self.uses.lock().clone()
+    }
+
+    /// Change what this relay does with a use. The call is still recorded.
+    pub fn answering_uses(self: Arc<Self>, answer: UseAnswer) -> Arc<Self> {
+        *self.use_answer.lock() = answer;
+        self
     }
 
     /// Script the inviter's side of pairing: what each `/pair/poll` answers, in
@@ -344,10 +379,24 @@ impl SessionTransport for ScriptedRelay {
 
     /// Hands back an id that climbs with each upload, so a test can tell two of
     /// this device's own Entries apart in the cache the uploader now writes.
+    ///
+    /// `seq` tracks the id, as the relay's own seeding does, and `last_use`
+    /// equals `created_at`: a capture is the entry's first use.
     async fn upload(&self, ciphertext_b64: &str) -> Result<Uploaded, AppError> {
         let mut uploaded = self.uploaded.lock();
         uploaded.push(ciphertext_b64.to_string());
-        Ok(Uploaded { id: uploaded.len() as i64, created_at: crate::now_ms() })
+        let id = uploaded.len() as i64;
+        let at = crate::now_ms();
+        Ok(Uploaded { id, created_at: at, seq: id, last_use: at })
+    }
+
+    async fn use_entry(&self, entry_id: i64) -> Result<Used, AppError> {
+        self.uses.lock().push(entry_id);
+        match *self.use_answer.lock() {
+            UseAnswer::Record => Ok(Used { seq: 10_000 + entry_id, last_use: crate::now_ms() }),
+            UseAnswer::Gone => Err(AppError::NotFound("entry not found".into())),
+            UseAnswer::Unreachable => Err(AppError::Network("scripted outage".into())),
+        }
     }
 }
 
@@ -400,11 +449,14 @@ fn ciphertext_of(user_id: &str, plaintext: &str) -> String {
 /// near the epoch is deleted by the very write that stores it and no test could
 /// then read the row back.
 pub fn encrypted_row(id: i64, user_id: &str, plaintext: &str, device_id: &str) -> EntryRow {
+    let at = crate::now_ms() + id;
     EntryRow {
         id,
         ciphertext: ciphertext_of(user_id, plaintext),
-        created_at: crate::now_ms() + id,
+        created_at: at,
         device_id: device_id.into(),
+        seq: id,
+        last_use: at,
     }
 }
 
@@ -412,20 +464,39 @@ pub fn encrypted_row(id: i64, user_id: &str, plaintext: &str, device_id: &str) -
 /// so ingest fails outright rather than storing an undecryptable row. This is
 /// the shape that must not move the last-seen watermark.
 pub fn unstorable_row(id: i64) -> EntryRow {
+    let at = crate::now_ms() + id;
     EntryRow {
         id,
         ciphertext: "!!! not base64 !!!".into(),
-        created_at: crate::now_ms() + id,
+        created_at: at,
         device_id: "d".into(),
+        seq: id,
+        last_use: at,
     }
 }
 
 /// The same row, as a live SSE frame.
 pub fn live_entry(id: i64, user_id: &str, plaintext: &str, device_id: &str) -> sse::ServerEvent {
+    let at = crate::now_ms() + id;
     sse::ServerEvent::Entry {
         id,
         ciphertext: ciphertext_of(user_id, plaintext),
-        created_at: crate::now_ms() + id,
+        created_at: at,
         device_id: device_id.into(),
+        seq: id,
+        last_use: at,
+    }
+}
+
+/// A **Use** of an entry already cached, as the relay republishes it: the same
+/// row, with a later `last_use` and a fresh sequence.
+pub fn live_use(row: &EntryRow, seq: i64, last_use: i64) -> sse::ServerEvent {
+    sse::ServerEvent::Entry {
+        id: row.id,
+        ciphertext: row.ciphertext.clone(),
+        created_at: row.created_at,
+        device_id: row.device_id.clone(),
+        seq,
+        last_use,
     }
 }

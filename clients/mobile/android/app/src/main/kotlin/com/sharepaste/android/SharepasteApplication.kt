@@ -11,7 +11,7 @@ import com.sharepaste.android.standing.StandingActions
  * **One facade per process, not one per screen.** Two `Sharepaste` objects over
  * the same SQLite file would each own a tokio runtime, each hold a connection and
  * each run a session loop against the same Relay — two writers, two SSE streams
- * and two uploaders racing over one `last_seen_id`. Holding it here also means
+ * and two uploaders racing over one `last_seen_seq`. Holding it here also means
  * ticket 12's transparent activity gets the *same* live session as the screen
  * that is already open, rather than standing a second one up to do one Recall.
  *

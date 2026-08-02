@@ -15,6 +15,13 @@ export type ConnectionState = "Disconnected" | "Connecting" | "Online" | "AuthFa
  * entry whose plaintext is genuinely empty is indistinguishable from one this
  * device holds no key for to anything guessing from an empty `preview`.
  *
+ * `last_use` is the moment of the entry's most recent Use — capturing it,
+ * recalling it, or copying its text again on a device that already holds it —
+ * and it is the only fact the list is ordered by (ADR 0011). It equals
+ * `created_at` for an entry never used since capture: no history of uses
+ * exists to say otherwise, and that is the truth about such an entry rather
+ * than a gap in it.
+ *
  * `origin_label` is the Device Label or a slice of the Device id, resolved by
  * the core so the phone and this window cannot disagree about it.
  */
@@ -24,6 +31,7 @@ export type EntryView = {
   preview: string;
   plaintext: string | null;
   created_at: number;
+  last_use: number;
   device_id: string;
   device_label?: string;
   origin_label: string;

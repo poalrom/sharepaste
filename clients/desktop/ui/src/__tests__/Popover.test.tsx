@@ -112,8 +112,8 @@ describe("Popover", () => {
    */
   it("the History icon opens the reader on the selected entry", async () => {
     servedHistory = [
-      { id: 11, user_id: "u-active", preview: "one", plaintext: "one", created_at: 1, device_id: "d", origin_label: "d", undecryptable: false },
-      { id: 22, user_id: "u-active", preview: "two", plaintext: "two", created_at: 2, device_id: "d", origin_label: "d", undecryptable: false },
+      { id: 11, user_id: "u-active", preview: "one", plaintext: "one", created_at: 1, last_use: 1, device_id: "d", origin_label: "d", undecryptable: false },
+      { id: 22, user_id: "u-active", preview: "two", plaintext: "two", created_at: 2, last_use: 2, device_id: "d", origin_label: "d", undecryptable: false },
     ];
     const view = render(<Popover />);
     await waitFor(() => expect(view.getAllByTestId("entry-row")).toHaveLength(2));
@@ -134,7 +134,7 @@ describe("Popover event subscriptions", () => {
     render(<Popover />);
     await waitFor(() => expect(ipc.handlers.get("history-changed")).toHaveLength(1));
 
-    servedHistory = [{ id: 7, user_id: "u-active", preview: "Refetched", plaintext: "Refetched", created_at: 3, device_id: "d-active", origin_label: "d-ac", undecryptable: false }];
+    servedHistory = [{ id: 7, user_id: "u-active", preview: "Refetched", plaintext: "Refetched", created_at: 3, last_use: 3, device_id: "d-active", origin_label: "d-ac", undecryptable: false }];
     act(() => ipc.emit("history-changed", { user_id: "u-active" }));
     await waitFor(() => {
       expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([7]);
@@ -159,7 +159,7 @@ describe("Popover event subscriptions", () => {
    * nothing the popover has to be told separately.
    */
   it("leaves an undecryptable entry to its row and raises no banner", async () => {
-    servedHistory = [{ id: 42, user_id: "u-active", preview: "", plaintext: null, created_at: 1, device_id: "d-active", origin_label: "d-ac", undecryptable: true }];
+    servedHistory = [{ id: 42, user_id: "u-active", preview: "", plaintext: null, created_at: 1, last_use: 1, device_id: "d-active", origin_label: "d-ac", undecryptable: true }];
     const { findAllByTestId, queryByTestId } = render(<Popover />);
     await waitFor(() => expect(ipc.handlers.get("contact")).toHaveLength(1));
 
@@ -354,12 +354,14 @@ describe("Popover toast", () => {
 // the whole justification for the modifier is that the search input holds
 // focus, and the row's explanation is only real once a strip renders it.
 describe("Popover keyboard and row surfaces", () => {
+  const capturedAt = Date.now();
   const entry = (over: Partial<EntryView> = {}): EntryView => ({
     id: 7,
     user_id: "u-active",
     preview: "npm run dev",
     plaintext: "npm run dev",
-    created_at: Date.now(),
+    created_at: capturedAt,
+    last_use: capturedAt,
     device_id: "d-active",
     origin_label: "d-ac",
     undecryptable: false,

@@ -242,9 +242,10 @@ fun DivergenceBand(
  * is not decoration: every other notice is a statement about something the
  * person just did, while that one is a warning about the content now on their
  * clipboard — it may be yesterday's link. A refusal is ruled down its left edge
- * instead, in the colour of what to do about it: amber for the two that need
- * something done, inert for `ALREADY HERE`, which is the app working correctly
- * and costs the person nothing.
+ * instead, in amber, because both of the refusals an Offer can still receive
+ * need something done about them. The one that did not — `ALREADY HERE`, drawn
+ * inert because the app was working correctly — is no longer a refusal at all
+ * (ADR 0012), and with it went the only reason this had to ask the reason.
  *
  * Lives here rather than on one screen because two screens raise notices: a
  * Recall happens on the History and a Pairing is forgotten on the Pairings, and
@@ -262,9 +263,10 @@ fun NoticeBanner(notice: Notice, onDismiss: () -> Unit, modifier: Modifier = Mod
         is Notice.Failed -> R.string.notice_failed
     }
     val accent = when (notice) {
-        Notice.RecalledFromCache -> Accent.Caution
-        is Notice.OfferRefused -> offerRefusalAccent(notice.reason)
-        is Notice.Failed -> Accent.Caution
+        Notice.RecalledFromCache,
+        is Notice.OfferRefused,
+        is Notice.Failed,
+        -> Accent.Caution
 
         Notice.Unpaired,
         is Notice.HistoryCleared,

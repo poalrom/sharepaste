@@ -17,14 +17,15 @@ import com.sharepaste.android.ui.offerRefusalMessage
 import com.sharepaste.core.SkipReason
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * The three refusals an Offer can really receive, each on a real facade and each
- * with the sentence a person actually reads.
+ * The two refusals an Offer can really receive and the repeat copy that is no
+ * longer one, each on a real facade and each with the words a person reads.
  *
  * `HistoryListTest` pins the wording against a hand-made state; this pins that
  * the *core* produces those reasons for those inputs. Both halves are needed:
@@ -60,19 +61,29 @@ class OfferRefusalsTest {
     /**
      * The same text twice.
      *
-     * A repeat of the immediately preceding capture costs nothing to drop, and an
-     * Offered Capture is the easiest way to send one twice — the button is right
-     * there and nothing about the clipboard has changed.
+     * Not a refusal since ADR 0012: the phone already holds that text, so the
+     * second Offer is a Use of the Entry it holds and nothing is queued. It
+     * belongs in this class because it is the refusal that used to be here: the
+     * proof that the core answers this input at all is the same proof, moved to
+     * the outcome that replaced it.
+     *
+     * An Offered Capture is the easiest way to send one text twice: the button
+     * is right there and nothing about the clipboard has changed.
      */
     @Test
-    fun offering_the_same_text_twice_is_refused_as_a_duplicate() {
+    fun offering_the_same_text_twice_is_recognised_rather_than_refused() {
         val text = "the same link twice ${System.currentTimeMillis()}"
         phone.clip.putText(text)
         compose.onNodeWithTag(TAG_OFFER).performClick()
         phone.awaitReceipt("the first Offer must be taken") { it is Receipt.Offered }
 
         compose.onNodeWithTag(TAG_OFFER).performClick()
-        assertRefused(SkipReason.DUPLICATE, "duplicate")
+        phone.awaitReceipt("the repeat Offer must be recognised") { it is Receipt.Recognised }
+        assertNull(
+            "a recognised Offer confirms and needs nothing back, so it raises no Notice",
+            phone.state.notice,
+        )
+        Evidence.log("recognised    = ${resources.getString(R.string.offer_recognised)}")
     }
 
     /**

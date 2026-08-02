@@ -208,11 +208,11 @@ class StandingActionsNotificationTest {
 
         val sayable = listOf(
             R.string.offer_queued,
+            R.string.offer_recognised,
             R.string.offer_failed,
             R.string.action_unpaired,
             R.string.offer_refused_non_text,
             R.string.offer_refused_too_large,
-            R.string.offer_refused_duplicate,
             R.string.offer_refused_unreachable,
         ).map { context.getString(it) }
         assertTrue(

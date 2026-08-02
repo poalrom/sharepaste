@@ -142,7 +142,7 @@ mod tests {
         let c = r.conn.lock().await;
         accounts::upsert(&c, &Account {
             user_id: "u".into(), device_id: "d".into(), device_label: "phone".into(),
-            server_url: server_url.into(), last_seen_id: 0, created_at: 1,
+            server_url: server_url.into(), last_seen_seq: 0, created_at: 1,
             username: None, last_contact_at: None,
         }).unwrap();
     }
@@ -190,7 +190,7 @@ mod tests {
             let c = r.conn.lock().await;
             accounts::upsert(&c, &Account {
                 user_id: "u".into(), device_id: "d".into(), device_label: "mac".into(),
-                server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                server_url: "https://srv".into(), last_seen_seq: 0, created_at: 1,
                 username: None, last_contact_at: None,
             }).unwrap();
         }
@@ -208,7 +208,7 @@ mod tests {
             let c = r.conn.lock().await;
             accounts::upsert(&c, &Account {
                 user_id: "u".into(), device_id: "d".into(), device_label: "mac".into(),
-                server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                server_url: "https://srv".into(), last_seen_seq: 0, created_at: 1,
                 username: None, last_contact_at: None,
             }).unwrap();
         }
@@ -223,7 +223,7 @@ mod tests {
             let c = r.conn.lock().await;
             accounts::upsert(&c, &Account {
                 user_id: "u".into(), device_id: "d".into(), device_label: "mac".into(),
-                server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                server_url: "https://srv".into(), last_seen_seq: 0, created_at: 1,
                 username: None, last_contact_at: None,
             }).unwrap();
         }
@@ -241,7 +241,7 @@ mod tests {
             let c = r.conn.lock().await;
             accounts::upsert(&c, &Account {
                 user_id: "u".into(), device_id: "d".into(), device_label: "mac".into(),
-                server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                server_url: "https://srv".into(), last_seen_seq: 0, created_at: 1,
                 username: None, last_contact_at: None,
             }).unwrap();
         }
@@ -260,7 +260,7 @@ mod tests {
             let c = r.conn.lock().await;
             accounts::upsert(&c, &Account {
                 user_id: "u".into(), device_id: "d".into(), device_label: "mac".into(),
-                server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                server_url: "https://srv".into(), last_seen_seq: 0, created_at: 1,
                 username: None, last_contact_at: None,
             }).unwrap();
         }
@@ -290,7 +290,7 @@ mod tests {
             let c = r.conn.lock().await;
             accounts::upsert(&c, &Account {
                 user_id: uid.into(), device_id: "d".into(), device_label: uid.into(),
-                server_url: "https://srv".into(), last_seen_id: 0, created_at,
+                server_url: "https://srv".into(), last_seen_seq: 0, created_at,
                 username: None, last_contact_at: None,
             }).unwrap();
         }
@@ -313,7 +313,7 @@ mod tests {
             let c = r.conn.lock().await;
             accounts::upsert(&c, &Account {
                 user_id: uid.into(), device_id: "d".into(), device_label: uid.into(),
-                server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                server_url: "https://srv".into(), last_seen_seq: 0, created_at: 1,
                 username: None, last_contact_at: None,
             }).unwrap();
         }
@@ -336,7 +336,7 @@ mod tests {
             let c = r.conn.lock().await;
             accounts::upsert(&c, &Account {
                 user_id: "u".into(), device_id: "d".into(), device_label: "u".into(),
-                server_url: "https://srv".into(), last_seen_id: 0, created_at: 1,
+                server_url: "https://srv".into(), last_seen_seq: 0, created_at: 1,
                 username: None, last_contact_at: None,
             }).unwrap();
         }
