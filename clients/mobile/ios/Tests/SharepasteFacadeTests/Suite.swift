@@ -12,6 +12,48 @@ import XCTest
 // several of them are one Compose test and one facade test wearing the same
 // name, and only the second half crosses.
 //
+// ─────────────────────────────────────────────────────────────────────────────
+// THE HOST-LESS BUNDLE, which is the one fact this suite is shaped around.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A SwiftPM test target has no host application. `xcodebuild` therefore runs
+// this bundle in the Xcode unit-test runner: a process with no app, no bundle
+// identifier of its own, no entitlements, and nothing on screen. **It has no
+// application identity**, and every platform service that authorises by
+// application identity refuses it or waits forever for a user who is not there.
+//
+// Three of those were found the hard way, one per CI run, before the pattern was
+// named:
+//
+//  1. **The pasteboard.** Since iOS 16 a read raises the system paste-permission
+//     prompt. With no app to present it and nobody to tap it the call does not
+//     fail — it never returns. One run sat on `UIPasteboard.general` for
+//     thirty-six minutes. See ``TestPasteboard``.
+//  2. **The keychain.** `SecItemAdd` and `SecItemDelete` answer `OSStatus
+//     -34018`, `errSecMissingEntitlement`: an item needs a keychain access
+//     group, an access group comes from the application-identifier entitlement,
+//     and this process has none. See ``TestKeychain``.
+//  3. **The environment.** `TEST_RUNNER_`-prefixed build settings are the
+//     documented way to put a value into a test process's environment, and they
+//     are delivered to the *host app* that a host-less bundle does not have. The
+//     tokens simply never arrived. See `Resources/harness.json` and ``Suite``.
+//
+// The rule that falls out of it, and the one worth carrying to the next
+// platform service somebody reaches for here: **anything that authorises by
+// application identity has to be injected, not called.** Every one of these is
+// reachable through a foreign trait the core already declares — Clipboard,
+// Keychain — which is not a coincidence: those traits exist because the shell
+// decides what a pasteboard and a keychain *are*, and a test process is a shell
+// for which the answer is "not the platform's".
+//
+// What that costs is written down rather than absorbed: the platform
+// implementations — `IosPasteboard`'s refusal to coerce an image, and the whole
+// of `IosKeychain` — are exercised by nothing automated, and are device
+// acceptance in tickets 04 to 06. Android's own suite carries the same shape of
+// hole from the other side, and says so in its `FacadeSurfaceTest`: the
+// clipboard is readable only by the focused app or the default IME, and an
+// instrumentation run is neither.
+//
 // **Deliberately excluded, so that the omissions read as decisions.**
 //
 //  * Every Compose UI test — `BackNavigationTest`, `TryAgainTest`,

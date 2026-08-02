@@ -77,7 +77,7 @@ final class DatabaseTest: XCTestCase {
     private func open(at file: URL) throws -> Sharepaste {
         try Sharepaste.open(
             dbPath: file.path,
-            keychain: InMemoryKeychain(),
+            keychain: TestKeychain(),
             clipboard: NoClipboard(),
             events: SilentSink(),
             // This test never opens a socket, so the transport policy is beside

@@ -27,7 +27,7 @@ final class SessionEventsTest: XCTestCase {
         sink = RecordingSink()
         core = try Sharepaste.open(
             dbPath: directory.appendingPathComponent(SessionEventsTest.database).path,
-            keychain: InMemoryKeychain(),
+            keychain: TestKeychain(),
             clipboard: NoClipboard(),
             events: sink,
             // The test relay is plain HTTP, so this suite says so. The shipped

@@ -20,13 +20,13 @@ import XCTest
 /// test here is the boundary itself.
 final class FacadeSurfaceTest: XCTestCase {
 
-    private var keychain: IosKeychain!
+    private var keychain: TestKeychain!
     private var clipboard: TestPasteboard!
     private var sink: RecordingSink!
     private var core: Sharepaste!
 
     override func setUpWithError() throws {
-        keychain = IosKeychain()
+        keychain = TestKeychain()
         clipboard = TestPasteboard()
         sink = RecordingSink()
         // `false` on purpose: this suite reaches the cleartext test relay, which
@@ -45,18 +45,42 @@ final class FacadeSurfaceTest: XCTestCase {
         core = nil
     }
 
+    /// Swift supplies the keychain, and the core reaches it.
+    ///
+    /// The claim is about the **trait**: the core hands a secret to a Swift
+    /// object and reads it back through the same one. Which object that is
+    /// belongs to whoever opened the facade, which is the whole reason the
+    /// keychain is a foreign trait.
+    ///
+    /// **`IosKeychain` itself is not tested here and is not tested anywhere.**
+    /// Keychain Services answers `OSStatus -34018` in this bundle — see
+    /// ``TestKeychain`` — so the version of this test that exercised the shipped
+    /// implementation was removed rather than weakened: its accessibility class,
+    /// its update-or-insert arm and its `OSStatus` wrapping are on ticket 04's
+    /// human checklist, where a Standing Action run from a locked device is what
+    /// actually proves the accessibility choice.
     func testSwiftSuppliesTheKeychain() throws {
-        // The shipped implementation, exercised on the simulator: real Keychain
-        // Services items filed `AfterFirstUnlockThisDeviceOnly`, which is the
-        // one part of this that cannot be tested anywhere else.
-        try keychain.delete(account: "surface-test")
-        XCTAssertNil(try keychain.get(account: "surface-test"))
+        // Through the facade, not directly on the double: what is being crossed
+        // is Rust calling out to Swift, and a test that only called the double
+        // would be a test of a dictionary.
+        let paired = try? core.pairWithCode(code: "not-a-code", deviceLabel: "surface test")
+        XCTAssertNil(paired, "there is no Pairing to make; this is here for the attempt")
+        XCTAssertEqual(
+            keychain.accounts,
+            [],
+            "a failed claim must not leave key material behind"
+        )
+
+        // And the double behaves the way the trait says a keychain does, since
+        // every other test in this suite reads its assertions out of one.
         try keychain.put(account: "surface-test", secret: "a-secret")
         XCTAssertEqual(try keychain.get(account: "surface-test"), "a-secret")
-        // Written twice, because `put` is an update-or-insert and the update arm
-        // is the one a second pairing on the same account takes.
         try keychain.put(account: "surface-test", secret: "a-second-secret")
-        XCTAssertEqual(try keychain.get(account: "surface-test"), "a-second-secret")
+        XCTAssertEqual(
+            try keychain.get(account: "surface-test"),
+            "a-second-secret",
+            "put is an update-or-insert; a second pairing on one account takes the update arm"
+        )
         try keychain.delete(account: "surface-test")
         XCTAssertNil(try keychain.get(account: "surface-test"))
     }

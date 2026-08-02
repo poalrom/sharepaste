@@ -4,22 +4,20 @@ import SharepasteKit
 
 /// Swift implementations of the three platform traits.
 ///
-/// The keychain a phone-under-test uses is the shipped ``IosKeychain``, because
-/// Keychain Services works in a test process and asserting on the real store is
-/// half of what `TwoPairingsTest` proves. The **pasteboard is not** — see
-/// ``TestPasteboard`` — and what is faked beyond that is only ever the other
-/// device.
+/// Two of them are substituted for the same reason and it is not a preference:
+/// this bundle has no host application, so it has no application identity, so
+/// every platform service that authorises by one refuses it. The full diagnosis
+/// — all three instances of it, and the rule that falls out — is at the top of
+/// `Suite.swift`. What is faked beyond those two is only ever the other device.
 
 /// The pasteboard, as a process that has one would see it.
 ///
-/// **`UIPasteboard` is unusable from this bundle, and that is a platform fact
-/// rather than a preference.** A SwiftPM test target has no host application, so
-/// `xcodebuild` runs it in the unit-test runner: a process with no app, no
-/// entitlements, and nothing on screen. Since iOS 16 a pasteboard *read* raises
-/// the system paste-permission prompt, and in that process the prompt has
-/// nobody to present it and nobody to tap it — so the call does not fail, it
+/// **`UIPasteboard` is unusable from this bundle.** Since iOS 16 a read raises
+/// the system paste-permission prompt, and in the unit-test runner the prompt
+/// has nobody to present it and nobody to tap it — so the call does not fail, it
 /// never returns. One run of this suite sat on `UIPasteboard.general` for
-/// thirty-six minutes before it was cancelled.
+/// thirty-six minutes before it was cancelled. See the note at the top of
+/// `Suite.swift`; this is instance one of three.
 ///
 /// Android's suite records the same rule from the other side, and the note is
 /// already in its `FacadeSurfaceTest`: the clipboard is readable only by the
@@ -90,17 +88,45 @@ final class SilentSink: EventSink, @unchecked Sendable {
     func emit(event: CoreEvent) {}
 }
 
-/// A keychain that lives and dies with the test.
+/// The keychain, as a process that has one would see it.
 ///
-/// The inviting side of a pairing test must **not** share the shipped
-/// ``IosKeychain``'s items with the phone under test: both file under
-/// `<user_id>:key`, and while the ids differ, a test that writes a second User's
-/// key into the app's real keychain is a test that leaves the app in a state no
-/// user could reach.
-final class InMemoryKeychain: Keychain, @unchecked Sendable {
+/// **Keychain Services is unusable from this bundle**, and it says so with a
+/// number: `SecItemAdd` and `SecItemDelete` answer `OSStatus -34018`,
+/// `errSecMissingEntitlement`. A keychain item belongs to an access group, an
+/// access group comes from the application-identifier entitlement, and the
+/// unit-test runner has no application identity to have one. Fourteen tests
+/// failed on it in one run, every claim of a Pairing among them, because the
+/// core writes `<user_id>:key` before it writes the Pairing row. See the note at
+/// the top of `Suite.swift`; this is instance two of three, and it is the same
+/// fact as the pasteboard wearing a different error.
+///
+/// Substituting it takes nothing away from what these tests defend. They are
+/// facade tests: what is under test is that the core reaches a Swift keychain
+/// at all, files the two secrets a Pairing is made of under the accounts it
+/// claims to, and erases both when a Pairing is forgotten — and every one of
+/// those is a statement about the **trait**, which is why the trait is foreign
+/// in the first place. `TwoPairingsTest` still reads `<user>:key` and
+/// `<user>:token` out of this object and still fails if a forget leaves either
+/// behind.
+///
+/// What is lost is ``IosKeychain`` itself, and it is lost entirely: its
+/// `AfterFirstUnlockThisDeviceOnly` accessibility, the update-or-insert arm of
+/// `put`, and the `OSStatus` wrapping have no automated coverage on this
+/// platform at all. That is recorded in ticket 08's Evidence and on ticket 04's
+/// human checklist rather than left to be discovered — the accessibility choice
+/// in particular is only provable the way it matters by running a Standing
+/// Action from a locked device.
+final class TestKeychain: Keychain, @unchecked Sendable {
 
     private let lock = NSLock()
     private var entries: [String: String] = [:]
+
+    /// Every account currently held, for a test that wants to say what is gone.
+    var accounts: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return entries.keys.sorted()
+    }
 
     func put(account: String, secret: String) throws {
         lock.lock()

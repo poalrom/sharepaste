@@ -114,9 +114,11 @@ final class TwoPairingsTest: XCTestCase {
     /// **token**, and promotes another to Active.
     ///
     /// The keychain is asserted directly, before and after: a row disappearing
-    /// from a list is not the claim. ``IosKeychain`` is the app's real Keychain
-    /// Services store and `<user>:key` / `<user>:token` are the accounts the core
-    /// writes, so this reads exactly what the facade wrote.
+    /// from a list is not the claim. It is the phone's own ``TestKeychain`` —
+    /// the object the core was handed, not a second opinion — so
+    /// `<user>:key` and `<user>:token` are read back exactly as the core wrote
+    /// them. Keychain Services itself is unreachable from this bundle and is not
+    /// what this test is about; see ``TestKeychain``.
     func testForgettingAPairingTakesItsEntriesKeyAndTokenAndPromotesAnother() async throws {
         _ = try await phone.enterForeground()
         try await phone.awaitInContact(synced)
@@ -129,7 +131,7 @@ final class TwoPairingsTest: XCTestCase {
             previewing: doomed
         )
 
-        let keychain = IosKeychain()
+        let keychain = phone.keychain
         XCTAssertNotNil(
             try keychain.get(account: "\(synced!):key"),
             "no key to erase means this test proves nothing"

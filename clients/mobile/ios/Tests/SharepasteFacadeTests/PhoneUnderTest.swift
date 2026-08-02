@@ -6,10 +6,12 @@ import XCTest
 /// The phone under test: the app's own chokepoint over a database this test
 /// owns.
 ///
-/// Assembled from production objects — ``SharepasteRepository``, the shipped
-/// ``IosKeychain``, the shipped ``IosPasteboard`` inside it — because a
-/// criterion proven against a hand-rolled facade is a criterion not proven at
-/// all.
+/// Assembled from the production ``SharepasteRepository`` over a production
+/// core, because a criterion proven against a hand-rolled facade is a criterion
+/// not proven at all. The two platform objects it would otherwise reach for are
+/// substituted, and for one reason: this bundle has no host application, so
+/// `UIPasteboard` never answers and Keychain Services refuses with
+/// `errSecMissingEntitlement`. The diagnosis is at the top of `Suite.swift`.
 ///
 /// Android's equivalent also carries the state holder and the real screens. This
 /// one stops at the repository, and the two lifecycle edges below are the calls
@@ -30,15 +32,30 @@ final class PhoneUnderTest {
     /// anything.
     let pasteboard: TestPasteboard
 
+    /// This phone's keychain: the two secrets a Pairing is made of, as the core
+    /// filed them.
+    ///
+    /// Injected through the seam ticket 02 already put on the initialiser, for
+    /// the reason on ``TestKeychain`` — Keychain Services answers
+    /// `errSecMissingEntitlement` in this process. It is the same object the
+    /// core was given, so `<user>:key` and `<user>:token` are readable here
+    /// exactly as the core wrote them.
+    let keychain: TestKeychain
+
     /// Every Pairing this phone joined here, in the order it joined them.
     private(set) var pairedUserIds: [String] = []
 
     /// The Pairing this phone joined most recently, once it has one.
     var userId: String? { pairedUserIds.last }
 
-    private init(repo: SharepasteRepository, pasteboard: TestPasteboard) {
+    private init(
+        repo: SharepasteRepository,
+        pasteboard: TestPasteboard,
+        keychain: TestKeychain
+    ) {
         self.repo = repo
         self.pasteboard = pasteboard
+        self.keychain = keychain
     }
 
     /// A phone with an empty database, in the app's own container.
@@ -54,13 +71,13 @@ final class PhoneUnderTest {
     /// on purpose.
     static func open(
         databaseName: String,
-        fresh: Bool = true,
-        keychain: Keychain? = nil
+        fresh: Bool = true
     ) throws -> PhoneUnderTest {
         let directory = try fresh
             ? freshDatabase(named: databaseName)
             : existingDatabase(named: databaseName)
         let pasteboard = TestPasteboard()
+        let keychain = TestKeychain()
         return PhoneUnderTest(
             repo: SharepasteRepository(
                 directory: directory,
@@ -69,7 +86,8 @@ final class PhoneUnderTest {
                 keychain: keychain,
                 clipboard: pasteboard
             ),
-            pasteboard: pasteboard
+            pasteboard: pasteboard,
+            keychain: keychain
         )
     }
 

@@ -209,7 +209,7 @@ final class RoundTripTest: XCTestCase {
         try autoreleasepool {
             let core = try Sharepaste.open(
                 dbPath: directory.appendingPathComponent(database).path,
-                keychain: InMemoryKeychain(),
+                keychain: TestKeychain(),
                 clipboard: NoClipboard(),
                 events: SilentSink(),
                 requireHttps: false

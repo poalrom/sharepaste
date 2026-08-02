@@ -179,7 +179,7 @@ final class Inviter: @unchecked Sendable {
             queue.async {
                 continuation.resume(with: Result {
                     let core = try Sharepaste.openInMemory(
-                        keychain: InMemoryKeychain(),
+                        keychain: TestKeychain(),
                         clipboard: NoClipboard(),
                         events: SilentSink(),
                         // The test relay is plain HTTP. `TransportPolicyTest`

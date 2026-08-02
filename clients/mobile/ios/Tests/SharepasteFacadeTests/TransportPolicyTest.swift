@@ -78,7 +78,7 @@ final class TransportPolicyTest: XCTestCase {
 
     private func openWithTheShippedPolicy() throws -> Sharepaste {
         try Sharepaste.openInMemory(
-            keychain: InMemoryKeychain(),
+            keychain: TestKeychain(),
             clipboard: NoClipboard(),
             events: SilentSink(),
             requireHttps: TransportPolicy.requireHttps
