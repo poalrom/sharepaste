@@ -60,10 +60,16 @@ mirrored locally. Not capture order: an entry recalled today leads a history of
 entries captured since.
 _Avoid_: log, feed, buffer
 
+**Use**:
+Any act that puts an entry at the head of the history: capturing it, recalling
+it, or copying its text again on a device that already holds it. Reading an
+entry is not a use.
+_Avoid_: bump, touch, promote, access, reuse
+
 **Last Use**:
-The moment an entry was last captured or recalled, on whichever device. It
-orders the history and measures how long the entry is kept, so an entry in
-regular use is never the one dropped to make room.
+The moment of an entry's most recent use, on whichever device. It orders the
+history and measures how long the entry is kept, so an entry in regular use is
+never the one dropped to make room.
 _Avoid_: bumped at, updated at, modified, sort key, last accessed
 
 **Filter**:
@@ -73,8 +79,10 @@ only ever find what has already reached that device.
 _Avoid_: search, query, find, lookup
 
 **Capture**:
-The act of a device turning local content into an entry. How the device comes by
-that content is not uniform: see **Watched Capture** and **Offered Capture**.
+The act of a device turning local content into an entry — unless that device
+already holds the same text, in which case the copy is a use of what it holds
+and no entry is made. How the device comes by that content is not uniform: see
+**Watched Capture** and **Offered Capture**.
 _Avoid_: watch, grab, sync-up
 
 **Watched Capture**:
@@ -104,9 +112,11 @@ The device an entry was captured on, as distinct from the device viewing it.
 _Avoid_: source, sender, author
 
 **Pending**:
-A capture this device holds but has not yet placed on the relay, because the
-relay could not be reached. Not an Entry: it carries no relay-assigned id, and
-no other device knows of it. It becomes an Entry when the relay takes it.
+An act this device holds but has not yet placed on the relay, because the relay
+could not be reached: a capture, or a use. A pending capture is not an Entry —
+it carries no relay-assigned id, and no other device knows of it — and becomes
+one when the relay takes it. Pendings reach the relay in the order they were
+made, so an outage cannot reorder what happened during it.
 _Avoid_: outbox, backlog, unsent, pending entry
 
 **Contact**:
@@ -141,7 +151,8 @@ _Avoid_: settings menu, preferences, pairings screen, about
 
 **Standing Actions**:
 The verbs a device exposes without being opened: offer the clipboard, recall the
-latest entry. Unlike the popover they show nothing and pick nothing.
+entry at the head of the history — the last one used, not the last one captured.
+Unlike the popover they show nothing and pick nothing.
 _Avoid_: quick actions, shortcuts, widget, tile
 
 **Receipt**:
