@@ -1,11 +1,8 @@
-use crate::crypto::UserKey;
 use crate::errors::AppError;
-use crate::event::{CoreEvent, Entry};
-use crate::http::dto::EntryRow;
+use crate::event::CoreEvent;
 use crate::pairing::payload::base64_encode;
 use crate::platform::EventSink;
-use crate::storage::{accounts, devices, entries_cache, pending};
-use crate::sync::decryptor;
+use crate::storage::{entries_cache, pending};
 use async_trait::async_trait;
 use rusqlite::Connection;
 use std::sync::Arc;
@@ -75,7 +72,7 @@ pub enum UploaderExit {
 /// queue-depth read and the sink emission happen once for both kinds and
 /// cannot drift apart.
 enum Sent {
-    Capture { b64: String, uploaded: Uploaded },
+    Capture { uploaded: Uploaded },
     Use { entry_id: i64, used: Used },
     /// A queued use naming an entry the relay no longer has.
     UseVanished { entry_id: i64 },
@@ -87,14 +84,6 @@ pub struct Uploader {
     pub transport: Arc<dyn UploadTransport>,
     pub trigger: Arc<Notify>,
     pub events: Arc<dyn EventSink>,
-    /// This pairing's key, to read back what was just sent.
-    ///
-    /// The uploader holds the ciphertext, not the plaintext — an Offer encrypts
-    /// on the way into the queue — so caching the Entry means decrypting it
-    /// again through the same path every other Entry takes. That is deliberate:
-    /// one ingest function means the cache cannot end up holding a row that a
-    /// relay-delivered Entry would have stored differently.
-    pub user_key: UserKey,
 }
 
 impl Uploader {
@@ -140,7 +129,7 @@ impl Uploader {
                     self.transport
                         .upload(&b64)
                         .await
-                        .map(|uploaded| Sent::Capture { b64, uploaded })
+                        .map(|uploaded| Sent::Capture { uploaded })
                 }
                 pending::PendingKind::Use(entry_id) => {
                     let entry_id = *entry_id;
@@ -157,37 +146,34 @@ impl Uploader {
                 Ok(sent) => {
                     // Scoped so the database guard is gone before anything
                     // reaches the sink: see [`EventSink`].
-                    let (count, cached, reordered) = {
+                    let (count, reordered) = {
                         let conn = self.conn.lock().await;
                         pending::ack(&conn, item.rowid)?;
-                        let (cached, reordered) = match sent {
-                            Sent::Capture { b64, uploaded } => {
-                                (self.cache_own_entry(&conn, &b64, uploaded), false)
+                        let reordered = match sent {
+                            Sent::Capture { uploaded } => {
+                                self.settle(&conn, item.local_entry_id, uploaded);
+                                false
                             }
                             Sent::Use { entry_id, used } => {
-                                let moved = entries_cache::set_last_use(
+                                entries_cache::set_last_use(
                                     &conn, &self.user_id, entry_id, used.last_use,
-                                )? > 0;
-                                (None, moved)
+                                )? > 0
                             }
                             Sent::UseVanished { entry_id } => {
                                 tracing::info!(
                                     entry_id,
                                     "dropped a queued use of an entry the relay no longer has"
                                 );
-                                (None, false)
+                                false
                             }
                         };
-                        (pending::count(&conn, &self.user_id)?, cached, reordered)
+                        (pending::count(&conn, &self.user_id)?, reordered)
                     };
-                    if let Some(entry) = cached {
-                        self.events.emit(CoreEvent::EntryAdded {
-                            user_id: self.user_id.clone(),
-                            entry,
-                        });
-                    }
-                    // A use raises no `EntryAdded`: nothing was created, and the
-                    // only thing that changed is where the row sits.
+                    // A capture raises no `EntryAdded`: the Entry has existed
+                    // since it was captured and the shells have had it all along.
+                    // A use raises no `EntryAdded` either, and nothing reorders
+                    // at a flush — the relay stamps a pending act exactly where
+                    // this device already showed it.
                     if reordered {
                         self.events.emit(CoreEvent::HistoryChanged {
                             user_id: self.user_id.clone(),
@@ -219,77 +205,50 @@ impl Uploader {
         Ok(())
     }
 
-    /// Put an Entry this device just uploaded into its own cache, and hand back
-    /// the Entry the caller owes the sink.
+    /// Attach what the relay recorded to the Entry the capture already created.
     ///
-    /// **A device must not depend on a network echo to learn about content it
-    /// created itself.** Before this, the only way an offered Entry reached the
-    /// local cache was the relay's SSE fan-out — and the session nudges this
-    /// uploader the moment it comes online, *before* the stream task has
-    /// subscribed, so an Entry uploaded in that window is published to nobody
-    /// and appears only if some later reconnect happens to re-run the backfill.
-    /// That is the offline-burst-then-reconnect path, which is exactly when a
-    /// person is most likely to be watching.
+    /// **Reconciliation, not insertion.** The Entry exists from the moment of
+    /// capture (ADR 0013), so this flush has nothing to create and nothing to
+    /// announce: it hands the row the relay's id, the `created_at` every other
+    /// device will see it dated by, and its `last_use`. The `local_id` does not
+    /// move, which is what lets both shells keep a row's selection and keyboard
+    /// cursor across a flush.
     ///
-    /// **The watermark is deliberately not advanced.** `last_seen_seq` means
-    /// "everything up to here has been fetched", and the relay may hold Entries
-    /// from other devices with *lower* ids that this device has never seen —
-    /// moving it past them skips them for good, because the next `since=` fetch
-    /// starts after it. The next backfill re-fetches this id and advances the
-    /// watermark the ordinary way; [`crate::storage::entries_cache::upsert_and_prune`]
-    /// is idempotent, so ingesting it a second time costs nothing.
+    /// **`seq` is deliberately not applied.** `last_seen_seq` means "everything
+    /// up to here has been fetched", and the relay may hold Entries from other
+    /// devices with *lower* sequences that this device has never seen — moving
+    /// the watermark past them skips them for good, because the next `since=`
+    /// fetch starts after it. This device wrote; it did not fetch.
     ///
-    /// **It returns the Entry rather than emitting it**, because its caller holds
-    /// the database guard and [`EventSink`] forbids reaching a shell from under
-    /// one. `Some` is the caller's instruction to announce it once the guard is
-    /// gone.
-    ///
-    /// A failure here is logged and swallowed. The Entry is on the relay, which
-    /// is the part that matters; the cache catches up on the next backfill.
-    fn cache_own_entry(
-        &self,
-        conn: &Connection,
-        ciphertext_b64: &str,
-        uploaded: Uploaded,
-    ) -> Option<Entry> {
-        let Ok(Some(account)) = accounts::find(conn, &self.user_id) else {
-            tracing::warn!(user_id = %self.user_id, "no pairing to attribute this device's own Entry to");
-            return None;
+    /// A failure is logged and swallowed. The act is on the relay, which is the
+    /// part that matters, and the relay's echo carries the same id back.
+    fn settle(&self, conn: &Connection, local_entry_id: Option<i64>, uploaded: Uploaded) {
+        let Some(local_entry_id) = local_entry_id else {
+            tracing::warn!(
+                relay_id = uploaded.id,
+                "a queued capture named no local entry; the relay's echo will insert it"
+            );
+            return;
         };
-        let row = EntryRow {
-            id: uploaded.id,
-            ciphertext: ciphertext_b64.to_string(),
-            created_at: uploaded.created_at,
-            device_id: account.device_id.clone(),
-            seq: uploaded.seq,
-            last_use: uploaded.last_use,
-        };
-        match decryptor::ingest(conn, &self.user_key, &self.user_id, &row, crate::now_ms()) {
-            // Only on a genuine first insert. The relay's echo ingests the same
-            // id a moment later, and two `EntryAdded`s for one Entry is a
-            // duplicate row on screen — a more visible bug than the missing row
-            // this method exists to prevent.
-            Ok(out) if out.stored.first_insert => {
-                let device_label =
-                    devices::label_for(conn, &self.user_id, &account.device_id).unwrap_or_default();
-                Some(Entry::new(
-                    uploaded.id,
-                    self.user_id.clone(),
-                    out.plaintext,
-                    uploaded.created_at,
-                    uploaded.last_use,
-                    account.device_id,
-                    device_label,
-                ))
-            }
-            Ok(_) => None,
-            Err(e) => {
-                tracing::warn!(
-                    err = %e, entry_id = uploaded.id,
-                    "could not cache this device's own Entry; the next backfill will fetch it"
-                );
-                None
-            }
+        match entries_cache::attach_relay_id(
+            conn,
+            &self.user_id,
+            local_entry_id,
+            uploaded.id,
+            uploaded.created_at,
+            uploaded.last_use,
+            crate::now_ms(),
+        ) {
+            Ok(0) => tracing::info!(
+                local_entry_id,
+                relay_id = uploaded.id,
+                "the entry this act created is gone; nothing to reconcile"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(
+                err = %e, local_entry_id, relay_id = uploaded.id,
+                "could not attach the relay's id; the next backfill will"
+            ),
         }
     }
 }
@@ -297,6 +256,7 @@ impl Uploader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::dto::EntryRow;
     use crate::storage::{open_in_memory, pending};
     use crate::testing::RecordingSink;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -386,15 +346,11 @@ mod tests {
             transport,
             trigger: Arc::new(Notify::new()),
             events: sink.clone(),
-            user_key: crate::testing::test_user_key(),
         };
         (up, sink)
     }
 
-    /// A Pairing to attribute this device's own Entries to.
-    ///
-    /// `cache_own_entry` reads the Device id off it, so without one the uploader
-    /// has nothing to record an Entry against and says so rather than guessing.
+    /// A Pairing for the rows a capture creates to name as their Origin.
     async fn paired(conn: &Arc<Mutex<Connection>>) {
         let c = conn.lock().await;
         crate::storage::accounts::upsert(
@@ -408,16 +364,26 @@ mod tests {
         .unwrap();
     }
 
-    /// Queue a capture, encrypting it as the facade does.
-    async fn queue_capture(conn: &Arc<Mutex<Connection>>, text: &str) {
+    /// Capture, exactly as the facade does it: the Entry and the act together,
+    /// with the act naming the row. Hands back the row's `local_id`.
+    async fn queue_capture(conn: &Arc<Mutex<Connection>>, text: &str) -> i64 {
         let sealed = crate::crypto::encrypt(&crate::testing::test_user_key(), "u", text.as_bytes()).unwrap();
+        let hash = crate::storage::entries_cache::plaintext_sha256(text);
         let c = conn.lock().await;
-        pending::enqueue_capture(
-            &c, "u", &sealed,
-            &crate::storage::entries_cache::plaintext_sha256(text),
-            1,
+        let local_id = crate::storage::entries_cache::insert_captured(
+            &c, "u", &sealed, text, &hash, "this-phone",
         )
         .unwrap();
+        pending::enqueue_capture(&c, "u", local_id, &sealed, &hash, 1).unwrap();
+        local_id
+    }
+
+    /// What the cache holds for one Pairing, newest first.
+    async fn cached(
+        conn: &Arc<Mutex<Connection>>,
+    ) -> Vec<crate::storage::entries_cache::CachedEntry> {
+        let c = conn.lock().await;
+        crate::storage::entries_cache::list_recent(&c, "u", None, 200).unwrap()
     }
 
     #[tokio::test]
@@ -430,12 +396,18 @@ mod tests {
         let (up, sink) = uploader(conn.clone(), transport.clone());
         up.flush_once().await.unwrap();
         assert_eq!(transport.count.load(Ordering::SeqCst), 3);
-        let c = conn.lock().await;
-        assert_eq!(pending::count(&c, "u").unwrap(), 0);
+        {
+            let c = conn.lock().await;
+            assert_eq!(pending::count(&c, "u").unwrap(), 0);
+        }
         assert_eq!(
             sink.pending_counts(),
             vec![2, 1, 0],
             "the queue shrinking is the only thing that surfaces Pending draining"
+        );
+        assert!(
+            sink.entries().is_empty(),
+            "a flush creates nothing, so it announces nothing"
         );
     }
 
@@ -449,9 +421,9 @@ mod tests {
         // Dated inside the 30-day window, or `upsert_and_prune` deletes it with
         // the very write that stores it.
         let captured_at = crate::now_ms() - 60_000;
-        {
+        let older = {
             let c = conn.lock().await;
-            crate::storage::entries_cache::upsert_and_prune(
+            let stored = crate::storage::entries_cache::upsert_and_prune(
                 &c,
                 crate::storage::entries_cache::NewCachedEntry {
                     user_id: "u", relay_id: Some(7), ciphertext: b"ct", plaintext: Some("older"),
@@ -461,8 +433,9 @@ mod tests {
                 crate::now_ms(),
             )
             .unwrap();
-            pending::enqueue_use(&c, "u", 7, 2).unwrap();
-        }
+            pending::enqueue_use(&c, "u", stored.local_id, 7, 2).unwrap();
+            stored.local_id
+        };
         queue_capture(&conn, "after").await;
 
         let transport = Arc::new(OkTransport::new());
@@ -471,12 +444,14 @@ mod tests {
 
         assert_eq!(transport.count.load(Ordering::SeqCst), 2, "both captures uploaded");
         assert_eq!(*transport.uses.lock().await, vec![7], "and the use went with them");
-        let c = conn.lock().await;
-        assert_eq!(pending::count(&c, "u").unwrap(), 0);
-        let used = crate::storage::entries_cache::list_recent(&c, "u", None, 10)
-            .unwrap()
+        {
+            let c = conn.lock().await;
+            assert_eq!(pending::count(&c, "u").unwrap(), 0);
+        }
+        let used = cached(&conn)
+            .await
             .into_iter()
-            .find(|e| e.relay_id == Some(7))
+            .find(|e| e.local_id == older)
             .expect("the used entry is still cached");
         assert!(
             used.last_use > captured_at,
@@ -484,10 +459,9 @@ mod tests {
             used.last_use
         );
         assert_eq!(used.created_at, captured_at, "and left its identity alone");
-        assert_eq!(
-            sink.entries().len(),
-            2,
-            "two captures are two EntryAddeds; a use creates nothing and announces none"
+        assert!(
+            sink.entries().is_empty(),
+            "a flush creates nothing whichever kind of act it sends"
         );
     }
 
@@ -499,7 +473,7 @@ mod tests {
         paired(&conn).await;
         {
             let c = conn.lock().await;
-            pending::enqueue_use(&c, "u", 7, 2).unwrap();
+            pending::enqueue_use(&c, "u", 99, 7, 2).unwrap();
         }
         let (up, sink) = uploader(conn.clone(), Arc::new(OkTransport::without_the_entry()));
         up.flush_once().await.unwrap();
@@ -542,49 +516,57 @@ mod tests {
     }
 
     /*
-     * The bug this defends: a device learning about its own content only from
-     * the relay's echo. The session nudges the uploader the moment it comes
-     * online, before the SSE task has subscribed, so an Entry uploaded in that
-     * window was published to nobody and reached the cache only if some later
-     * reconnect happened to re-run the backfill. Nothing forced one, and the
-     * window is the offline-burst-then-reconnect path — precisely when somebody
-     * is watching.
+     * An Entry exists from the moment of capture, so the flush has nothing to
+     * insert: it hands the row the relay's id and leaves everything else about it
+     * alone. The `local_id` in particular, which is what both shells key on —
+     * a row that changed identity at the flush would remount and lose whatever
+     * selection or keyboard cursor was on it.
      *
-     * No SSE frame is delivered anywhere in this test. That is the point.
+     * No SSE frame is delivered anywhere in this test. The Entry is on screen
+     * from capture and owes the relay nothing to become real.
      */
     #[tokio::test]
-    async fn an_entry_this_device_uploaded_is_cached_without_any_relay_echo() {
+    async fn a_flush_attaches_the_relays_id_without_moving_the_row() {
         let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
         paired(&conn).await;
-        queue_capture(&conn, "copied on this phone").await;
+        let local_id = queue_capture(&conn, "copied on this phone").await;
+
+        let before = cached(&conn).await;
+        assert_eq!(before.len(), 1, "the Entry is cached from capture, not from the flush");
+        assert_eq!(before[0].relay_id, None, "and the relay has not named it");
+        assert_eq!(before[0].plaintext.as_deref(), Some("copied on this phone"));
+        assert_eq!(
+            before[0].device_id, "this-phone",
+            "an Entry captured here has this device as its Origin"
+        );
 
         let (up, sink) = uploader(conn.clone(), Arc::new(OkTransport::new()));
         up.flush_once().await.unwrap();
 
-        let c = conn.lock().await;
-        let cached = crate::storage::entries_cache::list_recent(&c, "u", None, 10).unwrap();
-        assert_eq!(cached.len(), 1, "the uploaded Entry is not in this device's own cache");
-        assert_eq!(cached[0].relay_id, Some(42), "cached under the id the relay assigned");
-        assert_eq!(cached[0].plaintext.as_deref(), Some("copied on this phone"));
-        assert_eq!(
-            cached[0].device_id, "this-phone",
-            "an Entry captured here has this device as its Origin"
-        );
+        let after = cached(&conn).await;
+        assert_eq!(after.len(), 1, "reconciliation, not insertion");
+        assert_eq!(after[0].local_id, local_id, "the row keeps the id the shells hold");
+        assert_eq!(after[0].relay_id, Some(42), "and gains the one the relay assigned");
+        assert!(after[0].last_use > 0, "and its Last Use");
+        assert!(after[0].created_at > 0, "the relay's stamp replaced the un-stamped zero");
+        assert_eq!(after[0].plaintext.as_deref(), Some("copied on this phone"));
 
         // And the watermark stays where it was. It means "everything up to here
         // has been fetched", and the relay may hold Entries from other devices
-        // with lower ids that this device has never seen: advancing past them
-        // skips them for good, because the next `since=` fetch starts after it.
-        assert_eq!(
-            crate::storage::accounts::find(&c, "u").unwrap().unwrap().last_seen_seq,
-            0,
-            "caching an Entry is not the same as having fetched everything before it"
-        );
-
-        assert_eq!(
-            sink.entries().len(),
-            1,
-            "one Entry uploaded is one EntryAdded"
+        // with lower sequences that this device has never seen: advancing past
+        // them skips them for good, because the next `since=` fetch starts after
+        // it.
+        {
+            let c = conn.lock().await;
+            assert_eq!(
+                crate::storage::accounts::find(&c, "u").unwrap().unwrap().last_seen_seq,
+                0,
+                "settling an act is not the same as having fetched everything before it"
+            );
+        }
+        assert!(
+            sink.entries().is_empty(),
+            "the Entry was announced at capture; the flush announces nothing"
         );
     }
 
@@ -593,9 +575,9 @@ mod tests {
      * Windows smoke run: an offline burst of three flushes, `pending_uploads`
      * goes 3 -> 0, the relay gains three rows, and local history holds one.
      *
-     * Driven through the uploader rather than by hand, because the claim is
-     * about the ack-then-cache path and nothing else: three captures in, three
-     * rows out, and the relay's echo of all three adding no fourth.
+     * The cause was above the core (see that ticket's `## Answer`) and this is
+     * the pin that keeps it there: three captures in, three rows out either side
+     * of the flush, and the relay's echo of all three adding no fourth.
      */
     #[tokio::test]
     async fn an_offline_burst_of_three_leaves_three_rows_and_the_echo_adds_none() {
@@ -615,14 +597,20 @@ mod tests {
         {
             let c = conn.lock().await;
             assert_eq!(pending::count(&c, "u").unwrap(), 0, "the queue drained");
-            let cached = crate::storage::entries_cache::list_recent(&c, "u", None, 10).unwrap();
-            let held: Vec<&str> = cached.iter().filter_map(|e| e.plaintext.as_deref()).collect();
-            assert_eq!(cached.len(), 3, "every flushed capture is in local history: {held:?}");
+            let held: Vec<String> = crate::storage::entries_cache::list_recent(&c, "u", None, 10)
+                .unwrap()
+                .into_iter()
+                .filter_map(|e| e.plaintext)
+                .collect();
+            assert_eq!(held.len(), 3, "every flushed capture is in local history: {held:?}");
             for t in texts {
-                assert!(held.contains(&t), "{t} is missing from local history: {held:?}");
+                assert!(held.iter().any(|h| h == t), "{t} is missing: {held:?}");
             }
         }
-        assert_eq!(sink.entries().len(), 3, "three captures are three EntryAddeds");
+        assert!(
+            sink.entries().is_empty(),
+            "the three were announced at capture; the flush announces nothing"
+        );
 
         // The relay's fan-out of the same three, ingested exactly as
         // `run_sse_loop` ingests one.
@@ -657,10 +645,11 @@ mod tests {
     }
 
     /*
-     * The other half, and the one that would turn this fix into a worse bug:
-     * the relay echoes the Entry back a moment later, the session ingests the
-     * same id, and a naive port emits a second `EntryAdded` — a duplicate row on
-     * screen. Both paths are driven here for one id.
+     * The relay echoes the Entry back a moment later and the session ingests the
+     * same relay id. It has to resolve to the row the capture created and
+     * announce nothing: a second `EntryAdded` is a duplicate row on screen, and a
+     * second *row* is the same content twice. Both paths are driven here for one
+     * entry.
      */
     #[tokio::test]
     async fn the_relays_echo_of_our_own_entry_does_not_add_it_twice() {
@@ -668,7 +657,7 @@ mod tests {
         paired(&conn).await;
         let key = crate::testing::test_user_key();
         let sealed = crate::crypto::encrypt(&key, "u", b"offered here").unwrap();
-        queue_capture(&conn, "offered here").await;
+        let local_id = queue_capture(&conn, "offered here").await;
         let (up, sink) = uploader(conn.clone(), Arc::new(OkTransport::new()));
         up.flush_once().await.unwrap();
 
@@ -695,9 +684,12 @@ mod tests {
             "the cache must report the echo as a repeat, or the session emits a second EntryAdded"
         );
         assert_eq!(
-            sink.entries().len(),
-            1,
-            "one Entry must produce exactly one EntryAdded however many paths deliver it"
+            echoed.stored.local_id, local_id,
+            "and resolve to the row the capture created, not a new one"
+        );
+        assert!(
+            sink.entries().is_empty(),
+            "the Entry was announced at capture, and neither the flush nor the echo repeats it"
         );
         assert_eq!(
             crate::storage::entries_cache::list_recent(&c, "u", None, 10).unwrap().len(),

@@ -61,10 +61,14 @@ pub(crate) fn plaintext_sha256(text: &str) -> String {
 
 /// What one ingest did to the cache.
 ///
-/// Two facts and not one, because three paths reach the same id and each owes
-/// the shell a different event. `first_insert` says an Entry is new here, and
-/// exactly one path may raise `EntryAdded` for it. `moved` says an Entry
-/// already here changed its place, which is what `HistoryChanged` reports.
+/// `local_id` is the row the ingest landed on, which the caller needs because
+/// it is the only id that crosses the facade: the relay's id is what this path
+/// arrived with, and the shell has never heard of it.
+///
+/// Two facts beside it and not one, because three paths reach the same relay id
+/// and each owes the shell a different event. `first_insert` says an Entry is
+/// new here, and exactly one path may raise `EntryAdded` for it. `moved` says an
+/// Entry already here changed its place, which is what `HistoryChanged` reports.
 ///
 /// The pair is what tells a **Use** apart from the relay's echo of an Entry
 /// this device uploaded: both are repeat ingests of a row the cache holds, and
@@ -73,6 +77,7 @@ pub(crate) fn plaintext_sha256(text: &str) -> String {
 /// reorder that did not happen, and cost both shells a full refetch each time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stored {
+    pub local_id: i64,
     pub first_insert: bool,
     pub moved: bool,
 }
@@ -117,15 +122,122 @@ pub(crate) fn upsert_and_prune(conn: &Connection, e: NewCachedEntry<'_>, now_ms:
             e.created_at, e.last_use, e.device_id
         ],
     )?;
+    let local_id = tx.query_row(
+        "SELECT local_id FROM entries_cache WHERE user_id = ?1 AND relay_id = ?2",
+        params![e.user_id, e.relay_id],
+        |r| r.get(0),
+    )?;
     prune(&tx, e.user_id, now_ms)?;
     tx.commit()?;
     Ok(Stored {
+        local_id,
         first_insert: held.is_none(),
         moved: held.is_some_and(|was| was != e.last_use),
     })
 }
 
-/// Bring one user's cache back inside both caps.
+/// Store an Entry this device just captured, before the relay has named it.
+///
+/// Hands back the `local_id` the row now has, which is the handle everything
+/// above `storage/` uses for it and the handle the queued act carries.
+///
+/// **`created_at` and `last_use` are zero**, and stay zero until the relay
+/// stamps the act. There is one clock in this system and it is the relay's
+/// (ADR 0014): a provisional device timestamp would order this row against
+/// relay-stamped ones by a number no other device agrees with, and would then be
+/// silently overwritten. Zero is the same "not stamped yet" marker `last_use`
+/// already carries before its backfill runs. What orders the row meanwhile is
+/// its place in the queue.
+///
+/// **It does not prune**, and must not: the caps bound what the relay has
+/// ordered, and an act still owed to the relay is not competing for that room.
+/// Evicting one would destroy clipboard content that has reached nowhere else.
+pub(crate) fn insert_captured(
+    conn: &Connection,
+    user_id: &str,
+    ciphertext: &[u8],
+    plaintext: &str,
+    plaintext_sha256: &str,
+    device_id: &str,
+) -> Result<i64, AppError> {
+    conn.execute(
+        "INSERT INTO entries_cache
+            (user_id, relay_id, ciphertext, plaintext, plaintext_sha256, created_at, last_use, device_id)
+         VALUES (?1, NULL, ?2, ?3, ?4, 0, 0, ?5)",
+        params![user_id, ciphertext, plaintext, plaintext_sha256, device_id],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Attach what the relay recorded to the row a capture already created.
+///
+/// The reconciliation half of [`insert_captured`]: an update and never an
+/// insert, so the row keeps the `local_id` both shells are keying on. Reports
+/// zero when there is no such un-named row — the act was withdrawn while the
+/// upload was in flight, and its caller has to decide what to do about that.
+///
+/// Prunes, because the row has just joined the region the caps bound.
+pub(crate) fn attach_relay_id(
+    conn: &Connection,
+    user_id: &str,
+    local_id: i64,
+    relay_id: i64,
+    created_at: i64,
+    last_use: i64,
+    now_ms: i64,
+) -> Result<usize, AppError> {
+    let tx = conn.unchecked_transaction()?;
+    let n = tx.execute(
+        "UPDATE entries_cache
+            SET relay_id = ?3, created_at = ?4, last_use = ?5
+          WHERE user_id = ?1 AND local_id = ?2 AND relay_id IS NULL",
+        params![user_id, local_id, relay_id, created_at, last_use],
+    )?;
+    prune(&tx, user_id, now_ms)?;
+    tx.commit()?;
+    Ok(n)
+}
+
+/// The relay's id for one row, if the relay has taken the act that created it.
+pub(crate) fn relay_id_for(
+    conn: &Connection,
+    user_id: &str,
+    local_id: i64,
+) -> Result<Option<i64>, AppError> {
+    let id: Option<Option<i64>> = conn
+        .query_row(
+            "SELECT relay_id FROM entries_cache WHERE user_id = ?1 AND local_id = ?2",
+            params![user_id, local_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(id.flatten())
+}
+
+/// This device's id for a row the relay has named — the reverse resolution, for
+/// the paths that arrive holding the relay's number.
+pub(crate) fn local_id_for(
+    conn: &Connection,
+    user_id: &str,
+    relay_id: i64,
+) -> Result<Option<i64>, AppError> {
+    let id = conn
+        .query_row(
+            "SELECT local_id FROM entries_cache WHERE user_id = ?1 AND relay_id = ?2",
+            params![user_id, relay_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(id)
+}
+
+/// Bring the rows the relay has ordered back inside both caps.
+///
+/// **Un-flushed rows are exempt.** Both caps measure from `last_use`, and a row
+/// the relay has not stamped has none — it would age out on the write that
+/// stored it. More to the point, the caps exist to bound a *cache* of what the
+/// relay holds; an act still owed to the relay is undelivered content, and
+/// discarding it to protect a display invariant is the trade ADR 0014 refuses.
 ///
 /// `local_id` is the tiebreak rather than the relay's id, and has to be: it is
 /// the only number every row has. The migration copies an installed cache in
@@ -135,11 +247,12 @@ fn prune(conn: &Connection, user_id: &str, now_ms: i64) -> Result<(), AppError> 
     conn.execute(
         "DELETE FROM entries_cache
           WHERE user_id = ?1
+            AND relay_id IS NOT NULL
             AND (
               last_use < (?2 - ?3)
               OR local_id NOT IN (
                 SELECT local_id FROM entries_cache
-                WHERE user_id = ?1
+                WHERE user_id = ?1 AND relay_id IS NOT NULL
                 ORDER BY last_use DESC, local_id DESC
                 LIMIT ?4
               )
@@ -149,7 +262,11 @@ fn prune(conn: &Connection, user_id: &str, now_ms: i64) -> Result<(), AppError> 
     Ok(())
 }
 
-/// Record that an entry was used, without touching anything else about it.
+/// Record that an entry the relay has named was used, without touching anything
+/// else about it.
+///
+/// Keyed on `relay_id`, like [`upsert_and_prune`] and for the same reason: every
+/// caller is holding the answer to a relay call it just made.
 ///
 /// Deliberately does not prune. A use only ever *raises* one entry's Last Use,
 /// so the set of prunable rows can only shrink; prune stays on insert, where
@@ -174,6 +291,9 @@ pub(crate) fn set_last_use(
 /// same ciphertext. An **Undecryptable** row has no plaintext and therefore no
 /// hash, so it can never match.
 ///
+/// Answers the row's own id, which is the only one every match has: a capture
+/// the relay has not taken yet is exactly the case this has to recognise.
+///
 /// Ordered by Last Use so that, in the impossible-in-practice case of two rows
 /// holding the same text, the one already at the head is the one used.
 pub(crate) fn find_by_hash(
@@ -183,7 +303,7 @@ pub(crate) fn find_by_hash(
 ) -> Result<Option<i64>, AppError> {
     let id = conn
         .query_row(
-            "SELECT relay_id FROM entries_cache
+            "SELECT local_id FROM entries_cache
               WHERE user_id = ?1 AND plaintext_sha256 = ?2
               ORDER BY last_use DESC, local_id DESC LIMIT 1",
             params![user_id, sha256],
@@ -195,17 +315,20 @@ pub(crate) fn find_by_hash(
 
 /// One page of the History, last use first.
 ///
-/// `before` is the `(last_use, id)` of the last row of the previous page. It is
-/// a tuple and not an id because id is no longer the order: paging by it alone
+/// `before` is the `(last_use, local_id)` of the last row of the previous page.
+/// It is a tuple and not an id because id is not the order: paging by it alone
 /// would skip and repeat rows the moment anything was used.
+///
+/// The tiebreak is `local_id`, and every id here is one: it is the only number
+/// every row has, and a row that has not reached the relay still has to page.
 pub fn list_recent(conn: &Connection, user_id: &str, before: Option<(i64, i64)>, limit: i64) -> Result<Vec<CachedEntry>, AppError> {
     let limit = limit.clamp(1, MAX_PER_USER);
     let mut rows: Vec<CachedEntry> = if let Some((last_use, id)) = before {
         let mut stmt = conn.prepare(
             "SELECT user_id, local_id, relay_id, ciphertext, plaintext, created_at, last_use, device_id
              FROM entries_cache
-             WHERE user_id = ?1 AND (last_use < ?2 OR (last_use = ?2 AND relay_id < ?3))
-             ORDER BY last_use DESC, relay_id DESC LIMIT ?4"
+             WHERE user_id = ?1 AND (last_use < ?2 OR (last_use = ?2 AND local_id < ?3))
+             ORDER BY last_use DESC, local_id DESC LIMIT ?4"
         )?;
         let out = stmt.query_map(params![user_id, last_use, id, limit], map_row)?.collect::<Result<Vec<_>, _>>()?;
         out
@@ -214,7 +337,7 @@ pub fn list_recent(conn: &Connection, user_id: &str, before: Option<(i64, i64)>,
             "SELECT user_id, local_id, relay_id, ciphertext, plaintext, created_at, last_use, device_id
              FROM entries_cache
              WHERE user_id = ?1
-             ORDER BY last_use DESC, relay_id DESC LIMIT ?2"
+             ORDER BY last_use DESC, local_id DESC LIMIT ?2"
         )?;
         let out = stmt.query_map(params![user_id, limit], map_row)?.collect::<Result<Vec<_>, _>>()?;
         out
@@ -223,11 +346,11 @@ pub fn list_recent(conn: &Connection, user_id: &str, before: Option<(i64, i64)>,
     Ok(rows)
 }
 
-pub fn get_full(conn: &Connection, user_id: &str, relay_id: i64) -> Result<Option<String>, AppError> {
+pub fn get_full(conn: &Connection, user_id: &str, local_id: i64) -> Result<Option<String>, AppError> {
     let pt: Option<Option<String>> = conn
         .query_row(
-            "SELECT plaintext FROM entries_cache WHERE user_id = ?1 AND relay_id = ?2",
-            params![user_id, relay_id],
+            "SELECT plaintext FROM entries_cache WHERE user_id = ?1 AND local_id = ?2",
+            params![user_id, local_id],
             |r| r.get::<_, Option<String>>(0),
         )
         .optional()?;
@@ -253,10 +376,10 @@ pub(crate) fn mark_undecryptable(conn: &Connection, user_id: &str, relay_id: i64
     Ok(())
 }
 
-pub fn delete_one(conn: &Connection, user_id: &str, relay_id: i64) -> Result<usize, AppError> {
+pub fn delete_one(conn: &Connection, user_id: &str, local_id: i64) -> Result<usize, AppError> {
     let n = conn.execute(
-        "DELETE FROM entries_cache WHERE user_id = ?1 AND relay_id = ?2",
-        params![user_id, relay_id],
+        "DELETE FROM entries_cache WHERE user_id = ?1 AND local_id = ?2",
+        params![user_id, local_id],
     )?;
     Ok(n)
 }
@@ -285,17 +408,19 @@ mod tests {
     use crate::storage::open_in_memory;
 
     /// Ingest one relay-delivered entry. `id` is the relay's, which is the only
-    /// id this path knows: `local_id` is the cache's own answer.
-    fn ins(c: &Connection, user: &str, id: i64, pt: Option<&str>, ts: i64, now: i64) {
-        used(c, user, id, pt, ts, ts, now);
+    /// id this path knows; the answer is the row's own.
+    fn ins(c: &Connection, user: &str, id: i64, pt: Option<&str>, ts: i64, now: i64) -> i64 {
+        used(c, user, id, pt, ts, ts, now)
     }
 
-    fn used(c: &Connection, user: &str, id: i64, pt: Option<&str>, ts: i64, last_use: i64, now: i64) {
+    fn used(
+        c: &Connection, user: &str, id: i64, pt: Option<&str>, ts: i64, last_use: i64, now: i64,
+    ) -> i64 {
         let hash = pt.map(plaintext_sha256);
         upsert_and_prune(c, NewCachedEntry {
             user_id: user, relay_id: Some(id), ciphertext: b"ct", plaintext: pt,
             plaintext_sha256: hash.as_deref(), created_at: ts, last_use, device_id: "d1"
-        }, now).unwrap();
+        }, now).unwrap().local_id
     }
 
     fn ids(c: &Connection, user: &str) -> Vec<i64> {
@@ -303,7 +428,7 @@ mod tests {
     }
 
     fn cursor(row: &CachedEntry) -> (i64, i64) {
-        (row.last_use, row.relay_id.unwrap())
+        (row.last_use, row.local_id)
     }
 
     fn ids_of(rows: &[CachedEntry]) -> Vec<i64> {
@@ -474,15 +599,90 @@ mod tests {
     #[test]
     fn a_relay_id_is_unique_within_a_pairing_and_not_across_them() {
         let c = open_in_memory().unwrap();
-        ins(&c, "a", 1, Some("theirs"), 1, 9);
-        ins(&c, "b", 1, Some("mine"), 1, 9);
-        assert_eq!(get_full(&c, "a", 1).unwrap().as_deref(), Some("theirs"));
-        assert_eq!(get_full(&c, "b", 1).unwrap().as_deref(), Some("mine"));
+        let theirs = ins(&c, "a", 1, Some("theirs"), 1, 9);
+        let mine = ins(&c, "b", 1, Some("mine"), 1, 9);
+        assert_ne!(theirs, mine, "one relay id, two rows");
+        assert_eq!(get_full(&c, "a", theirs).unwrap().as_deref(), Some("theirs"));
+        assert_eq!(get_full(&c, "b", mine).unwrap().as_deref(), Some("mine"));
 
         // Re-ingesting the same pairing's same relay id updates that one row.
-        ins(&c, "a", 1, Some("theirs, again"), 2, 9);
+        assert_eq!(ins(&c, "a", 1, Some("theirs, again"), 2, 9), theirs);
         assert_eq!(list_recent(&c, "a", None, 10).unwrap().len(), 1);
-        assert_eq!(get_full(&c, "a", 1).unwrap().as_deref(), Some("theirs, again"));
+        assert_eq!(get_full(&c, "a", theirs).unwrap().as_deref(), Some("theirs, again"));
+    }
+
+    /*
+     * An Entry exists before the relay names it (ADR 0013), so a capture is a
+     * row from the moment it is made — findable, readable and deletable there,
+     * with no relay id and nothing the caps can measure.
+     */
+    #[test]
+    fn a_capture_is_a_row_before_the_relay_names_it() {
+        let c = open_in_memory().unwrap();
+        let hash = plaintext_sha256("offered offline");
+        let local_id =
+            insert_captured(&c, "u", b"sealed", "offered offline", &hash, "this-phone").unwrap();
+
+        let rows = list_recent(&c, "u", None, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].local_id, local_id);
+        assert_eq!(rows[0].relay_id, None, "the relay has not named it");
+        assert_eq!(rows[0].created_at, 0, "and has not stamped it either");
+        assert_eq!(rows[0].last_use, 0);
+        assert_eq!(rows[0].device_id, "this-phone");
+        assert_eq!(get_full(&c, "u", local_id).unwrap().as_deref(), Some("offered offline"));
+        assert_eq!(find_by_hash(&c, "u", &hash).unwrap(), Some(local_id));
+        assert_eq!(relay_id_for(&c, "u", local_id).unwrap(), None);
+
+        // The relay takes it: same row, same id, now stamped.
+        assert_eq!(attach_relay_id(&c, "u", local_id, 77, 5_000, 5_000, 9_999).unwrap(), 1);
+        let settled = list_recent(&c, "u", None, 10).unwrap();
+        assert_eq!(settled.len(), 1, "reconciliation, not insertion");
+        assert_eq!(settled[0].local_id, local_id);
+        assert_eq!(settled[0].relay_id, Some(77));
+        assert_eq!(settled[0].created_at, 5_000);
+        assert_eq!(relay_id_for(&c, "u", local_id).unwrap(), Some(77));
+        assert_eq!(local_id_for(&c, "u", 77).unwrap(), Some(local_id));
+
+        // And a second attempt reports nothing: the row is no longer un-named.
+        assert_eq!(attach_relay_id(&c, "u", local_id, 78, 6_000, 6_000, 9_999).unwrap(), 0);
+    }
+
+    /*
+     * The caps bound what the relay has ordered. An act still owed to the relay
+     * is undelivered clipboard content, and evicting one to protect a display
+     * invariant is the trade ADR 0014 refuses — so a hundred and one offline
+     * captures are a hundred and one rows.
+     */
+    #[test]
+    fn an_un_flushed_capture_is_never_evicted() {
+        let c = open_in_memory().unwrap();
+        let now = 100_000_000_000_i64;
+        let text = "the first offline copy";
+        let first =
+            insert_captured(&c, "u", b"sealed", text, &plaintext_sha256(text), "d").unwrap();
+        for i in 1..=MAX_PER_USER + 20 {
+            ins(&c, "u", i, None, now, now);
+        }
+        // Counted off the table rather than a page: `list_recent` clamps to the
+        // cap, and what is under test is what survives eviction.
+        assert_eq!(
+            get_full(&c, "u", first).unwrap().as_deref(),
+            Some(text),
+            "the un-flushed capture was evicted by rows the relay had already ordered"
+        );
+        let settled: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM entries_cache WHERE user_id = 'u' AND relay_id IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(settled, MAX_PER_USER, "and the settled region is still capped at a hundred");
+
+        // The age cap is the same rule: nothing to measure, nothing to evict.
+        ins(&c, "u", 9_999, None, now + MAX_AGE_MS * 2, now + MAX_AGE_MS * 2);
+        assert_eq!(get_full(&c, "u", first).unwrap().as_deref(), Some(text));
     }
 
     /// The local id is the cache's own, and does not become the relay's by

@@ -157,6 +157,10 @@ pub enum RecallSource {
 /// A pair and not an id, because id is no longer the order. Paging by it alone
 /// would skip and repeat rows the moment anything was used, and the id half is
 /// what keeps the order total when two entries share a millisecond.
+///
+/// `id` is [`Entry::id`] — this device's own id for the row, not the relay's.
+/// The relay's does not cross this facade at all, and a row that has not reached
+/// the relay has none to page by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 pub struct HistoryCursor {
     pub last_use: i64,
@@ -937,9 +941,7 @@ impl Sharepaste {
                 .next()
                 .ok_or_else(|| AppError::NotFound(format!("no entries for {user_id}")))?
         };
-        let entry_id = newest.relay_id.ok_or_else(|| {
-            AppError::NotFound("the newest entry has not reached the relay".into())
-        })?;
+        let entry_id = newest.local_id;
         let created_at = newest.created_at;
         // A NULL plaintext is an entry this device cannot decrypt. Handing back
         // the entry before it would be worse than failing: the person asked for
@@ -965,11 +967,20 @@ impl Sharepaste {
     }
 
     /// Delete one entry, on the relay and locally.
+    ///
+    /// `entry_id` is this device's own id for the row; the relay is told about
+    /// the id it assigned.
     pub async fn delete_entry(&self, user_id: &str, entry_id: i64) -> Result<(), AppError> {
         let m = self.registry.load_active_membership(user_id).await?;
         let server_url = m.server.base().to_string();
+        let relay_id = {
+            let conn = self.state.conn.lock().await;
+            entries_cache::relay_id_for(&conn, user_id, entry_id)?.ok_or_else(|| {
+                AppError::NotFound(format!("entry {entry_id} has not reached the relay"))
+            })?
+        };
         m.server
-            .delete_entry(entry_id)
+            .delete_entry(relay_id)
             .await
             .map_err(|e| e.explain_insecure_relay(&server_url))?;
         {
@@ -1117,10 +1128,16 @@ impl Sharepaste {
         let hash = entries_cache::plaintext_sha256(&text);
         let held = {
             let conn = self.state.conn.lock().await;
-            match entries_cache::find_by_hash(&conn, user_id, &hash)? {
-                Some(entry_id) => Held::Entry(entry_id),
-                None => match pending::find_by_hash(&conn, user_id, &hash)? {
-                    Some(rowid) => Held::Pending(rowid),
+            // **The queue first, and only then the cache.** An un-flushed
+            // capture is now both a row in `entries_cache` and an act in the
+            // queue, and only the queue answer is actionable: the entry has no
+            // relay id to record a use against, and re-copying it is the same
+            // act as copying it (ADR 0012). A settled entry misses here — its
+            // queued act is long gone — and falls through to the cache.
+            match pending::find_by_hash(&conn, user_id, &hash)? {
+                Some(rowid) => Held::Pending(rowid),
+                None => match entries_cache::find_by_hash(&conn, user_id, &hash)? {
+                    Some(entry_id) => Held::Entry(entry_id),
                     None => Held::Nothing,
                 },
             }
@@ -1151,7 +1168,16 @@ impl Sharepaste {
         pending::count(&conn, user_id)
     }
 
-    /// Encrypt, queue, report.
+    /// Encrypt, store the Entry, queue the act, report.
+    ///
+    /// **The Entry and the act go in together, in one transaction.** An Entry
+    /// exists from the moment of capture (ADR 0013), and the row is what the
+    /// queued act is *for*: a queue row with no entry would be an act nobody can
+    /// see or withdraw, and an entry with no queued act would be content that
+    /// never reaches the relay. Either half alone is a worse state than neither.
+    ///
+    /// `EntryAdded` fires here and nowhere else for a capture. The flush that
+    /// follows creates nothing and announces nothing.
     async fn enqueue_capture(
         &self,
         user_id: &str,
@@ -1160,14 +1186,43 @@ impl Sharepaste {
     ) -> Result<OfferOutcome, AppError> {
         let m = self.registry.load_active_membership(user_id).await?;
         let ciphertext = crate::crypto::encrypt(&m.user_key, user_id, text.as_bytes())?;
-        let count = {
+        let (entry, count) = {
             let conn = self.state.conn.lock().await;
+            // This device is the Entry's Origin, and the pairing row is where
+            // its id lives. Without one there is nothing to attribute the row
+            // to, which is a broken pairing rather than a capture to guess at.
+            let device_id = accounts::find(&conn, user_id)?
+                .ok_or_else(|| AppError::NotFound(format!("no pairing for {user_id}")))?
+                .device_id;
+            let tx = conn.unchecked_transaction()?;
+            let local_id = entries_cache::insert_captured(
+                &tx, user_id, &ciphertext, &text, plaintext_sha256, &device_id,
+            )?;
             let queued = pending::enqueue_capture(
-                &conn, user_id, &ciphertext, plaintext_sha256, crate::now_ms(),
+                &tx, user_id, local_id, &ciphertext, plaintext_sha256, crate::now_ms(),
             )?;
             warn_if_dropped(user_id, queued.dropped_oldest);
-            pending::count(&conn, user_id)?
+            let count = pending::count(&tx, user_id)?;
+            tx.commit()?;
+            let device_label =
+                devices::label_for(&conn, user_id, &device_id).unwrap_or_default();
+            let entry = Entry::new(
+                local_id,
+                user_id.to_string(),
+                Some(text),
+                // No relay stamp yet, and no device clock standing in for one:
+                // what orders this row is its place in the queue.
+                0,
+                0,
+                device_id,
+                device_label,
+            );
+            (entry, count)
         };
+        self.events.emit(CoreEvent::EntryAdded {
+            user_id: user_id.to_string(),
+            entry,
+        });
         self.events.emit(CoreEvent::PendingCount {
             user_id: user_id.to_string(),
             count,
@@ -1295,17 +1350,34 @@ impl UseRecorder {
     /// has one, and building a second is a second round trip for nothing.
     ///
     /// The relay's `last_use` is applied to the local row directly rather than
-    /// waited for on the echo — the rule [`crate::sync::uploader::Uploader`]
-    /// states for an Entry this device created, applied to a Use this device
-    /// made. The watermark is deliberately not advanced with it, for the same
-    /// reason: it means "everything up to here has been fetched", and this
-    /// device has fetched nothing.
+    /// waited for on the echo — the rule the uploader's reconciliation states
+    /// for an Entry this device created, applied to a Use this device made. The
+    /// watermark is deliberately not advanced with it, for the same reason: it
+    /// means "everything up to here has been fetched", and this device has
+    /// fetched nothing.
     async fn record_over(&self, user_id: &str, entry_id: i64, transport: &dyn SessionTransport) {
-        match transport.use_entry(entry_id).await {
+        // `entry_id` is this device's own; the relay has never heard of it. A
+        // row with no relay id is an act the relay has not taken yet, and a use
+        // of one is carried by the queue rather than by a route.
+        let relay_id = {
+            let conn = self.state.conn.lock().await;
+            match entries_cache::relay_id_for(&conn, user_id, entry_id) {
+                Ok(Some(relay_id)) => relay_id,
+                Ok(None) => {
+                    tracing::info!(entry_id, "this entry has not reached the relay; no use to record");
+                    return;
+                }
+                Err(e) => {
+                    tracing::warn!(err = %e, entry_id, "could not resolve this entry's relay id");
+                    return;
+                }
+            }
+        };
+        match transport.use_entry(relay_id).await {
             Ok(used) => {
                 let moved = {
                     let conn = self.state.conn.lock().await;
-                    match entries_cache::set_last_use(&conn, user_id, entry_id, used.last_use) {
+                    match entries_cache::set_last_use(&conn, user_id, relay_id, used.last_use) {
                         Ok(rows) => rows > 0,
                         // Logged rather than swallowed: a cache write that
                         // failed must not be indistinguishable from a use of an
@@ -1333,7 +1405,7 @@ impl UseRecorder {
             }
             Err(e) => {
                 tracing::warn!(err = %e, entry_id, "queuing a use the relay could not be told about");
-                if let Err(e) = self.queue(user_id, entry_id).await {
+                if let Err(e) = self.queue(user_id, entry_id, relay_id).await {
                     tracing::warn!(err = %e, entry_id, "and it could not be queued either");
                 }
             }
@@ -1342,10 +1414,14 @@ impl UseRecorder {
 
     /// Put a use in the pending queue, beside the captures, so an outage cannot
     /// reorder what happened during it.
-    async fn queue(&self, user_id: &str, entry_id: i64) -> Result<(), AppError> {
+    ///
+    /// Both ids travel: the relay is told about `relay_id`, and `entry_id` is the
+    /// row this device shows and orders the act against.
+    async fn queue(&self, user_id: &str, entry_id: i64, relay_id: i64) -> Result<(), AppError> {
         let count = {
             let conn = self.state.conn.lock().await;
-            let queued = pending::enqueue_use(&conn, user_id, entry_id, crate::now_ms())?;
+            let queued =
+                pending::enqueue_use(&conn, user_id, entry_id, relay_id, crate::now_ms())?;
             warn_if_dropped(user_id, queued.dropped_oldest);
             pending::count(&conn, user_id)?
         };
@@ -1386,11 +1462,8 @@ fn to_entries(
     rows.into_iter()
         .map(|r| {
             let device_label = labels.get(&r.device_id).cloned();
-            // The relay's id, because that is still what `Entry.id` means to a
-            // shell and to `delete_entry`. Every row has one: the only writer is
-            // the relay-delivered ingest path.
             Entry::new(
-                r.relay_id.unwrap_or(r.local_id),
+                r.local_id,
                 r.user_id,
                 r.plaintext,
                 r.created_at,
@@ -1765,8 +1838,10 @@ mod tests {
         rig_at("http://127.0.0.1:1")
     }
 
-    /// Put one entry in the cache exactly the way a backfill would.
-    fn seed_entry(sp: &Sharepaste, id: i64, plaintext: &str) {
+    /// Put one entry in the cache exactly the way a backfill would, and hand back
+    /// this device's id for it — `id` is the relay's, which no longer crosses the
+    /// facade.
+    fn seed_entry(sp: &Sharepaste, id: i64, plaintext: &str) -> i64 {
         sp.runtime.block_on(async {
             let conn = sp.state.conn.lock().await;
             crate::sync::decryptor::ingest(
@@ -1776,8 +1851,10 @@ mod tests {
                 &encrypted_row(id, "u", plaintext, "d"),
                 crate::now_ms(),
             )
-            .unwrap();
-        });
+            .unwrap()
+            .stored
+            .local_id
+        })
     }
 
     /*
@@ -1852,7 +1929,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(out.text, "the newest");
-        assert_eq!(out.entry_id, 7);
+        assert_eq!(
+            out.entry_id, 1,
+            "the id is this device's own; the relay's 7 does not cross the facade"
+        );
         assert_eq!(out.source, RecallSource::Relay);
         assert_eq!(relay.asked_since(), vec![0], "and it really did ask");
         assert_eq!(clipboard.writes(), vec!["the newest".to_string()]);
@@ -2037,9 +2117,96 @@ mod tests {
         assert_eq!(offer("https://example.test\n"), OfferOutcome::Queued { pending: 2 });
     }
 
+    /*
+     * ADR 0013, at the seam a shell sees. An Entry exists from the moment of
+     * capture: it is a row in the History with its preview, its plaintext and
+     * this device as its Origin, before any relay has been reached — the whole
+     * reason the local history stopped lying about what the device holds.
+     *
+     * `EntryAdded` fires here, exactly once. Nothing about the later flush
+     * creates an Entry, so nothing about it announces one.
+     */
+    #[test]
+    fn an_offline_capture_is_in_the_history_before_any_relay_is_reached() {
+        let Rig { sp, sink, .. } = rig();
+        assert_eq!(
+            sp.runtime.block_on(sp.offer("u", "copied with no relay in reach")).unwrap(),
+            OfferOutcome::Queued { pending: 1 }
+        );
+
+        let history = sp.runtime.block_on(sp.list_history("u", None, 50)).unwrap();
+        assert_eq!(history.len(), 1, "the capture is a row, not just a queued act");
+        assert_eq!(history[0].preview, "copied with no relay in reach");
+        assert_eq!(history[0].plaintext.as_deref(), Some("copied with no relay in reach"));
+        assert!(!history[0].undecryptable);
+        assert_eq!(history[0].device_id, "d", "this device is the Origin");
+        assert_eq!(
+            sp.runtime.block_on(sp.read_entry("u", history[0].id)).unwrap().as_deref(),
+            Some("copied with no relay in reach"),
+            "and it reads by the id the row carries"
+        );
+
+        let announced = sink.entries();
+        assert_eq!(announced.len(), 1, "one capture is one EntryAdded, at capture");
+        assert_eq!(announced[0].id, history[0].id, "under the same id the list uses");
+        assert_eq!(announced[0].preview, "copied with no relay in reach");
+
+        // The act is queued against that row, which is what lets the flush find
+        // it again and what lets it be withdrawn.
+        let queued = sp.runtime.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            pending::head(&conn, "u").unwrap().unwrap()
+        });
+        assert_eq!(queued.local_entry_id, Some(history[0].id));
+    }
+
+    /*
+     * A repeat copy of something still queued is the same act as copying it
+     * (ADR 0012), and that has to keep holding now the un-flushed capture is
+     * also a row: the row has no relay id to record a use against, so the queue
+     * carries it. One row, one act, moved rather than multiplied.
+     */
+    #[test]
+    fn re_copying_an_un_flushed_capture_moves_its_act_and_adds_no_row() {
+        let Rig { sp, .. } = rig();
+        sp.runtime.block_on(sp.offer("u", "first")).unwrap();
+        sp.runtime.block_on(sp.offer("u", "second")).unwrap();
+        assert_eq!(
+            sp.runtime.block_on(sp.offer("u", "first")).unwrap(),
+            OfferOutcome::Recognised { pending: 2 },
+            "recognised, and the queue is no deeper"
+        );
+        assert_eq!(
+            sp.runtime.block_on(sp.list_history("u", None, 50)).unwrap().len(),
+            2,
+            "and no second row for the same text"
+        );
+        let head = sp.runtime.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            pending::head(&conn, "u").unwrap().unwrap()
+        });
+        assert_eq!(
+            head_plaintext(&head),
+            "second",
+            "`second` is at the head now: re-copying `first` sent its act to the back"
+        );
+    }
+
+    /// The plaintext of a queued capture, decrypted the way the relay's echo of
+    /// it would be. The queue holds ciphertext, and ciphertext cannot be
+    /// compared: `crypto::encrypt` draws a fresh nonce every call.
+    fn head_plaintext(head: &pending::PendingUpload) -> String {
+        let pending::PendingKind::Capture(ciphertext) = &head.kind else {
+            panic!("expected a queued capture at the head");
+        };
+        let plain = crate::crypto::decrypt(&crate::testing::test_user_key(), "u", ciphertext)
+            .expect("the queue holds what this pairing's key sealed");
+        String::from_utf8(plain).unwrap()
+    }
+
     /// Put one entry in the cache with an explicit age, so a use stamped from
-    /// the clock can be shown to move it.
-    fn seed_entry_at(sp: &Sharepaste, id: i64, plaintext: &str, at: i64) {
+    /// the clock can be shown to move it. Answers this device's id for it.
+    fn seed_entry_at(sp: &Sharepaste, id: i64, plaintext: &str, at: i64) -> i64 {
         let mut row = encrypted_row(id, "u", plaintext, "d");
         row.created_at = at;
         row.last_use = at;
@@ -2052,8 +2219,10 @@ mod tests {
                 &row,
                 crate::now_ms(),
             )
-            .unwrap();
-        });
+            .unwrap()
+            .stored
+            .local_id
+        })
     }
 
     fn history_ids(sp: &Sharepaste) -> Vec<i64> {
@@ -2354,7 +2523,7 @@ mod tests {
 
         until(|| !sink.entries().is_empty());
         let entry = sink.entries().remove(0);
-        assert_eq!(entry.id, 9);
+        assert_eq!(entry.id, 1, "this device's id for the row, not the relay's 9");
         assert!(entry.undecryptable, "explicit on the event, not inferred from the preview");
         assert_eq!(entry.preview, "");
         sp.stop_session("u");
@@ -2400,7 +2569,7 @@ mod tests {
         sp.stop_session("u");
 
         let from_cache = from_the_query.first().expect("the live frame was cached");
-        assert_eq!(from_cache.id, 4);
+        assert_eq!(from_cache.id, on_the_event.id, "one Entry, one id, both paths");
         assert_eq!(
             from_cache.preview, on_the_event.preview,
             "one Entry, two paths, one Preview — the whole point of the split"
@@ -2487,7 +2656,8 @@ mod tests {
     #[test]
     fn an_unreachable_cleartext_relay_explains_itself() {
         let Rig { sp, .. } = rig_at("http://127.0.0.1:1");
-        let err = sp.runtime.block_on(sp.delete_entry("u", 1)).unwrap_err();
+        let local_id = seed_entry(&sp, 1, "something to delete");
+        let err = sp.runtime.block_on(sp.delete_entry("u", local_id)).unwrap_err();
         let AppError::InsecureRelay(msg) = err else {
             panic!("expected InsecureRelay, got {err:?}");
         };
@@ -2526,9 +2696,7 @@ mod tests {
         assert!(pairings[0].is_active);
 
         assert_eq!(rt.block_on(sp.get_contact("u")).unwrap().last_contact_at, None);
-        assert!(rt.block_on(sp.get_settings()).unwrap().capture_enabled);
-
-        seed_entry(&sp, 4, "a cached entry");
+        let local_id = seed_entry(&sp, 4, "a cached entry");
         let history = rt.block_on(sp.list_history("u", None, 50)).unwrap();
         assert_eq!(history.len(), 1);
         assert!(!history[0].undecryptable);
@@ -2536,10 +2704,10 @@ mod tests {
         let cursor = HistoryCursor { last_use: tail.last_use, id: tail.id };
         assert!(rt.block_on(sp.list_history("u", Some(cursor), 50)).unwrap().is_empty());
         assert_eq!(
-            rt.block_on(sp.read_entry("u", 4)).unwrap().as_deref(),
+            rt.block_on(sp.read_entry("u", local_id)).unwrap().as_deref(),
             Some("a cached entry")
         );
-        rt.block_on(sp.recall("u", 4)).unwrap();
+        rt.block_on(sp.recall("u", local_id)).unwrap();
         assert_eq!(clipboard.writes(), vec!["a cached entry".to_string()]);
 
         assert!(matches!(

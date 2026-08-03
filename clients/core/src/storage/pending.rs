@@ -25,6 +25,13 @@ pub(crate) struct PendingUpload {
     pub(crate) rowid: i64,
     pub(crate) user_id: String,
     pub(crate) kind: PendingKind,
+    /// The entry this act belongs to: the row a capture created, or the row a
+    /// use acts on.
+    ///
+    /// What lets a queued act be found from its entry, and what the flush
+    /// reconciles a relay id onto. `None` only on a row a database written
+    /// before this column existed left behind.
+    pub(crate) local_entry_id: Option<i64>,
     pub(crate) captured_at: i64,
     pub(crate) attempts: i64,
     pub(crate) last_error: Option<String>,
@@ -55,6 +62,7 @@ pub struct EnqueueResult {
 pub fn enqueue_capture(
     conn: &Connection,
     user_id: &str,
+    local_entry_id: i64,
     ciphertext: &[u8],
     plaintext_sha256: &str,
     captured_at: i64,
@@ -62,13 +70,17 @@ pub fn enqueue_capture(
     enqueue(
         conn,
         user_id,
-        "INSERT INTO pending_uploads (user_id, kind, ciphertext, plaintext_sha256, captured_at)
-         VALUES (?1, 'capture', ?2, ?3, ?4)",
-        params![user_id, ciphertext, plaintext_sha256, captured_at],
+        "INSERT INTO pending_uploads
+            (user_id, kind, local_entry_id, ciphertext, plaintext_sha256, captured_at)
+         VALUES (?1, 'capture', ?2, ?3, ?4, ?5)",
+        params![user_id, local_entry_id, ciphertext, plaintext_sha256, captured_at],
     )
 }
 
 /// Queue a **Use** of an Entry, because the relay could not be reached.
+///
+/// Carries both ids the act needs: `entry_id` is what the relay is told about,
+/// `local_entry_id` is the row this device shows and orders.
 ///
 /// The relay stamps it on arrival, exactly as it already stamps a pending
 /// capture: one clock in the system, and the flush order is what preserves what
@@ -76,28 +88,34 @@ pub fn enqueue_capture(
 pub(crate) fn enqueue_use(
     conn: &Connection,
     user_id: &str,
-    entry_id: i64,
+    local_entry_id: i64,
+    relay_entry_id: i64,
     at: i64,
 ) -> Result<EnqueueResult, AppError> {
     enqueue(
         conn,
         user_id,
-        "INSERT INTO pending_uploads (user_id, kind, entry_id, captured_at)
-         VALUES (?1, 'use', ?2, ?3)",
-        params![user_id, entry_id, at],
+        "INSERT INTO pending_uploads (user_id, kind, entry_id, local_entry_id, captured_at)
+         VALUES (?1, 'use', ?2, ?3, ?4)",
+        params![user_id, relay_entry_id, local_entry_id, at],
     )
 }
 
+/// Insert one act and bring the queue back inside its cap.
+///
+/// **No transaction of its own**, deliberately: a capture queues its act inside
+/// the same transaction that inserts the Entry it belongs to, and SQLite has no
+/// nested `BEGIN`. Nothing here needs one — a crash between the insert and the
+/// eviction leaves the queue one row over a cap the next enqueue trims anyway.
 fn enqueue(
     conn: &Connection,
     user_id: &str,
     insert: &str,
     args: &[&dyn rusqlite::ToSql],
 ) -> Result<EnqueueResult, AppError> {
-    let tx = conn.unchecked_transaction()?;
-    tx.execute(insert, args)?;
-    let rowid = tx.last_insert_rowid();
-    let dropped_oldest = tx.execute(
+    conn.execute(insert, args)?;
+    let rowid = conn.last_insert_rowid();
+    let dropped_oldest = conn.execute(
         "DELETE FROM pending_uploads
           WHERE user_id = ?1
             AND rowid NOT IN (
@@ -108,13 +126,13 @@ fn enqueue(
             )",
         params![user_id, MAX_PER_USER],
     )?;
-    tx.commit()?;
     Ok(EnqueueResult { rowid, dropped_oldest })
 }
 
 pub(crate) fn head(conn: &Connection, user_id: &str) -> Result<Option<PendingUpload>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT rowid, user_id, kind, entry_id, ciphertext, captured_at, attempts, last_error
+        "SELECT rowid, user_id, kind, entry_id, ciphertext, captured_at, attempts, last_error,
+                local_entry_id
          FROM pending_uploads
          WHERE user_id = ?1
          ORDER BY rowid ASC LIMIT 1"
@@ -132,6 +150,7 @@ pub(crate) fn head(conn: &Connection, user_id: &str) -> Result<Option<PendingUpl
                 rowid: r.get(0)?,
                 user_id: r.get(1)?,
                 kind,
+                local_entry_id: r.get(8)?,
                 captured_at: r.get(5)?,
                 attempts: r.get(6)?,
                 last_error: r.get(7)?,
@@ -180,8 +199,9 @@ pub(crate) fn find_by_hash(
 pub(crate) fn requeue_to_back(conn: &Connection, rowid: i64, at: i64) -> Result<(), AppError> {
     let tx = conn.unchecked_transaction()?;
     let moved = tx.execute(
-        "INSERT INTO pending_uploads (user_id, kind, entry_id, ciphertext, plaintext_sha256, captured_at)
-         SELECT user_id, kind, entry_id, ciphertext, plaintext_sha256, ?2
+        "INSERT INTO pending_uploads
+            (user_id, kind, entry_id, local_entry_id, ciphertext, plaintext_sha256, captured_at)
+         SELECT user_id, kind, entry_id, local_entry_id, ciphertext, plaintext_sha256, ?2
            FROM pending_uploads WHERE rowid = ?1",
         params![rowid, at],
     )?;
@@ -216,8 +236,11 @@ mod tests {
     use crate::storage::entries_cache::plaintext_sha256;
     use crate::storage::open_in_memory;
 
+    /// A capture whose local entry id is derived from the text, so a test can
+    /// assert the link without threading a cache insert through every case.
     fn capture(c: &Connection, user: &str, text: &str, at: i64) -> EnqueueResult {
-        enqueue_capture(c, user, text.as_bytes(), &plaintext_sha256(text), at).unwrap()
+        enqueue_capture(c, user, text.len() as i64, text.as_bytes(), &plaintext_sha256(text), at)
+            .unwrap()
     }
 
     fn kinds(c: &Connection, user: &str) -> Vec<PendingKind> {
@@ -256,7 +279,7 @@ mod tests {
     fn captures_and_uses_drain_in_the_order_they_were_made() {
         let c = open_in_memory().unwrap();
         capture(&c, "u", "first", 1);
-        enqueue_use(&c, "u", 42, 2).unwrap();
+        enqueue_use(&c, "u", 9, 42, 2).unwrap();
         capture(&c, "u", "second", 3);
 
         assert_eq!(
@@ -293,7 +316,7 @@ mod tests {
     fn find_by_hash_matches_a_queued_capture_and_never_a_use() {
         let c = open_in_memory().unwrap();
         capture(&c, "u", "hello", 1);
-        enqueue_use(&c, "u", 7, 2).unwrap();
+        enqueue_use(&c, "u", 9, 7, 2).unwrap();
         assert_eq!(find_by_hash(&c, "u", &plaintext_sha256("hello")).unwrap(), Some(1));
         assert_eq!(find_by_hash(&c, "u", &plaintext_sha256("hello\n")).unwrap(), None);
         assert_eq!(find_by_hash(&c, "other", &plaintext_sha256("hello")).unwrap(), None);
@@ -316,6 +339,23 @@ mod tests {
                 PendingKind::Capture(b"first".to_vec()),
             ]
         );
+    }
+
+    /// Both kinds name the entry they belong to, and the link survives a
+    /// requeue: tickets that find an act from its row depend on it.
+    #[test]
+    fn both_kinds_carry_the_entry_they_belong_to() {
+        let c = open_in_memory().unwrap();
+        enqueue_capture(&c, "u", 11, b"ct", &plaintext_sha256("ct"), 1).unwrap();
+        assert_eq!(head(&c, "u").unwrap().unwrap().local_entry_id, Some(11));
+        ack(&c, head(&c, "u").unwrap().unwrap().rowid).unwrap();
+
+        let queued = enqueue_use(&c, "u", 12, 500, 2).unwrap();
+        assert_eq!(head(&c, "u").unwrap().unwrap().local_entry_id, Some(12));
+        requeue_to_back(&c, queued.rowid, 30).unwrap();
+        let moved = head(&c, "u").unwrap().unwrap();
+        assert_eq!(moved.local_entry_id, Some(12), "the link is a fresh act's too");
+        assert_eq!(moved.kind, PendingKind::Use(500), "and so is the relay's id");
     }
 
     /// The moved pending is a fresh act, so it is still recognisable and no

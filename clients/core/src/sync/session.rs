@@ -528,12 +528,12 @@ pub(crate) fn spawn_session(
     spawn.spawn(run_sse_loop(
         ctx.clone(),
         transport.clone(),
-        user_key.clone(),
+        user_key,
         cancel.clone(),
         upload_trigger.clone(),
     ));
     // Pending-queue uploader on its own task.
-    spawn.spawn(run_uploader(ctx, transport, user_key, cancel, upload_trigger));
+    spawn.spawn(run_uploader(ctx, transport, cancel, upload_trigger));
 }
 
 /// Fetch everything past this pairing's watermark and ingest it.
@@ -695,23 +695,29 @@ async fn run_sse_loop(
                                         devices::label_for(&conn, &ctx.user_id, &device_id)
                                             .unwrap_or_default();
                                     // `EntryAdded` only when the cache did not
-                                    // already hold this id, and `HistoryChanged`
-                                    // only when a row it did hold changed place.
-                                    // Three paths reach the same id and the two
-                                    // facts keep them apart: the uploader caches
-                                    // Entries this device created, so the relay's
-                                    // echo of one arrives here as a repeat ingest
-                                    // that moved nothing — announcing it would be
-                                    // a duplicate row on screen, and reporting a
-                                    // reorder would cost both shells a refetch
-                                    // for something that did not happen. A
-                                    // **Use** is the repeat ingest that *did*
-                                    // move the row. The watermark advances for
-                                    // all of them: that is about what has been
-                                    // *fetched*.
+                                    // already hold this relay id, and
+                                    // `HistoryChanged` only when a row it did
+                                    // hold changed place. Three paths reach the
+                                    // same relay id and the two facts keep them
+                                    // apart: an Entry this device captured is
+                                    // already a row and already announced, so
+                                    // the relay's echo of one arrives here as a
+                                    // repeat ingest that moved nothing —
+                                    // announcing it would be a duplicate row on
+                                    // screen, and reporting a reorder would cost
+                                    // both shells a refetch for something that
+                                    // did not happen. A **Use** is the repeat
+                                    // ingest that *did* move the row. The
+                                    // watermark advances for all of them: that
+                                    // is about what has been *fetched*.
+                                    //
+                                    // The id on the event is the row's own, not
+                                    // the relay's: the relay's does not cross
+                                    // the facade, and both shells key their rows
+                                    // on this one.
                                     let added = out.stored.first_insert.then(|| {
                                         Entry::new(
-                                            id,
+                                            out.stored.local_id,
                                             ctx.user_id.clone(),
                                             out.plaintext,
                                             created_at,
@@ -740,13 +746,23 @@ async fn run_sse_loop(
                         }
                     }
                     Some(sse::ServerEvent::Delete { id }) => {
-                        {
+                        // The frame names the relay's id; the shells know the
+                        // row by its own, so it has to be resolved before the
+                        // row is gone.
+                        let local_id = {
                             let conn = ctx.state.conn.lock().await;
-                            let _ = entries_cache::delete_one(&conn, &ctx.user_id, id);
+                            let local_id =
+                                entries_cache::local_id_for(&conn, &ctx.user_id, id).ok().flatten();
+                            if let Some(local_id) = local_id {
+                                let _ = entries_cache::delete_one(&conn, &ctx.user_id, local_id);
+                            }
+                            local_id
+                        };
+                        if let Some(entry_id) = local_id {
+                            ctx.events.emit(CoreEvent::EntryDeleted {
+                                user_id: ctx.user_id.clone(), entry_id,
+                            });
                         }
-                        ctx.events.emit(CoreEvent::EntryDeleted {
-                            user_id: ctx.user_id.clone(), entry_id: id,
-                        });
                     }
                 }
             }
@@ -771,10 +787,12 @@ async fn run_sse_loop(
 }
 
 /// Drain the pending queue for as long as the session lives.
+///
+/// No user key: the uploader reconciles what the relay recorded onto rows that
+/// already exist, and never decrypts anything.
 async fn run_uploader(
     ctx: SessionCtx,
     transport: Arc<dyn SessionTransport>,
-    user_key: UserKey,
     cancel: CancellationToken,
     upload_trigger: Arc<Notify>,
 ) {
@@ -784,10 +802,6 @@ async fn run_uploader(
         transport: Arc::new(UploadVia(transport)),
         trigger: upload_trigger.clone(),
         events: ctx.events.clone(),
-        // So an Entry this device uploaded reaches this device's own cache
-        // without waiting for the relay to echo it back — see
-        // `Uploader::cache_own_entry`.
-        user_key,
     };
     // Fire trigger once to flush whatever might already be queued from a previous run.
     upload_trigger.notify_one();
