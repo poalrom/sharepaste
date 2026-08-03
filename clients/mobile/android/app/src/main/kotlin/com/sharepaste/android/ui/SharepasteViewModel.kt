@@ -543,6 +543,29 @@ class SharepasteViewModel(
         }
     }
 
+    /**
+     * Put one refused act back in the queue.
+     *
+     * A fresh act and not a retry (ADR 0015): it goes to the back of the queue,
+     * so the Entry leads the History again and carries nothing forward from the
+     * refusal. Not a **Use** — the Relay never took the act, which is what a
+     * refusal means, so there is no relay record for one to move.
+     *
+     * **Nothing is patched here.** The row leaves the refused region, which
+     * reorders the list, so the core raises `HistoryChanged` and the refetch
+     * above is what clears the reason. Clearing it optimistically would say the
+     * queue had taken the act back before the queue was asked.
+     */
+    fun resend(entry: Entry) {
+        viewModelScope.launch {
+            try {
+                repo.resend(entry.userId, entry.id)
+            } catch (e: AppException) {
+                raise(Notice.Failed(R.string.resend_failed, e.explain()))
+            }
+        }
+    }
+
     fun dismissNotice() {
         _state.update { it.copy(notice = null) }
     }

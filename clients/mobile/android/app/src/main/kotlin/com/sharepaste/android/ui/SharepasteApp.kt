@@ -65,6 +65,13 @@ class AppActions(
     val offerClipboard: () -> Unit,
     val recall: (Entry) -> Unit,
     val deleteEntry: (Entry) -> Unit,
+    /**
+     * Put a refused act back in the queue. Only a refused row may call it.
+     *
+     * On the **Viewed** Pairing, like [recall] and for the same reason: the
+     * queue this acts on is the one the row is a row of.
+     */
+    val resend: (Entry) -> Unit,
     val dismissNotice: () -> Unit,
     // -- the Pairings screen ------------------------------------------------
     val openPairings: () -> Unit,
@@ -118,6 +125,7 @@ fun appActions(
     offerClipboard = model::offerClipboard,
     recall = model::recall,
     deleteEntry = model::deleteEntry,
+    resend = model::resend,
     dismissNotice = model::dismissNotice,
     openPairings = model::openPairings,
     openHistory = model::openHistory,

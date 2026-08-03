@@ -164,6 +164,7 @@ fun HistoryScreen(
                     animatePlacement = settled,
                     onRecall = actions.recall,
                     onDelete = actions.deleteEntry,
+                    onResend = actions.resend,
                 )
             }
         }
@@ -505,6 +506,7 @@ private fun LazyListScope.entryRows(
     animatePlacement: Boolean,
     onRecall: (Entry) -> Unit,
     onDelete: (Entry) -> Unit,
+    onResend: (Entry) -> Unit,
 ) {
     itemsIndexed(entries, key = { _, entry -> entry.id }) { index, entry ->
         // Keyed above, so a reorder is identity-tracked and no row swaps its
@@ -515,12 +517,20 @@ private fun LazyListScope.entryRows(
             placementSpec = if (animatePlacement) RowPlacement else null,
         )
         if (entry.undecryptable) {
-            UndecryptableRow(entry, onDelete, placed)
+            UndecryptableRow(entry, onDelete, onResend, placed)
         } else {
             // **Positional, not the newest.** The Filter can hide whatever was
             // at the head, and the marked row has to be the row `RECALL FIRST`
             // will hand over or the mark is a lie. The two read the same list.
-            EntryRow(entry, ownDeviceId, first = index == 0, onRecall, onDelete, placed)
+            EntryRow(
+                entry = entry,
+                ownDeviceId = ownDeviceId,
+                first = index == 0,
+                onRecall = onRecall,
+                onDelete = onDelete,
+                onResend = onResend,
+                modifier = placed,
+            )
         }
     }
 }
@@ -547,6 +557,7 @@ private fun EntryRow(
     first: Boolean,
     onRecall: (Entry) -> Unit,
     onDelete: (Entry) -> Unit,
+    onResend: (Entry) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val swipe = rememberSwipeToDismissBoxState()
@@ -585,7 +596,28 @@ private fun EntryRow(
         Column(
             Modifier
                 .background(Fui.Panel)
-                .then(if (first) Modifier.background(Fui.Active) else Modifier),
+                // **One background slot, and Pending takes it.** It is the
+                // [PendingReadout] band's own fill, so the band stops being a
+                // statement about something offscreen and becomes the head of a
+                // region that is on it — one that retreats from the bottom up as
+                // the uploader drains, which is the flush order shown for
+                // nothing.
+                //
+                // Row 0's cyan wash yields to it rather than stacking: 12% cyan
+                // under 16% amber composites to a green nobody chose, and
+                // offline row 0 is *always* also pending, so that would be the
+                // ordinary case and not a corner. Nothing is lost, because the
+                // two facts are drawn in different places — the 2dp edge inside
+                // this Column and the [Fui.TextPrimary] Preview say which row
+                // `RECALL FIRST` acts on, the field says the act is still owed.
+                // A left edge and a background do not compete.
+                .then(
+                    when {
+                        entry.pending -> Modifier.background(Fui.AmberA16)
+                        first -> Modifier.background(Fui.Active)
+                        else -> Modifier
+                    },
+                ),
         ) {
             Row(
                 modifier = Modifier
@@ -645,6 +677,7 @@ private fun EntryRow(
                     )
                 }
             }
+            entry.refusedReason?.let { RefusalLine(entry, it, onResend) }
             Hairline(color = Fui.CyanA08)
         }
     }
@@ -707,9 +740,21 @@ private fun DeleteBehindTheRow(entry: Entry, uncovered: Boolean, onDelete: (Entr
  * be where they are looking, saying no, with the marker beside it as the reason.
  * And Delete is the one thing a person can actually do with the row, so it is
  * not put behind a gesture they would have to discover.
+ *
+ * **No amber here, and a [RefusalLine] all the same.** Undecryptable and Pending
+ * are orthogonal, and this row has one background: the alert keeps it, because a
+ * missing key is a fact about the row itself while the queue is a fact about
+ * where it is going. What the tint would have carried is only ever "it is still
+ * owed" — but a *refused* act is owed and stuck, and the only place to say so and
+ * to offer the way out is the row it belongs to.
  */
 @Composable
-private fun UndecryptableRow(entry: Entry, onDelete: (Entry) -> Unit, modifier: Modifier = Modifier) {
+private fun UndecryptableRow(
+    entry: Entry,
+    onDelete: (Entry) -> Unit,
+    onResend: (Entry) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Column(modifier.testTag(entryRowTag(entry.id))) {
         Row(
             modifier = Modifier
@@ -754,7 +799,57 @@ private fun UndecryptableRow(entry: Entry, onDelete: (Entry) -> Unit, modifier: 
                 modifier = Modifier.testTag(entryDeleteTag(entry.id)),
             )
         }
+        entry.refusedReason?.let { RefusalLine(entry, it, onResend) }
         Hairline(color = Fui.CyanA08)
+    }
+}
+
+/**
+ * What the Relay said, and the way to ask it again.
+ *
+ * A **second line** rather than the trailing slot, because the row has one slot
+ * and it keeps Recall: a refused capture's text is stranded on this device, and
+ * putting it somewhere else is the only reason anybody offered it. The extra
+ * height is the row asking for something, and only a refused row asks.
+ *
+ * The reason is [Entry.refusedReason] verbatim — the Relay's own sentence,
+ * neither re-cased nor re-worded, the rule an Origin follows too. It is drawn in
+ * alert on a field that stays amber, and the pair is the whole statement: a
+ * Refused act has left the queue so that nothing waits behind it, and it is
+ * still owed and still on this phone until this is pressed or the row is
+ * deleted (ADR 0015).
+ *
+ * Ends on [Fui.RowInset] so `RESEND` lands in the column every other row's
+ * control is in. It starts on the screen's gutter rather than under the Preview,
+ * because it is a statement about the row and not a continuation of its text.
+ */
+@Composable
+private fun RefusalLine(entry: Entry, reason: String, onResend: (Entry) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(Fui.Target)
+            .padding(start = Fui.Gutter, end = Fui.RowInset),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.entry_refused, reason),
+            style = Fui.Micro,
+            color = Fui.Alert400,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).testTag(entryRefusedTag(entry.id)),
+        )
+        // Outlined, not solid. The solid one on a row is row 0's Recall, and two
+        // emitters on a surface is none — a Resend is what to do about a refusal,
+        // not what the person came to this screen for.
+        FuiButton(
+            text = stringResource(R.string.entry_resend),
+            onClick = { onResend(entry) },
+            accent = Accent.Alert,
+            modifier = Modifier.testTag(entryResendTag(entry.id)),
+        )
     }
 }
 
@@ -943,3 +1038,14 @@ fun entryRecallTag(id: Long) = "entry-recall-$id"
  * a person can do with it.
  */
 fun entryDeleteTag(id: Long) = "entry-delete-$id"
+
+/**
+ * The Relay's own words about the act this row still owes.
+ *
+ * On a refused row and nowhere else, on either kind of row: an Entry can be
+ * sealed and refused at once, and both facts have somewhere to be here.
+ */
+fun entryRefusedTag(id: Long) = "entry-refused-$id"
+
+/** The way back into the queue. Only a refused row has one. */
+fun entryResendTag(id: Long) = "entry-resend-$id"

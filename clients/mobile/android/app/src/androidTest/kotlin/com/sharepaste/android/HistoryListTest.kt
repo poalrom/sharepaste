@@ -2,11 +2,16 @@ package com.sharepaste.android
 
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PixelMap
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -40,6 +45,8 @@ import com.sharepaste.android.ui.entryDeleteTag
 import com.sharepaste.android.ui.entryOriginTag
 import com.sharepaste.android.ui.entryPreviewTag
 import com.sharepaste.android.ui.entryRecallTag
+import com.sharepaste.android.ui.entryRefusedTag
+import com.sharepaste.android.ui.entryResendTag
 import com.sharepaste.android.ui.entryRowTag
 import com.sharepaste.android.ui.entryUndecryptableTag
 import com.sharepaste.android.ui.filtered
@@ -116,6 +123,9 @@ class HistoryListTest {
     /** Every Entry the verb bar or a row asked to have recalled, in order. */
     private val recalled = mutableListOf<Long>()
 
+    /** Every refused Entry a row's `RESEND` asked to have put back, in order. */
+    private val resent = mutableListOf<Long>()
+
     /** What the Filter field was last set to, so a `✕` can be read back. */
     private val typed = mutableListOf<String>()
 
@@ -144,6 +154,7 @@ class HistoryListTest {
                         setFilter = { typed += it },
                         recall = { recalled += it.id },
                         deleteEntry = { deleted += it.id },
+                        resend = { resent += it.id },
                     ),
                     headMoves = headMoves,
                 )
@@ -394,6 +405,173 @@ class HistoryListTest {
         show(UiState(session = SessionPhase.InContact("u"), pending = 0))
         compose.onNodeWithTag(TAG_PENDING).assertDoesNotExist()
         compose.onNodeWithTag(TAG_PENDING_COUNT).assertDoesNotExist()
+    }
+
+    // -- the queue, drawn -----------------------------------------------------
+
+    private fun rowPixels(id: Long): PixelMap =
+        compose.onNodeWithTag(entryRowTag(id)).captureToImage().toPixelMap()
+
+    /**
+     * The colour a row was actually painted.
+     *
+     * A tint is a colour and nothing else: no semantics node carries a
+     * background, so a test that read the flag back off the snapshot would pass
+     * on a row that drew nothing at all. Capturing the row is the only
+     * assertion available that is about what is on the screen.
+     *
+     * The **most common** pixel, so no coordinate has to be guessed at: a band
+     * carrying one line of Preview and one control is overwhelmingly its own
+     * fill, and the mode is that fill by construction.
+     */
+    private fun fillOf(pixels: PixelMap): Color {
+        val tally = mutableMapOf<Int, Int>()
+        for (y in 0 until pixels.height) {
+            for (x in 0 until pixels.width) {
+                val argb = pixels[x, y].toArgb()
+                tally[argb] = (tally[argb] ?: 0) + 1
+            }
+        }
+        return Color(tally.maxByOrNull { it.value }!!.key)
+    }
+
+    /**
+     * Warm rather than cool, which is what the amber tint *is*.
+     *
+     * `Fui.Panel` is a blue-black and every untinted row composites over it —
+     * bare, or under row 0's cyan wash — so blue sits above red on both.
+     * `Fui.AmberA16` inverts that, and by a wide margin. Pinning the exact
+     * composite would say no more and would fail on a rounding nobody can see.
+     */
+    private fun isTinted(fill: Color) = fill.red > fill.blue
+
+    /**
+     * An Entry the Relay has never stamped.
+     *
+     * Both clocks are zero, because there is one clock in this system and it is
+     * the Relay's: an un-flushed capture has no age at all. Nothing on this row
+     * can render that as 1970, and the reason is the other half of the same
+     * decision — the phone row shows no time, so the tint carries the state and
+     * no status word does.
+     */
+    private fun waiting(id: Long, preview: String, refusedReason: String? = null) = entry(
+        id = id,
+        preview = preview,
+        pending = true,
+        refusedReason = refusedReason,
+        createdAt = 0,
+        lastUse = 0,
+    )
+
+    /**
+     * A row this phone still owes the Relay is drawn in the queue's own amber,
+     * and a row it does not owe is not.
+     *
+     * The band above the list is the head of a region and the region is these
+     * rows: the tint retreats from the bottom up as the uploader drains, which
+     * is the flush order shown for nothing. A settled row has to stay on the
+     * bare panel, or the tint says nothing by being everywhere.
+     *
+     * Read off row 1 rather than row 0, so the emitter's rule cannot be what is
+     * being read: this row wears no cyan at all.
+     */
+    @Test
+    fun a_pending_row_is_tinted_and_a_settled_one_is_not() {
+        show(
+            UiState(
+                session = SessionPhase.OutOfContact("u"),
+                pending = 2,
+                entries = listOf(
+                    waiting(3, "wg genkey | tee privatekey"),
+                    waiting(2, "caddy reverse_proxy localhost:8787"),
+                    entry(id = 1, preview = "the Relay has this one"),
+                ),
+            ),
+        )
+
+        val owed = fillOf(rowPixels(2))
+        val settled = fillOf(rowPixels(1))
+        assertTrue("an un-flushed row wears the queue's amber: $owed", isTinted(owed))
+        assertTrue("a row the Relay has is on the bare panel: $settled", !isTinted(settled))
+
+        // And the band is still the head of the region rather than a member of
+        // it — whole, and above the rows, exactly where it was (ADR 0014).
+        val band = compose.onNodeWithTag(TAG_PENDING).getUnclippedBoundsInRoot()
+        val head = compose.onNodeWithTag(entryRowTag(3)).getUnclippedBoundsInRoot()
+        assertTrue("the band heads the tinted region, so it stays above it", band.bottom <= head.top)
+        Evidence.log("tint          = owed row $owed, settled row $settled")
+    }
+
+    /**
+     * Row 0 while offline is legitimately both, and says both.
+     *
+     * A left edge and a background do not compete: the 2dp emitter rule says
+     * which row `RECALL FIRST` will hand over, and the field says the act is
+     * still owed. What row 0 gives up is its cyan *wash* — 12% cyan under 16%
+     * amber composites to a green nobody chose, and offline row 0 is always
+     * also pending, so that would have been the ordinary case and not a corner.
+     */
+    @Test
+    fun the_first_row_offline_wears_the_cyan_edge_and_the_amber_tint_at_once() {
+        show(
+            UiState(
+                session = SessionPhase.OutOfContact("u"),
+                pending = 1,
+                entries = listOf(waiting(1, "ssh deploy@staging")),
+            ),
+        )
+
+        val pixels = rowPixels(1)
+        val fill = fillOf(pixels)
+        val edge = pixels[1, pixels.height / 2]
+
+        assertTrue("row 0 offline is an un-flushed row like any other: $fill", isTinted(fill))
+        assertTrue(
+            "and still the row RECALL FIRST acts on, which its 2dp edge says: $edge",
+            edge.green > 0.8f && edge.blue > 0.8f && edge.red < 0.5f,
+        )
+        compose.onNodeWithTag(entryRecallTag(1)).assertIsEnabled()
+        Evidence.log("row 0 offline = amber field $fill behind a cyan edge $edge")
+    }
+
+    /**
+     * A refusal says what the Relay said, offers the way back into the queue,
+     * and does not take the Recall away.
+     *
+     * The row has one trailing slot and it keeps Recall on purpose: a refused
+     * capture's text is stranded on this device, and having it somewhere else
+     * was the only reason anybody offered it. So the reason and its `RESEND`
+     * are a second line, and the extra height is the row asking for something.
+     *
+     * The reason is the Relay's own sentence, unreworded. The row names the
+     * state in front of it because a red fragment names no state and colour is
+     * not a fact a screen reader can read.
+     */
+    @Test
+    fun a_refused_row_carries_its_reason_and_its_resend_and_still_recalls() {
+        show(
+            UiState(
+                session = SessionPhase.OutOfContact("u"),
+                pending = 1,
+                entries = listOf(waiting(6, "the whole of the log file", "payload too large")),
+            ),
+        )
+
+        compose.onNodeWithTag(entryRefusedTag(6))
+            .assertTextEquals(resources.getString(R.string.entry_refused, "payload too large"))
+
+        compose.onNodeWithTag(entryResendTag(6)).performClick()
+        assertEquals("RESEND must ask for exactly this Entry", listOf(6L), resent)
+
+        compose.onNodeWithTag(entryRecallTag(6)).assertIsEnabled()
+        compose.onNodeWithTag(entryRecallTag(6)).performClick()
+        assertEquals("a stranded capture has to stay recallable", listOf(6L), recalled)
+
+        // Still amber, because a refusal is still owed: it leaves the queue's
+        // head so nothing waits behind it, and it does not leave this phone.
+        // The alert is the second line, not the field.
+        assertTrue("a refused act is still owed", isTinted(fillOf(rowPixels(6))))
+        Evidence.log("refused       = \"payload too large\", RESEND offered, Recall kept")
     }
 
     /**
@@ -801,6 +979,29 @@ class HistoryListTest {
         compose.onNodeWithTag(entryRowTag(9)).assertIsDisplayed()
         compose.onNodeWithTag(entryPreviewTag(9)).assertTextEquals("server {")
         Evidence.log("off-preview   = \"borogoves\" appears nowhere in the row and still found it")
+    }
+
+    /**
+     * The Filter finds an un-flushed capture by its own text.
+     *
+     * The defect this whole effect is named for. The payload of a pending
+     * capture is an Entry from the moment it is made, so the row carries
+     * plaintext and the one predicate matches it — nothing about the queue is
+     * special-cased here, which is the point. An outbox beside the History
+     * would hold ciphertext, and a needle would have nothing to be in.
+     *
+     * It is in the denominator too, because this phone holds it.
+     */
+    @Test
+    fun the_filter_finds_an_un_flushed_capture_by_its_text() {
+        val unsent = waiting(4, "wg genkey | tee privatekey")
+        show(filtering("genkey", listOf(unsent) + threeEntries))
+
+        compose.onNodeWithTag(entryRowTag(4)).assertIsDisplayed()
+        compose.onNodeWithTag(entryPreviewTag(4)).assertTextEquals("wg genkey | tee privatekey")
+        compose.onNodeWithTag(TAG_FILTER_COUNT).assertTextEquals("1/4")
+        assertTrue("and it is drawn as owed while it is found", isTinted(fillOf(rowPixels(4))))
+        Evidence.log("filter+queue  = \"genkey\" found the un-flushed capture, still tinted")
     }
 
     /**

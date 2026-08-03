@@ -237,6 +237,15 @@ class SharepasteRepository private constructor(
 
     suspend fun offer(userId: String, text: String): OfferOutcome = io { it.offer(userId, text) }
 
+    /**
+     * Put a refused act back in the queue.
+     *
+     * Local work only: the core clears the refusal and requeues to the back, and
+     * the Relay hears about it on the next flush. Not a **Use** — the Relay
+     * never took the act, so there is no record of one to move.
+     */
+    suspend fun resend(userId: String, entryId: Long) = io { it.resend(userId, entryId) }
+
     suspend fun deleteEntry(userId: String, entryId: Long) = io { it.deleteEntry(userId, entryId) }
 
     suspend fun clearHistory(userId: String) = io { it.clearHistory(userId) }

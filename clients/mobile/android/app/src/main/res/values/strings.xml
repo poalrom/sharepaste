@@ -134,6 +134,18 @@
       which is a name a person chose and is never re-cased.
     -->
     <string name="entry_origin">FROM %1$s</string>
+    <!--
+      A refused row's second line. %1$s is the Relay's own words, neither
+      re-cased nor re-worded — the rule the Origin above follows, for the same
+      reason: it is a sentence somebody else wrote.
+
+      The state is named in front of it because the reason on its own says what
+      went wrong without saying what it is, and colour is not a fact TalkBack
+      can read. `RESEND` and not `RETRY`: a Resend is a fresh act at the back of
+      the queue, carrying nothing forward from the refusal.
+    -->
+    <string name="entry_refused">REFUSED \u00b7 %1$s</string>
+    <string name="entry_resend">RESEND</string>
 
     <!--
       Offer and Recall. Not "Standing Actions": those are the verbs a closed
@@ -225,6 +237,9 @@
     <string name="recall_failed">Sharepaste could not recall that.</string>
     <string name="delete_failed">Sharepaste could not delete that Entry. It is still on the
         Relay, so it will come back — try again once you have a connection.</string>
+    <!-- Requeueing is local work, so a failure here is not a connection. -->
+    <string name="resend_failed">Sharepaste could not put that Entry back in the queue. It is
+        still refused and still on this phone; nothing was lost.</string>
 
     <!--
       ===================================================================
