@@ -52,6 +52,15 @@ export default function Filter() {
       </span>
       <input
         ref={ref}
+        /*
+          A needle is a fragment, not prose: macOS reads `tail` as a
+          misspelling and floats its own `Tail ×` correction bubble over the
+          first row, and would capitalise it. Nothing here is dictated to a
+          person, so every text service the field can decline, it does.
+        */
+        spellCheck={false}
+        autoCorrect="off"
+        autoCapitalize="off"
         className="min-w-0 flex-1 bg-transparent font-mono text-data text-text-body outline-none placeholder:text-text-dim"
         placeholder="Filter history…"
         value={filter}

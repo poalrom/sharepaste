@@ -1,5 +1,11 @@
 # The main window reads; the popover picks
 
+**One binding below has moved.** `⌘⌫` no longer deletes on either surface: it clears the
+Filter, and deleting an Entry is `⇧⌘⌫` / `CTRL+SHIFT+BKSP`
+([ADR 0013](0013-the-filter-is-a-text-field-first.md)). The reasoning below — that the
+filter holds focus, so the binding cannot be a bare key — is what led there and stands
+unchanged.
+
 [ADR 0002](0002-popover-is-a-picker.md) established that the tray popover is a
 picker — opened, glanced at, dismissed in about a second. It pays for that speed
 by collapsing every entry to one whitespace-normalised line of at most 200

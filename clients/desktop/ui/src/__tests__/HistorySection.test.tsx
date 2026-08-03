@@ -227,6 +227,20 @@ describe("HistorySection — the reader", () => {
   });
 
   /*
+    A needle is a fragment, not prose. Left to the platform's text services,
+    macOS floats a correction bubble over the first row offering to turn
+    `tail` into `Tail`, and would capitalise the first letter besides.
+  */
+  it("declines every text service the filter field can decline", async () => {
+    await renderPane();
+    const input = screen.getByLabelText("Filter history");
+
+    expect(input).toHaveAttribute("spellcheck", "false");
+    expect(input).toHaveAttribute("autocorrect", "off");
+    expect(input).toHaveAttribute("autocapitalize", "off");
+  });
+
+  /*
     Two facts where the row can only show one. The row's age is the Use
     (ADR 0011), so a six-hour-old entry recalled half an hour ago reads as
     `30m` there — and without the capture time stated here, nothing on any
@@ -388,10 +402,10 @@ describe("HistorySection — keyboard, fired from inside the filter", () => {
     expect(commandsSent()).not.toContain("hide_popover");
   });
 
-  it("deletes the addressed entry on Ctrl+Backspace", async () => {
+  it("deletes the addressed entry on Ctrl+Shift+Backspace", async () => {
     await renderPane();
 
-    fireEvent.keyDown(filterInput(), { key: "Backspace", ctrlKey: true });
+    fireEvent.keyDown(filterInput(), { key: "Backspace", ctrlKey: true, shiftKey: true });
 
     await waitFor(() =>
       expect(ipc.invoke).toHaveBeenCalledWith("delete_entry", {
@@ -401,11 +415,11 @@ describe("HistorySection — keyboard, fired from inside the filter", () => {
     await waitFor(() => expect(screen.getAllByTestId("main-entry-row")).toHaveLength(2));
   });
 
-  // The same binding under the keycap a Mac actually prints.
-  it("deletes the addressed entry on Meta+Backspace", async () => {
+  // The same binding under the keycaps a Mac actually prints.
+  it("deletes the addressed entry on Shift+Meta+Backspace", async () => {
     await renderPane();
 
-    fireEvent.keyDown(filterInput(), { key: "Backspace", metaKey: true });
+    fireEvent.keyDown(filterInput(), { key: "Backspace", metaKey: true, shiftKey: true });
 
     await waitFor(() =>
       expect(ipc.invoke).toHaveBeenCalledWith("delete_entry", {
@@ -414,8 +428,38 @@ describe("HistorySection — keyboard, fired from inside the filter", () => {
     );
   });
 
-  // The modifier exists for this case: unmodified, the key belongs to the query
-  // being typed, and the mock's bare `Delete` binding was rejected over it.
+  /*
+    Unshifted, the combination is the field's: macOS erases to the start of the
+    line with it and Windows erases the previous word, so a list that took it
+    destroyed an entry under a key the platform had already promised to the
+    text being edited (ADR 0013).
+  */
+  it("clears the query on Meta+Backspace and deletes nothing", async () => {
+    await renderPane();
+    fireEvent.change(filterInput(), { target: { value: "entry" } });
+    expect(filterInput()).toHaveValue("entry");
+
+    fireEvent.keyDown(filterInput(), { key: "Backspace", metaKey: true });
+    await act(async () => {});
+
+    expect(filterInput()).toHaveValue("");
+    expect(commandsSent()).not.toContain("delete_entry");
+    expect(screen.getAllByTestId("main-entry-row")).toHaveLength(3);
+  });
+
+  it("clears the query on Ctrl+Backspace too", async () => {
+    await renderPane();
+    fireEvent.change(filterInput(), { target: { value: "entry" } });
+
+    fireEvent.keyDown(filterInput(), { key: "Backspace", ctrlKey: true });
+    await act(async () => {});
+
+    expect(filterInput()).toHaveValue("");
+    expect(commandsSent()).not.toContain("delete_entry");
+  });
+
+  // Bare, the key belongs to the query being typed, and the mock's bare
+  // `Delete` binding was rejected over it.
   it("leaves the entry alone on a bare Backspace", async () => {
     await renderPane();
 

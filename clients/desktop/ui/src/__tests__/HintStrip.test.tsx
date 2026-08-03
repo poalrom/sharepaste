@@ -39,7 +39,7 @@ describe("HintStrip", () => {
     expect(readHints(view.container)).toEqual([
       { key: "ENTER", action: "COPY" },
       { key: "CTRL+ENTER", action: "KEEP OPEN" },
-      { key: "CTRL+BKSP", action: "DELETE" },
+      { key: "CTRL+SHIFT+BKSP", action: "DELETE" },
     ]);
   });
 
@@ -48,7 +48,7 @@ describe("HintStrip", () => {
     expect(readHints(view.container)).toEqual([
       { key: "⏎", action: "COPY" },
       { key: "⌘⏎", action: "KEEP OPEN" },
-      { key: "⌘⌫", action: "DELETE" },
+      { key: "⇧⌘⌫", action: "DELETE" },
     ]);
   });
 

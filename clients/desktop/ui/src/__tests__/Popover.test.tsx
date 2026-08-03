@@ -368,19 +368,34 @@ describe("Popover keyboard and row surfaces", () => {
     ...over,
   });
 
-  it("deletes on ⌘⌫ while the Filter input holds focus", async () => {
+  it("deletes on ⇧⌘⌫ while the Filter input holds focus", async () => {
     servedHistory = [entry()];
     const view = render(<Popover />);
     const input = await view.findByPlaceholderText("Filter history…");
     expect(document.activeElement).toBe(input);
 
-    fireEvent.keyDown(input, { key: "Backspace", metaKey: true });
+    fireEvent.keyDown(input, { key: "Backspace", metaKey: true, shiftKey: true });
 
     await waitFor(() =>
       expect(ipc.invoke).toHaveBeenCalledWith("delete_entry", {
         args: { user_id: "u-active", entry_id: 7 },
       }),
     );
+  });
+
+  // Without ⇧ the combination belongs to the field the focus is sitting in:
+  // the platform binds it there already, so the list gives it back (ADR 0013).
+  it("clears the Filter on ⌘⌫ rather than deleting the entry", async () => {
+    servedHistory = [entry()];
+    const view = render(<Popover />);
+    const input = await view.findByPlaceholderText("Filter history…");
+    fireEvent.change(input, { target: { value: "npm" } });
+
+    fireEvent.keyDown(input, { key: "Backspace", metaKey: true });
+
+    await waitFor(() => expect(input).toHaveValue(""));
+    expect(ipc.invoke).not.toHaveBeenCalledWith("delete_entry", expect.anything());
+    expect(view.getAllByTestId("entry-row")).toHaveLength(1);
   });
 
   it("leaves the entry alone on a bare Backspace in the Filter box", async () => {

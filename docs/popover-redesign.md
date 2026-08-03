@@ -1,6 +1,6 @@
 # Tray popover redesign — plan
 
-> Completed plan, kept as a record. Two things it names have moved since.
+> Completed plan, kept as a record. Three things it names have moved since.
 >
 > Its Rust citations predate the extraction of `sharepaste-core`: paths of the form `core/…`
 > and `commands.rs` were relative to `clients/desktop/src-tauri/src/` and now live under
@@ -15,6 +15,13 @@
 > prescribes — and `Entry` now carries a rendered `preview` beside the full `plaintext`
 > rather than one field meaning both. Read §6, the P1 list and the verification list with
 > that substitution.
+>
+> The last is its delete binding. `⌘⌫` / `Ctrl+⌫` clears the search input now, and
+> deleting the selected entry is `⇧⌘⌫` / `CTRL+SHIFT+BKSP`: read decision 13, §9's binding
+> table, the hint strip at §139 and the P1 and verification lists with that substitution.
+> The reason the plan gives for wanting a modifier at all — the input holds focus
+> essentially always — is exactly the reason the unmodified combination went back to it.
+> See [ADR 0013](adr/0013-the-filter-is-a-text-field-first.md).
 
 Target: bring the `clients/desktop` popover to the FUI/HUD language of the
 design mock, with readability corrections where the mock trades legibility for

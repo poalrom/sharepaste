@@ -24,14 +24,20 @@ const CACHE_CAP = 100;
  */
 const IS_MAC = /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent);
 const KEY = IS_MAC
-  ? { mod: "⌘", enter: "⏎", back: "⌫", join: "" }
-  : { mod: "CTRL", enter: "ENTER", back: "BKSP", join: "+" };
+  ? { mod: "⌘", shift: "⇧", enter: "⏎", back: "⌫", join: "" }
+  : { mod: "CTRL", shift: "SHIFT", enter: "ENTER", back: "BKSP", join: "+" };
 
-/* No arrow hint and no `DEL`: ADR 0002 cut the first as chrome that only
-   restates the obvious, and the second because it reads as the Delete key. */
+/* Each platform prints its modifier chain in its own order: macOS puts ⇧
+   before ⌘, Windows names CTRL first. */
+const DELETE_KEYS = IS_MAC ? [KEY.shift, KEY.mod, KEY.back] : [KEY.mod, KEY.shift, KEY.back];
+
+/* No arrow hint, no `DEL`, and nothing for the filter's own `⌘⌫`: ADR 0002 cut
+   the first as chrome that only restates the obvious, the second because it
+   reads as the Delete key, and the third is the text field behaving the way
+   the platform's own text fields do (ADR 0013). */
 const HINTS = [
   { keys: [KEY.enter], action: "COPY" },
-  { keys: [KEY.mod, KEY.back], action: "DELETE" },
+  { keys: DELETE_KEYS, action: "DELETE" },
 ];
 
 /**
@@ -118,8 +124,13 @@ export default function HistorySection({ now }: { now: number }) {
         The filter holds focus from the moment the pane mounts, and that is the
         resting state rather than an exception — a binding that dies while it
         does is a binding that never fires. So every one of these works from
-        inside the filter, and delete carries a modifier for exactly that
-        reason: a bare Backspace there belongs to the query being typed.
+        inside the filter.
+
+        `⌘⌫`/`Ctrl+⌫` is the field's, not the list's: both platforms already
+        bind it inside a text field — delete-to-line-start on macOS,
+        delete-previous-word on Windows — so taking it for the list made a
+        native editing key destroy an entry (ADR 0013). Deleting adds ⇧, which
+        neither platform reserves for editing.
 
         Only a `<select>` and a `<textarea>` are skipped: arrows and Enter walk
         and commit an option list, and neither is the list's to intercept.
@@ -127,8 +138,14 @@ export default function HistorySection({ now }: { now: number }) {
       if (e.target instanceof HTMLElement && e.target.closest("select, textarea")) return;
       const target = filtered[selectedIndex];
       if (e.key === "Backspace" && (e.metaKey || e.ctrlKey)) {
+        // Prevented either way: with the query cleared here, the browser's own
+        // delete-to-line-start would fire against a value that no longer exists.
         e.preventDefault();
-        if (target) void deleteEntry(target);
+        if (e.shiftKey) {
+          if (target) void deleteEntry(target);
+        } else {
+          setFilter("");
+        }
         return;
       }
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -147,7 +164,7 @@ export default function HistorySection({ now }: { now: number }) {
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [filtered, selectedIndex, setSelectedIndex]);
+  }, [filtered, selectedIndex, setSelectedIndex, setFilter]);
 
   // Exactly one of: the rows, or the reason there are none.
   let list: ReactNode;
@@ -333,6 +350,15 @@ export default function HistorySection({ now }: { now: number }) {
             // The pane exists to be typed into: without this the window opens
             // keyboard-dead and the filter reads as decoration.
             autoFocus
+            /*
+              A needle is a fragment, not prose: macOS reads `tail` as a
+              misspelling and floats its own `Tail ×` correction bubble over
+              the first row, and would capitalise it. Nothing here is dictated
+              to a person, so every text service the field can decline, it does.
+            */
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
             className="fui-field min-w-0 flex-1 pl-7 pr-14"
             placeholder="Filter history…"
             aria-label="Filter history"

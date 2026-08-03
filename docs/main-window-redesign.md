@@ -1,6 +1,6 @@
 # Main Window redesign — plan
 
-> Completed plan, kept as a record. Two things it names have moved since.
+> Completed plan, kept as a record. Three things it names have moved since.
 >
 > Its Rust citations predate the extraction of `sharepaste-core`: paths of the form `core/…`
 > and `commands.rs` were relative to `clients/desktop/src-tauri/src/` and now live under
@@ -16,6 +16,12 @@
 > `preview` field once carried both — so wherever this plan says the filter matches
 > `preview`, it now matches `plaintext`, which is what made the claim true in the first
 > place.
+>
+> The last is its delete binding. `⌘⌫` clears the filter now, and deleting the addressed
+> entry is `⇧⌘⌫` / `CTRL+SHIFT+BKSP`, so decision 5, checkpoint 9 and the hint strip drawn
+> at §110 all read one keycap short. See
+> [ADR 0013](adr/0013-the-filter-is-a-text-field-first.md); everything else those three say
+> — `⏎` copies and stays, no `⌘⏎`, no bare `Delete`, no `DEL` — is unchanged.
 
 Target: bring `clients/desktop`'s main window to the same FUI/HUD language as the
 tray popover, add the History reader the product has never had, and rename

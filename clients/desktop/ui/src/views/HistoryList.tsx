@@ -46,15 +46,22 @@ export default function HistoryList() {
       } else if (e.key === "Enter" && target) {
         await copyEntry(target, { keepOpen: e.metaKey || e.ctrlKey });
       } else if (e.key === "Backspace" && (e.metaKey || e.ctrlKey)) {
-        // Modified, because Filter keeps the input focused essentially always:
-        // a bare Backspace would collide with editing the query (plan §6).
+        // `Filter` keeps the input focused essentially always, so a bare
+        // Backspace belongs to the query being typed — and so does the
+        // modified one: both platforms bind `⌘⌫`/`Ctrl+⌫` inside a text field
+        // already (ADR 0013). Deleting an entry adds ⇧ on top. Prevented
+        // either way, so the browser's own erase never runs beside this.
         e.preventDefault();
-        if (target) await deleteEntry(target);
+        if (e.shiftKey) {
+          if (target) await deleteEntry(target);
+        } else {
+          setFilter("");
+        }
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [active, filtered, selectedIndex, setSelectedIndex]);
+  }, [active, filtered, selectedIndex, setSelectedIndex, setFilter]);
 
   if (filtered.length === 0) {
     if (entries.length === 0) return <PanelMessage title="HISTORY EMPTY" />;

@@ -1,5 +1,12 @@
 # The popover is a picker, not a status surface
 
+**The delete keycap it names has changed since.** `⌘⌫` / `CTRL+BKSP` clears the Filter
+now and `⇧⌘⌫` / `CTRL+SHIFT+BKSP` deletes, per
+[ADR 0013](0013-the-filter-is-a-text-field-first.md), which also bought the wider chain
+12px inside the strip's own spacing. The chrome rule below — three hints, whole verbs,
+each key named the way the reader's keyboard is labelled — is unchanged and is what
+decided that spacing.
+
 The design mock for the tray popover draws it as a HUD instrument panel:
 a permanent telemetry strip (`CACHE 11/11 · LAST SYNC 14:22:07`), a cipher badge,
 and a per-row `CACHED` marker when offline — 139px of a 480px window spent on

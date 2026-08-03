@@ -129,15 +129,27 @@ describe("HistoryList", () => {
     err.mockRestore();
   });
 
-  it("deletes the selected entry on ⌘⌫", async () => {
+  it("deletes the selected entry on ⇧⌘⌫", async () => {
     render(<HistoryList />);
-    fireEvent.keyDown(window, { key: "Backspace", metaKey: true });
+    fireEvent.keyDown(window, { key: "Backspace", metaKey: true, shiftKey: true });
     await waitFor(() => {
       expect(ipc.invoke).toHaveBeenCalledWith("delete_entry", { args: { user_id: "u", entry_id: 1 } });
     });
     await waitFor(() => {
       expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([2]);
     });
+  });
+
+  // Unshifted the combination is the field's on both platforms — erase to the
+  // start of the line on macOS, erase the previous word on Windows — so the
+  // list hands it back to the query it was aimed at (ADR 0013).
+  it("clears the query on ⌘⌫ instead of deleting", async () => {
+    useUiStore.setState({ filter: "world", selectedIndex: 0, mainSection: "history" });
+    render(<HistoryList />);
+    fireEvent.keyDown(window, { key: "Backspace", metaKey: true });
+    await waitFor(() => expect(useUiStore.getState().filter).toBe(""));
+    expect(ipc.invoke).not.toHaveBeenCalledWith("delete_entry", expect.anything());
+    expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([1, 2]);
   });
 
   // Filter holds the input focused essentially always, so an unmodified key
