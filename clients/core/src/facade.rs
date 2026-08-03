@@ -888,8 +888,17 @@ impl Sharepaste {
     ///
     /// [`RecallSource::Relay`] means the round trip **succeeded**, which makes the
     /// answer authoritative even when the fetch returned no rows at all: the
-    /// relay has confirmed nothing newer exists. [`RecallSource::Cache`] means the
-    /// fetch failed, and it is the caller's job to say so out loud.
+    /// relay has confirmed nothing newer exists. [`RecallSource::Cache`] means
+    /// nobody else would give the same answer, and it is the caller's job to say
+    /// so out loud.
+    ///
+    /// **The queue is drained first, bounded.** With acts still owed to the relay
+    /// a local one and a remote entry cannot be compared — one of them has no
+    /// stamp — so the answer would depend on which device was asked. Draining
+    /// first puts everything on the relay's one clock and lets
+    /// `(last_use DESC, id DESC)` decide, which is how every device gives the same
+    /// answer. A drain that times out or fails is not fatal: the local head is
+    /// still the best answer available and `Cache` is what says nobody else agrees.
     ///
     /// Known limit: an entry **deleted** on the relay while this device was away
     /// is not revealed by a `since=` fetch, so it can still be the head of the
@@ -900,7 +909,7 @@ impl Sharepaste {
         let m = self.registry.load_active_membership(user_id).await?;
         let user_key: UserKey = Zeroizing::new(*m.user_key);
         let server_url = m.server.base().to_string();
-        self.recall_latest_with(user_id, &ServerSession(m.server), &user_key, &server_url)
+        self.recall_latest_with(user_id, Arc::new(ServerSession(m.server)), &user_key, &server_url)
             .await
     }
 
@@ -914,37 +923,49 @@ impl Sharepaste {
         let m = self.registry.load_active_membership(user_id).await?;
         let user_key: UserKey = Zeroizing::new(*m.user_key);
         let server_url = m.server.base().to_string();
-        self.recall_latest_with(user_id, transport.as_ref(), &user_key, &server_url)
+        self.recall_latest_with(user_id, transport, &user_key, &server_url)
             .await
     }
 
     async fn recall_latest_with(
         &self,
         user_id: &str,
-        transport: &dyn SessionTransport,
+        transport: Arc<dyn SessionTransport>,
         user_key: &UserKey,
         server_url: &str,
     ) -> Result<Recalled, AppError> {
-        let source = match session::backfill(
+        let drained = session::drain_pending(
+            &self.state,
+            self.events.clone(),
+            user_id,
+            transport.clone(),
+        )
+        .await;
+        let mut source = RecallSource::Relay;
+        if let Err(e) = drained {
+            tracing::warn!(
+                err = %e, %user_id,
+                "recall latest could not empty the queue; its answer is this device's own"
+            );
+            source = RecallSource::Cache;
+        }
+        if let Err(e) = session::backfill(
             &self.state,
             self.events.as_ref(),
             user_id,
             user_key,
-            transport,
+            transport.as_ref(),
         )
         .await
         {
-            Ok(()) => RecallSource::Relay,
-            Err(e) => {
-                // Not fatal: the newest cached entry is still the best answer
-                // available, and the caller is told which one it got.
-                tracing::warn!(
-                    err = %e.explain_insecure_relay(server_url), %user_id,
-                    "recall latest could not reach the relay; falling back to the cache"
-                );
-                RecallSource::Cache
-            }
-        };
+            // Not fatal: the newest cached entry is still the best answer
+            // available, and the caller is told which one it got.
+            tracing::warn!(
+                err = %e.explain_insecure_relay(server_url), %user_id,
+                "recall latest could not reach the relay; falling back to the cache"
+            );
+            source = RecallSource::Cache;
+        }
         let newest = {
             let conn = self.state.conn.lock().await;
             entries_cache::list_recent(&conn, user_id, None, 1)?
@@ -967,7 +988,7 @@ impl Sharepaste {
         // operation performs a relay round trip by design — the backfill above
         // — so its caller is already prepared for one.
         self.use_recorder()
-            .record_over(user_id, entry_id, transport)
+            .record_over(user_id, entry_id, transport.as_ref())
             .await;
         Ok(Recalled {
             text,
@@ -1410,15 +1431,16 @@ impl UseRecorder {
     /// means "everything up to here has been fetched", and this device has
     /// fetched nothing.
     async fn record_over(&self, user_id: &str, entry_id: i64, transport: &dyn SessionTransport) {
-        // `entry_id` is this device's own; the relay has never heard of it. A
-        // row with no relay id is an act the relay has not taken yet, and a use
-        // of one is carried by the queue rather than by a route.
+        // `entry_id` is this device's own; the relay has never heard of it. A row
+        // with no relay id has no relay record to move, so the use it just
+        // received is carried by the queue instead.
         let relay_id = {
             let conn = self.state.conn.lock().await;
             match entries_cache::relay_id_for(&conn, user_id, entry_id) {
                 Ok(Some(relay_id)) => relay_id,
                 Ok(None) => {
-                    tracing::info!(entry_id, "this entry has not reached the relay; no use to record");
+                    drop(conn);
+                    self.requeue(user_id, entry_id).await;
                     return;
                 }
                 Err(e) => {
@@ -1486,6 +1508,47 @@ impl UseRecorder {
             None => tracing::warn!(%user_id, "no uploader trigger registered"),
         }
         Ok(())
+    }
+
+    /// Move the act an un-flushed entry already owes the relay to the back of the
+    /// queue.
+    ///
+    /// **No new queue item and no third kind of act.** A row with no relay id has
+    /// nothing the relay could record a use against, and using it ends in exactly
+    /// the state re-copying it ends in (ADR 0012): this text is the most recent
+    /// thing this device did, and it is still owed. The queue's order is the only
+    /// record of that, so the act moves rather than multiplying.
+    ///
+    /// `requeue_to_back` already drops the attempt count and the last error as "a
+    /// fresh act, not a retry", which is what a Recall is.
+    ///
+    /// The queue depth does not change, so nothing reports one. What did change is
+    /// where the row sits, and `HistoryChanged` is what says so.
+    async fn requeue(&self, user_id: &str, entry_id: i64) {
+        let moved = {
+            let conn = self.state.conn.lock().await;
+            match pending::rowid_for_entry(&conn, user_id, entry_id) {
+                Ok(Some(rowid)) => {
+                    pending::requeue_to_back(&conn, rowid, crate::now_ms()).is_ok()
+                }
+                Ok(None) => {
+                    // No relay id and no queued act: the row is beyond anything
+                    // this can do for it, which is the state a withdrawn act
+                    // leaves and nothing else reaches.
+                    tracing::info!(entry_id, "no act queued for this entry; nothing to move");
+                    false
+                }
+                Err(e) => {
+                    tracing::warn!(err = %e, entry_id, "could not find the act queued for this entry");
+                    false
+                }
+            }
+        };
+        if moved {
+            self.events.emit(CoreEvent::HistoryChanged {
+                user_id: user_id.to_string(),
+            });
+        }
     }
 }
 
@@ -2289,6 +2352,147 @@ mod tests {
                 .any(|e| matches!(e, CoreEvent::EntryDeleted { entry_id, .. } if *entry_id == mistake)),
             "and the row's own id is what the shells are told to drop"
         );
+    }
+
+    /*
+     * ADR 0012's rule, reached by a Recall rather than by a re-copy: an un-flushed
+     * capture has no relay id to record a use against, so the act it already owes
+     * moves to the back of the queue. One act moved, not two acts queued — and it
+     * is the head of the History afterwards, which is the whole point of the move.
+     */
+    #[test]
+    fn recalling_an_un_flushed_capture_moves_its_act_and_leads_the_history() {
+        let Rig { sp, sink, .. } = rig();
+        let relay = ScriptedRelay::new(Vec::new(), Vec::new());
+        sp.runtime.block_on(sp.offer("u", "captured first")).unwrap();
+        sp.runtime.block_on(sp.offer("u", "captured second")).unwrap();
+        let first = history_ids(&sp)[1];
+
+        sp.runtime.block_on(sp.recall_over("u", first, relay.as_ref())).unwrap();
+
+        assert_eq!(
+            history_ids(&sp)[0], first,
+            "the recalled capture leads the History"
+        );
+        let queued = sp.runtime.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            (
+                pending::count(&conn, "u").unwrap(),
+                head_plaintext(&pending::head(&conn, "u").unwrap().unwrap()),
+            )
+        });
+        assert_eq!(queued.0, 2, "one act moved; nothing was queued beside it");
+        assert_eq!(
+            queued.1, "captured second",
+            "and the recalled act is behind it now: `second` is the head of the queue"
+        );
+        assert!(
+            relay.uses().is_empty(),
+            "there is no relay record to move, so no use was recorded"
+        );
+        assert!(
+            sink.saw_history_changed("u"),
+            "the list reordered, and a shell has to be told"
+        );
+    }
+
+    /*
+     * Capture A, capture B, recall A: the flush order is B then A, so A ends up
+     * above B on the relay — exactly where this device was already showing it.
+     */
+    #[test]
+    fn a_recall_during_an_outage_reaches_the_relay_last() {
+        let Rig { sp, .. } = rig();
+        let relay = ScriptedRelay::new(Vec::new(), Vec::new());
+        sp.runtime.block_on(sp.offer("u", "A")).unwrap();
+        sp.runtime.block_on(sp.offer("u", "B")).unwrap();
+        let a = history_ids(&sp)[1];
+        sp.runtime.block_on(sp.recall_over("u", a, relay.as_ref())).unwrap();
+
+        // The queue, drained in its own order the way the uploader drains it.
+        let sent = sp.runtime.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            let mut out = Vec::new();
+            while let Some(head) = pending::head(&conn, "u").unwrap() {
+                out.push(head_plaintext(&head));
+                pending::ack(&conn, head.rowid).unwrap();
+            }
+            out
+        });
+        assert_eq!(sent, vec!["B".to_string(), "A".to_string()]);
+    }
+
+    /*
+     * Recall Latest with acts still queued. A local act and a remote entry cannot
+     * be compared while one of them has no stamp, so the queue is emptied first
+     * and the relay's clock decides — which is how every device gives the same
+     * answer.
+     */
+    #[test]
+    fn recall_latest_drains_the_queue_before_it_reads_the_head() {
+        let Rig { sp, clipboard, .. } = rig();
+        sp.runtime.block_on(sp.offer("u", "queued while offline")).unwrap();
+        let relay = ScriptedRelay::new(vec![Ok(Vec::new())], Vec::new());
+
+        let out = sp.runtime.block_on(sp.recall_latest_over("u", relay.clone())).unwrap();
+
+        assert_eq!(relay.uploaded().len(), 1, "the queue went to the relay first");
+        assert_eq!(out.text, "queued while offline");
+        assert_eq!(
+            out.source,
+            RecallSource::Relay,
+            "the round trip succeeded, so the answer is one every device would give"
+        );
+        assert_eq!(clipboard.writes(), vec!["queued while offline".to_string()]);
+        let left = sp.runtime.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            pending::count(&conn, "u").unwrap()
+        });
+        assert_eq!(left, 0, "and the queue is empty");
+    }
+
+    /*
+     * The same with the relay out of reach: the local head is still the best
+     * answer available, and `Cache` is what says nobody else agrees with it.
+     */
+    #[test]
+    fn recall_latest_with_a_queue_and_no_relay_falls_back_to_the_local_head() {
+        let Rig { sp, clipboard, .. } = rig();
+        sp.runtime.block_on(sp.offer("u", "still owed to the relay")).unwrap();
+        let relay = ScriptedRelay::new(
+            vec![Err(AppError::Network("no route".into()))],
+            Vec::new(),
+        )
+        .answering_uploads(crate::testing::UploadAnswer::Unreachable);
+
+        let out = sp.runtime.block_on(sp.recall_latest_over("u", relay.clone())).unwrap();
+
+        assert_eq!(out.text, "still owed to the relay");
+        assert_eq!(out.source, RecallSource::Cache);
+        assert_eq!(clipboard.writes(), vec!["still owed to the relay".to_string()]);
+        let left = sp.runtime.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            pending::count(&conn, "u").unwrap()
+        });
+        assert_eq!(left, 1, "nothing was lost trying");
+    }
+
+    /*
+     * A drain that outlasts its bound falls back rather than hanging the verb. The
+     * relay here accepts the connection and never answers, which is the shape the
+     * bound exists for — a refused port fails fast and would not exercise it.
+     */
+    #[test]
+    fn a_drain_that_exceeds_its_bound_falls_back_rather_than_hanging() {
+        let Rig { sp, clipboard, .. } = rig();
+        sp.runtime.block_on(sp.offer("u", "behind a silent relay")).unwrap();
+        let relay = ScriptedRelay::new(vec![Ok(Vec::new())], Vec::new()).answering_uploads(crate::testing::UploadAnswer::Stall);
+
+        let out = sp.runtime.block_on(sp.recall_latest_over("u", relay)).unwrap();
+
+        assert_eq!(out.text, "behind a silent relay");
+        assert_eq!(out.source, RecallSource::Cache, "the bound was reached, so it is ours");
+        assert_eq!(clipboard.writes(), vec!["behind a silent relay".to_string()]);
     }
 
     /*

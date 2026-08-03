@@ -195,6 +195,25 @@ pub(crate) fn ack(conn: &Connection, rowid: i64) -> Result<usize, AppError> {
     Ok(n)
 }
 
+/// The act queued against one entry, if there is one.
+///
+/// The last of them by queue position, which is the one a fresh act moves: an
+/// entry can hold several — a capture and the uses re-copied onto it — and the
+/// row already sorts by the newest of them.
+pub(crate) fn rowid_for_entry(
+    conn: &Connection,
+    user_id: &str,
+    local_entry_id: i64,
+) -> Result<Option<i64>, AppError> {
+    let rowid: Option<i64> = conn.query_row(
+        "SELECT MAX(rowid) FROM pending_uploads
+          WHERE user_id = ?1 AND local_entry_id = ?2",
+        params![user_id, local_entry_id],
+        |r| r.get(0),
+    )?;
+    Ok(rowid)
+}
+
 /// Withdraw every act queued against one entry.
 ///
 /// What deleting an un-flushed row amounts to: the queue is durable across a

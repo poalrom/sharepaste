@@ -55,7 +55,7 @@ use crate::http::dto::{EntryRow, MeResp};
 use crate::http::ServerClient;
 use crate::platform::EventSink;
 use crate::storage::devices::DeviceRecord;
-use crate::storage::{accounts, devices, entries_cache};
+use crate::storage::{accounts, devices, entries_cache, pending};
 use crate::sync::state::should_persist_contact;
 use crate::sync::uploader::{UploadTransport, Uploaded, Uploader, UploaderExit, Used};
 use crate::sync::{decryptor, sse, BackoffPlan, ConnectionState};
@@ -548,6 +548,55 @@ pub(crate) fn spawn_session(
     ));
     // Pending-queue uploader on its own task.
     spawn.spawn(run_uploader(ctx, transport, cancel, upload_trigger));
+}
+
+/// How long [`drain_pending`] will wait for the queue before giving up on it.
+///
+/// A number and not a policy: the operation it serves is Recall Latest, which a
+/// person is waiting on with the clipboard in mind. Long enough for a burst over
+/// a slow link, short enough that an unreachable relay does not hang the verb —
+/// and the fallback is a correct answer, just this device's own.
+const DRAIN_BOUND: Duration = Duration::from_secs(5);
+
+/// Empty this pairing's queue over one transport, bounded, and report whether it
+/// emptied.
+///
+/// The reason it exists: `recall_latest` cannot compare a local act with a remote
+/// entry while one of them has no stamp, so it puts everything on the relay's one
+/// clock first. A session's own uploader does the same work on its own trigger;
+/// this is the same [`Uploader`] driven once, so the two cannot come to disagree
+/// about what settling an act means.
+///
+/// `Err` means the relay did not take everything — it was unreachable, refused
+/// the head, or took longer than [`DRAIN_BOUND`]. In every one of those the queue
+/// is left exactly as the uploader left it and nothing is lost.
+pub(crate) async fn drain_pending(
+    state: &SessionState,
+    events: Arc<dyn EventSink>,
+    user_id: &str,
+    transport: Arc<dyn SessionTransport>,
+) -> Result<(), AppError> {
+    {
+        let conn = state.conn.lock().await;
+        if pending::count(&conn, user_id)? == 0 {
+            return Ok(());
+        }
+    }
+    let up = Uploader {
+        user_id: user_id.to_string(),
+        conn: state.conn.clone(),
+        transport: Arc::new(UploadVia(transport)),
+        // Never notified: this uploader is driven once, by hand.
+        trigger: Arc::new(Notify::new()),
+        events,
+    };
+    match tokio::time::timeout(DRAIN_BOUND, up.flush_once()).await {
+        Ok(result) => result,
+        Err(_) => Err(AppError::Network(format!(
+            "the queue did not empty within {}s",
+            DRAIN_BOUND.as_secs()
+        ))),
+    }
 }
 
 /// Fetch everything past this pairing's watermark and ingest it.

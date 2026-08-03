@@ -119,7 +119,7 @@ impl Uploader {
     /// input is dropped rather than retried forever, and anything else leaves
     /// the row where it is for the next trigger. What differs is only what the
     /// relay is asked to do and what the answer is recorded against.
-    async fn flush_once(&self) -> Result<(), AppError> {
+    pub(crate) async fn flush_once(&self) -> Result<(), AppError> {
         loop {
             let head = {
                 let conn = self.conn.lock().await;

@@ -235,6 +235,20 @@ pub enum UseAnswer {
     Unreachable,
 }
 
+/// What a [`ScriptedRelay`] does when asked to take a queued act.
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub enum UploadAnswer {
+    /// Take it and stamp it, the way a reachable relay does.
+    #[default]
+    Take,
+    /// The relay could not be reached at all.
+    Unreachable,
+    /// The relay accepted the connection and never answered. The shape a
+    /// *bounded* drain exists for: a refused port fails fast and would leave the
+    /// bound untested.
+    Stall,
+}
+
 /// A relay that answers from a script instead of a socket.
 ///
 /// The seam that makes the session loop testable at all. An exhausted script
@@ -253,6 +267,7 @@ pub struct ScriptedRelay {
     uses: Mutex<Vec<i64>>,
     deleted: Mutex<Vec<i64>>,
     use_answer: Mutex<UseAnswer>,
+    upload_answer: Mutex<UploadAnswer>,
     pair_payloads: Mutex<Vec<String>>,
     polls: Mutex<VecDeque<Result<PairClaim, AppError>>>,
     put_payload_hook: Mutex<Option<PutPayloadHook>>,
@@ -309,6 +324,12 @@ impl ScriptedRelay {
     /// Change what this relay does with a use. The call is still recorded.
     pub fn answering_uses(self: Arc<Self>, answer: UseAnswer) -> Arc<Self> {
         *self.use_answer.lock() = answer;
+        self
+    }
+
+    /// Change what this relay does with a queued act.
+    pub fn answering_uploads(self: Arc<Self>, answer: UploadAnswer) -> Arc<Self> {
+        *self.upload_answer.lock() = answer;
         self
     }
 
@@ -386,11 +407,23 @@ impl SessionTransport for ScriptedRelay {
     }
 
     /// Hands back an id that climbs with each upload, so a test can tell two of
-    /// this device's own Entries apart in the cache the uploader now writes.
+    /// this device's own acts apart in the cache the flush reconciles.
     ///
     /// `seq` tracks the id, as the relay's own seeding does, and `last_use`
     /// equals `created_at`: a capture is the entry's first use.
     async fn upload(&self, ciphertext_b64: &str) -> Result<Uploaded, AppError> {
+        let answer = *self.upload_answer.lock();
+        match answer {
+            UploadAnswer::Take => {}
+            UploadAnswer::Unreachable => {
+                return Err(AppError::Network("scripted outage".into()))
+            }
+            // Longer than any bound a caller could reasonably set, so what ends
+            // the wait is the caller's own timeout and nothing else.
+            UploadAnswer::Stall => {
+                tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+            }
+        }
         let mut uploaded = self.uploaded.lock();
         uploaded.push(ciphertext_b64.to_string());
         let id = uploaded.len() as i64;
