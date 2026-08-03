@@ -29,7 +29,9 @@ docker-compose.yml
 docker compose up -d --build
 ```
 
-Mounts `./db` → `/var/lib/sharepaste` inside the container. SQLite file lives at `./db/db.sqlite`. Operate behind a reverse proxy that terminates TLS (Caddy, nginx).
+Mounts `./db` → `/var/lib/sharepaste` inside the container. SQLite file lives at
+`./db/sharepaste.sqlite`. Operate behind a reverse proxy that terminates TLS (Caddy,
+nginx).
 
 ## Before a phone can pair: TLS with a publicly trusted certificate
 
@@ -201,23 +203,62 @@ Client dev workflows, prerequisites and the manual smoke checklists are in
 
 ## Operator CLI
 
-Run inside the container:
+Run inside the container. `docker exec` bypasses the image's `ENTRYPOINT` and the CLI is
+not on `PATH` there, so the interpreter and the script are spelled out:
 
 ```bash
-# Create a user, get a one-time invite token
-docker exec sharepaste sharepaste user create alice
+# Create a user, and with it a one-time invite token
+docker exec sharepaste node dist/index.js user create alice
 
 # List users
-docker exec sharepaste sharepaste user list
+docker exec sharepaste node dist/index.js user list
 
 # Revoke a stolen device
-docker exec sharepaste sharepaste device revoke <device_id>
+docker exec sharepaste node dist/index.js device revoke <device_id>
 
 # Purge a user's history
-docker exec sharepaste sharepaste entry purge --user <user_id>
+docker exec sharepaste node dist/index.js entry purge --user <user_id>
 ```
 
-The `--db` flag overrides the DB path; in the compose container it defaults to `/var/lib/sharepaste/db.sqlite` (mounted from `./db`).
+`docker compose exec sharepaste node dist/index.js …` from the repository root does the
+same thing. The `--db` flag overrides the database path; it defaults to `$DB_PATH`, which
+the image sets to `/var/lib/sharepaste/sharepaste.sqlite` (mounted from `./db`), so inside
+the container it never needs passing.
+
+### Invite tokens
+
+`user create` is the only command that mints one, and it creates the **User** at the same
+time — there is no way to issue a second invite for a User that already exists. So the
+command answers one question and not the other:
+
+| You want | Do this |
+| --- | --- |
+| A new **User** — a separate history, for a second person | `user create <username>` |
+| Another **Device** on a User you already have | Not this. Take a pair code from a device already paired to that User. |
+
+```bash
+$ docker exec sharepaste node dist/index.js user create alice
+{
+  "user_id": "212ad943-ec05-44df-be04-15cd3eb9578d",
+  "invite_token": "XoKMTa-nRdc3y51lmwEZ5GmBABd32eVlbrbOxh66A7A"
+}
+```
+
+- **`--ttl <seconds>` sets how long it stays claimable**, default `604800` — seven days.
+  Pass something shorter for a token you are about to use.
+- **It is single use.** A second claim is refused with `409 invite already claimed`, and
+  the relay's hourly sweep deletes invites that are claimed or expired.
+- **Only the hash is stored.** Lose the output and the token is gone; there is nothing to
+  print it back. Start over with `user delete <user_id>`, which also erases that User's
+  entries and devices.
+- **`username` is unique.** Running `user create` again with a name already taken fails on
+  the constraint rather than handing you a fresh token for that User.
+
+**Claim it on a desktop.** *Pairings → Add a pairing → I have an invite token*, which asks
+for the relay URL, the token and a Device Label. An invite carries no address — unlike a
+pair code, which has the relay inside it — which is why you supply the URL yourself. The
+Android app has no invite field at all: pair a desktop with the token, then pair the phone
+from the code that desktop shows.
 
 ## Wire protocol
 
