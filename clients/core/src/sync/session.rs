@@ -106,6 +106,12 @@ pub trait SessionTransport: Send + Sync {
     async fn upload(&self, ciphertext_b64: &str) -> Result<Uploaded, AppError>;
     /// Record a **Use**: the entry becomes the head of the History everywhere.
     async fn use_entry(&self, entry_id: i64) -> Result<Used, AppError>;
+    /// Take one entry off the relay.
+    ///
+    /// On the session's transport for the withdrawal race alone: a delete issued
+    /// while an upload was in flight leaves the relay holding an act nobody
+    /// wants, and the uploader is the only thing that knows the relay took it.
+    async fn delete_entry(&self, entry_id: i64) -> Result<(), AppError>;
 }
 
 /// The one production [`SessionTransport`]: a session over the pairing's
@@ -149,6 +155,10 @@ impl SessionTransport for ServerSession {
             .await
             .map(|r| Used { seq: r.seq, last_use: r.last_use })
     }
+
+    async fn delete_entry(&self, entry_id: i64) -> Result<(), AppError> {
+        self.0.delete_entry(entry_id).await
+    }
 }
 
 /// Lets the uploader keep its own narrow transport trait while a session hands
@@ -166,6 +176,10 @@ impl UploadTransport for UploadVia {
 
     async fn use_entry(&self, entry_id: i64) -> Result<Used, AppError> {
         self.0.use_entry(entry_id).await
+    }
+
+    async fn delete_entry(&self, entry_id: i64) -> Result<(), AppError> {
+        self.0.delete_entry(entry_id).await
     }
 }
 

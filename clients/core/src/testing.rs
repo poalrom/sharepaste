@@ -251,6 +251,7 @@ pub struct ScriptedRelay {
     closed: AtomicI64,
     uploaded: Mutex<Vec<String>>,
     uses: Mutex<Vec<i64>>,
+    deleted: Mutex<Vec<i64>>,
     use_answer: Mutex<UseAnswer>,
     pair_payloads: Mutex<Vec<String>>,
     polls: Mutex<VecDeque<Result<PairClaim, AppError>>>,
@@ -296,6 +297,13 @@ impl ScriptedRelay {
     /// Every entry id a **Use** was recorded against, in order.
     pub fn uses(&self) -> Vec<i64> {
         self.uses.lock().clone()
+    }
+
+    /// Every entry id the relay was asked to delete, in order. What the
+    /// withdrawal race is checked against: an act withdrawn while it was
+    /// uploading has to be taken back off the relay.
+    pub fn deleted(&self) -> Vec<i64> {
+        self.deleted.lock().clone()
     }
 
     /// Change what this relay does with a use. The call is still recorded.
@@ -397,6 +405,11 @@ impl SessionTransport for ScriptedRelay {
             UseAnswer::Gone => Err(AppError::NotFound("entry not found".into())),
             UseAnswer::Unreachable => Err(AppError::Network("scripted outage".into())),
         }
+    }
+
+    async fn delete_entry(&self, entry_id: i64) -> Result<(), AppError> {
+        self.deleted.lock().push(entry_id);
+        Ok(())
     }
 }
 

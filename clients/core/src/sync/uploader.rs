@@ -48,6 +48,9 @@ pub trait UploadTransport: Send + Sync {
     /// handled here (the relay is updated first), and a use nobody can record
     /// is a use with nothing to reorder.
     async fn use_entry(&self, entry_id: i64) -> Result<Used, AppError>;
+    /// Take one entry off the relay, for an act withdrawn while it was being
+    /// uploaded.
+    async fn delete_entry(&self, entry_id: i64) -> Result<(), AppError>;
 }
 
 /// Why the uploader stopped.
@@ -146,12 +149,23 @@ impl Uploader {
                 Ok(sent) => {
                     // Scoped so the database guard is gone before anything
                     // reaches the sink: see [`EventSink`].
-                    let (count, reordered) = {
+                    let (count, reordered, withdrawn) = {
                         let conn = self.conn.lock().await;
-                        pending::ack(&conn, item.rowid)?;
+                        // **The withdrawal race, decided here.** The upload above
+                        // awaited with this lock released, and a delete inside
+                        // that window took the queued act with it. Zero acked
+                        // rows is that, and the only evidence of it there is:
+                        // reconciling would attach a relay id to a row somebody
+                        // deleted, or re-create it.
+                        let acked = pending::ack(&conn, item.rowid)? > 0;
+                        let mut withdrawn = None;
                         let reordered = match sent {
-                            Sent::Capture { uploaded } => {
+                            Sent::Capture { uploaded } if acked => {
                                 self.settle(&conn, item.local_entry_id, uploaded);
+                                false
+                            }
+                            Sent::Capture { uploaded } => {
+                                withdrawn = Some(uploaded.id);
                                 false
                             }
                             Sent::Use { entry_id, used } => {
@@ -167,8 +181,25 @@ impl Uploader {
                                 false
                             }
                         };
-                        (pending::count(&conn, &self.user_id)?, reordered)
+                        (pending::count(&conn, &self.user_id)?, reordered, withdrawn)
                     };
+                    // Safe to ask for, because the upload that just returned is
+                    // proof the relay is reachable. A failure here leaves one
+                    // entry on the relay that nothing local refers to; the next
+                    // backfill will bring it down, and it is a far smaller lie
+                    // than a deleted row reappearing.
+                    if let Some(relay_id) = withdrawn {
+                        tracing::info!(
+                            relay_id,
+                            "this act was withdrawn while it was uploading; deleting it again"
+                        );
+                        if let Err(e) = self.transport.delete_entry(relay_id).await {
+                            tracing::warn!(
+                                err = %e, relay_id,
+                                "could not take back a withdrawn act the relay had already taken"
+                            );
+                        }
+                    }
                     // A capture raises no `EntryAdded`: the Entry has existed
                     // since it was captured and the shells have had it all along.
                     // A use raises no `EntryAdded` either, and nothing reorders
@@ -262,11 +293,21 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    struct OkTransport { count: AtomicUsize, uses: Mutex<Vec<i64>>, entry_gone: bool }
+    struct OkTransport {
+        count: AtomicUsize,
+        uses: Mutex<Vec<i64>>,
+        deleted: Mutex<Vec<i64>>,
+        entry_gone: bool,
+    }
 
     impl OkTransport {
         fn new() -> Self {
-            OkTransport { count: AtomicUsize::new(0), uses: Mutex::new(Vec::new()), entry_gone: false }
+            OkTransport {
+                count: AtomicUsize::new(0),
+                uses: Mutex::new(Vec::new()),
+                deleted: Mutex::new(Vec::new()),
+                entry_gone: false,
+            }
         }
 
         /// A relay that no longer has whatever entry a queued use names — the
@@ -292,6 +333,11 @@ mod tests {
                 return Err(AppError::NotFound("entry not found".into()));
             }
             Ok(Used { seq: 900, last_use: crate::now_ms() })
+        }
+
+        async fn delete_entry(&self, entry_id: i64) -> Result<(), AppError> {
+            self.deleted.lock().await.push(entry_id);
+            Ok(())
         }
     }
 
@@ -321,6 +367,56 @@ mod tests {
         async fn use_entry(&self, _entry_id: i64) -> Result<Used, AppError> {
             Ok(Used { seq: 900, last_use: crate::now_ms() })
         }
+
+        async fn delete_entry(&self, _entry_id: i64) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
+    /// A relay whose upload blocks until a test releases it, and which records
+    /// what it was later asked to delete.
+    ///
+    /// The only way to drive the withdrawal race deliberately rather than by
+    /// timing luck: `parked` says the flush is provably inside its `await`, and
+    /// `release` lets it out again once the test has withdrawn the act.
+    struct BlockingRelay {
+        parked: tokio::sync::Semaphore,
+        release: tokio::sync::Semaphore,
+        deleted: Mutex<Vec<i64>>,
+    }
+
+    impl BlockingRelay {
+        fn new() -> Self {
+            BlockingRelay {
+                parked: tokio::sync::Semaphore::new(0),
+                release: tokio::sync::Semaphore::new(0),
+                deleted: Mutex::new(Vec::new()),
+            }
+        }
+
+        /// Wait until an upload is inside the await, and nothing else.
+        async fn wait_until_parked(&self) {
+            self.parked.acquire().await.expect("the upload parks").forget();
+        }
+    }
+
+    #[async_trait]
+    impl UploadTransport for BlockingRelay {
+        async fn upload(&self, _ct: &str) -> Result<Uploaded, AppError> {
+            self.parked.add_permits(1);
+            self.release.acquire().await.expect("the test releases the upload").forget();
+            let at = crate::now_ms();
+            Ok(Uploaded { id: 500, created_at: at, seq: 500, last_use: at })
+        }
+
+        async fn use_entry(&self, _entry_id: i64) -> Result<Used, AppError> {
+            Ok(Used { seq: 900, last_use: crate::now_ms() })
+        }
+
+        async fn delete_entry(&self, entry_id: i64) -> Result<(), AppError> {
+            self.deleted.lock().await.push(entry_id);
+            Ok(())
+        }
     }
 
     struct AuthFail;
@@ -331,6 +427,10 @@ mod tests {
         }
 
         async fn use_entry(&self, _entry_id: i64) -> Result<Used, AppError> {
+            Err(AppError::Auth("revoked".into()))
+        }
+
+        async fn delete_entry(&self, _entry_id: i64) -> Result<(), AppError> {
             Err(AppError::Auth("revoked".into()))
         }
     }
@@ -409,6 +509,50 @@ mod tests {
             sink.entries().is_empty(),
             "a flush creates nothing, so it announces nothing"
         );
+    }
+
+    /*
+     * The mid-flight withdrawal. `flush_once` awaits the upload with the database
+     * lock released, and a delete inside that window takes the queued act with
+     * it. The relay has the act by then, so the only honest outcome is to take it
+     * back off the relay — reconciling would attach a relay id to a row somebody
+     * deleted, or re-create it.
+     *
+     * Driven against a transport that blocks rather than by timing luck: the
+     * delete happens while the flush is provably inside its `await`.
+     */
+    #[tokio::test]
+    async fn an_act_withdrawn_during_its_upload_is_taken_back_off_the_relay() {
+        let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
+        paired(&conn).await;
+        let local_id = queue_capture(&conn, "withdrawn mid-flight").await;
+
+        let transport = Arc::new(BlockingRelay::new());
+        let (up, _sink) = uploader(conn.clone(), transport.clone());
+        let flush = tokio::spawn(async move { up.flush_once().await });
+
+        transport.wait_until_parked().await;
+        // The upload is now inside `transport.upload`. Withdraw the act and its
+        // row exactly as `delete_entry` does.
+        {
+            let c = conn.lock().await;
+            assert_eq!(
+                crate::storage::entries_cache::delete_one(&c, "u", local_id).unwrap(),
+                1
+            );
+            assert_eq!(pending::delete_for_entry(&c, "u", local_id).unwrap(), 1);
+        }
+        transport.release.add_permits(1);
+        flush.await.unwrap().unwrap();
+
+        assert_eq!(
+            *transport.deleted.lock().await,
+            vec![500],
+            "the relay took the act, so the relay has to be told it is unwanted"
+        );
+        assert!(cached(&conn).await.is_empty(), "and nothing came back locally");
+        let c = conn.lock().await;
+        assert_eq!(pending::count(&c, "u").unwrap(), 0);
     }
 
     /// The reason there is one queue: a use made during an outage reaches the

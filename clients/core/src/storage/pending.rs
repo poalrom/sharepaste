@@ -212,9 +212,41 @@ pub(crate) fn requeue_to_back(conn: &Connection, rowid: i64, at: i64) -> Result<
     Ok(())
 }
 
-pub(crate) fn ack(conn: &Connection, rowid: i64) -> Result<(), AppError> {
-    conn.execute("DELETE FROM pending_uploads WHERE rowid = ?1", params![rowid])?;
-    Ok(())
+/// Take a settled act off the queue, and report whether it was still there.
+///
+/// Zero is the withdrawal race and the only evidence of it: `flush_once` awaits
+/// the relay with the database lock released, and a delete inside that window
+/// removes this row. Its caller has to know, because the relay has taken an act
+/// nobody wants any more.
+pub(crate) fn ack(conn: &Connection, rowid: i64) -> Result<usize, AppError> {
+    let n = conn.execute("DELETE FROM pending_uploads WHERE rowid = ?1", params![rowid])?;
+    Ok(n)
+}
+
+/// Withdraw every act queued against one entry.
+///
+/// What deleting an un-flushed row amounts to: the queue is durable across a
+/// force-quit, so without this there is no way to stop a mistaken copy reaching
+/// the relay (ADR 0013).
+pub(crate) fn delete_for_entry(
+    conn: &Connection,
+    user_id: &str,
+    local_entry_id: i64,
+) -> Result<usize, AppError> {
+    let n = conn.execute(
+        "DELETE FROM pending_uploads WHERE user_id = ?1 AND local_entry_id = ?2",
+        params![user_id, local_entry_id],
+    )?;
+    Ok(n)
+}
+
+/// Empty one Pairing's queue.
+///
+/// `clear_history` needs it: a queue left standing repopulates exactly what was
+/// just cleared on the next flush.
+pub(crate) fn delete_all(conn: &Connection, user_id: &str) -> Result<usize, AppError> {
+    let n = conn.execute("DELETE FROM pending_uploads WHERE user_id = ?1", params![user_id])?;
+    Ok(n)
 }
 
 pub(crate) fn record_failure(conn: &Connection, rowid: i64, err: &str) -> Result<i64, AppError> {

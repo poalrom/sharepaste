@@ -966,38 +966,64 @@ impl Sharepaste {
         })
     }
 
-    /// Delete one entry, on the relay and locally.
+    /// Delete one entry, and withdraw the act that was going to publish it.
     ///
-    /// `entry_id` is this device's own id for the row; the relay is told about
-    /// the id it assigned.
+    /// `entry_id` is this device's own id for the row; the relay is told about the
+    /// id it assigned, when it has one.
+    ///
+    /// **A row the relay has not named needs no relay call at all.** No other
+    /// device knows of it, so there is nothing out there to take back — and the
+    /// queue is durable across a force-quit, so without this branch there is no
+    /// way to stop a mistaken copy reaching the relay when it comes back (ADR
+    /// 0013). It is the one delete that works with nothing in reach.
     pub async fn delete_entry(&self, user_id: &str, entry_id: i64) -> Result<(), AppError> {
-        let m = self.registry.load_active_membership(user_id).await?;
-        let server_url = m.server.base().to_string();
         let relay_id = {
             let conn = self.state.conn.lock().await;
-            entries_cache::relay_id_for(&conn, user_id, entry_id)?.ok_or_else(|| {
-                AppError::NotFound(format!("entry {entry_id} has not reached the relay"))
-            })?
+            entries_cache::relay_id_for(&conn, user_id, entry_id)?
         };
-        m.server
-            .delete_entry(relay_id)
-            .await
-            .map_err(|e| e.explain_insecure_relay(&server_url))?;
-        {
-            let conn = self.state.conn.lock().await;
-            entries_cache::delete_one(&conn, user_id, entry_id)?;
+        match relay_id {
+            Some(relay_id) => {
+                let m = self.registry.load_active_membership(user_id).await?;
+                let server_url = m.server.base().to_string();
+                m.server
+                    .delete_entry(relay_id)
+                    .await
+                    .map_err(|e| e.explain_insecure_relay(&server_url))?;
+                let conn = self.state.conn.lock().await;
+                entries_cache::delete_one(&conn, user_id, entry_id)?;
+            }
+            None => {
+                let conn = self.state.conn.lock().await;
+                // The row and the act together, and in that order for no reason
+                // that matters: nothing else can observe the gap, because both
+                // writes happen under this one lock.
+                entries_cache::delete_one(&conn, user_id, entry_id)?;
+                pending::delete_for_entry(&conn, user_id, entry_id)?;
+            }
         }
         self.events.emit(CoreEvent::EntryDeleted {
             user_id: user_id.to_string(),
             entry_id,
         });
+        if relay_id.is_none() {
+            // The withdrawal changed the queue depth, and the count chrome is
+            // the only thing that says so.
+            let count = self.pending_depth(user_id).await?;
+            self.events.emit(CoreEvent::PendingCount {
+                user_id: user_id.to_string(),
+                count,
+            });
+        }
         Ok(())
     }
 
-    /// Delete every entry for one Pairing, on the relay and locally.
+    /// Delete every entry for one Pairing, on the relay and locally, and empty
+    /// the queue with them.
     ///
     /// The relay first: a local wipe that outlived a failed remote one would put
-    /// every entry straight back on the next backfill.
+    /// every entry straight back on the next backfill. The queue goes for the
+    /// same reason — left standing it would repopulate exactly what was just
+    /// cleared, which is what it used to do.
     pub async fn clear_history(&self, user_id: &str) -> Result<(), AppError> {
         let m = self.registry.load_active_membership(user_id).await?;
         let server_url = m.server.base().to_string();
@@ -1005,12 +1031,29 @@ impl Sharepaste {
             .delete_all_entries()
             .await
             .map_err(|e| e.explain_insecure_relay(&server_url))?;
-        {
+        self.forget_history(user_id).await
+    }
+
+    /// Everything `clear_history` does once the relay has agreed, and the seam
+    /// its own tests drive.
+    ///
+    /// Separate because the relay half needs a relay: `delete_all_entries` is on
+    /// the pairing's own `ServerClient` rather than on a `SessionTransport`, so a
+    /// fake cannot stand in for it — and widening that trait for one test would
+    /// put a route on it that nothing in a session ever calls.
+    async fn forget_history(&self, user_id: &str) -> Result<(), AppError> {
+        let count = {
             let conn = self.state.conn.lock().await;
             entries_cache::delete_all(&conn, user_id)?;
-        }
+            pending::delete_all(&conn, user_id)?;
+            pending::count(&conn, user_id)?
+        };
         self.events.emit(CoreEvent::HistoryChanged {
             user_id: user_id.to_string(),
+        });
+        self.events.emit(CoreEvent::PendingCount {
+            user_id: user_id.to_string(),
+            count,
         });
         Ok(())
     }
@@ -2192,6 +2235,89 @@ mod tests {
         );
     }
 
+    /*
+     * Making a mistaken copy visible without making it withdrawable would show
+     * you the mistake and hand you nothing. The queue is durable across a
+     * force-quit, so this is the only thing that stops an un-flushed capture
+     * reaching the relay when it comes back (ADR 0013) — and it is the one delete
+     * that works with nothing in reach: no other device knows of the row, so
+     * there is nothing out there to take back.
+     */
+    #[test]
+    fn deleting_an_un_flushed_capture_withdraws_its_act_with_no_relay_in_reach() {
+        let Rig { sp, sink, .. } = rig();
+        sp.runtime.block_on(sp.offer("u", "a mistake")).unwrap();
+        sp.runtime.block_on(sp.offer("u", "keep this")).unwrap();
+        let history = sp.runtime.block_on(sp.list_history("u", None, 50)).unwrap();
+        let mistake = history
+            .iter()
+            .find(|e| e.preview == "a mistake")
+            .expect("the capture is a row")
+            .id;
+
+        // `rig()` points at a refused port. A delete that reached for the relay
+        // would fail here, which is the whole point.
+        sp.runtime.block_on(sp.delete_entry("u", mistake)).unwrap();
+
+        let left = sp.runtime.block_on(sp.list_history("u", None, 50)).unwrap();
+        assert_eq!(
+            left.iter().map(|e| e.preview.as_str()).collect::<Vec<_>>(),
+            vec!["keep this"],
+            "the row is gone and the other one is not"
+        );
+        let queued = sp.runtime.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            (pending::count(&conn, "u").unwrap(), pending::head(&conn, "u").unwrap())
+        });
+        assert_eq!(queued.0, 1, "the act went with the row");
+        assert_eq!(
+            head_plaintext(&queued.1.unwrap()),
+            "keep this",
+            "and what is left is the act nobody withdrew"
+        );
+        assert!(
+            sink.pending_counts().ends_with(&[1]),
+            "the count chrome is the only thing that says the queue shrank: {:?}",
+            sink.pending_counts()
+        );
+        assert!(
+            sink.events()
+                .iter()
+                .any(|e| matches!(e, CoreEvent::EntryDeleted { entry_id, .. } if *entry_id == mistake)),
+            "and the row's own id is what the shells are told to drop"
+        );
+    }
+
+    /*
+     * `clear_history` used to wipe the cache and leave the queue standing, so the
+     * next flush put back exactly what had just been cleared. The queue goes with
+     * it.
+     *
+     * Driven through `forget_history`, which is everything the operation does
+     * once the relay has agreed; that the relay is asked *first* is what
+     * `an_unreachable_cleartext_relay_explains_itself` pins.
+     */
+    #[test]
+    fn clearing_the_history_empties_the_queue_with_it() {
+        let Rig { sp, sink, .. } = rig();
+        sp.runtime.block_on(sp.offer("u", "queued and then cleared")).unwrap();
+
+        sp.runtime.block_on(sp.forget_history("u")).unwrap();
+        let after = sp.runtime.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            (
+                entries_cache::list_recent(&conn, "u", None, 50).unwrap().len(),
+                pending::count(&conn, "u").unwrap(),
+            )
+        });
+        assert_eq!(after, (0, 0), "nothing cached and nothing left to repopulate it");
+        assert!(
+            sink.pending_counts().ends_with(&[0]),
+            "and the count says so: {:?}",
+            sink.pending_counts()
+        );
+    }
+
     /// The plaintext of a queued capture, decrypted the way the relay's echo of
     /// it would be. The queue holds ciphertext, and ciphertext cannot be
     /// compared: `crypto::encrypt` draws a fresh nonce every call.
@@ -2722,8 +2848,9 @@ mod tests {
         ));
 
         // Both of these reach for the relay, which is what the refused port is
-        // for: an operation that tries is a fast failure, not a hang.
-        assert!(rt.block_on(sp.delete_entry("u", 4)).is_err());
+        // for: an operation that tries is a fast failure, not a hang. `local_id`
+        // names a row the relay *has* taken, so the delete does try.
+        assert!(rt.block_on(sp.delete_entry("u", local_id)).is_err());
         assert!(rt.block_on(sp.clear_history("u")).is_err());
 
         rt.block_on(sp.set_active_pairing("u")).unwrap();
