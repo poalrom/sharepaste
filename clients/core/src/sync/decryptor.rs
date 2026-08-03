@@ -51,7 +51,7 @@ pub fn ingest(
     let hash = plaintext_str.as_deref().map(plaintext_sha256);
     let stored = upsert_and_prune(conn, NewCachedEntry {
         user_id,
-        id: row.id,
+        relay_id: Some(row.id),
         ciphertext: &wire,
         plaintext: plaintext_str.as_deref(),
         plaintext_sha256: hash.as_deref(),

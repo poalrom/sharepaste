@@ -937,7 +937,9 @@ impl Sharepaste {
                 .next()
                 .ok_or_else(|| AppError::NotFound(format!("no entries for {user_id}")))?
         };
-        let entry_id = newest.id;
+        let entry_id = newest.relay_id.ok_or_else(|| {
+            AppError::NotFound("the newest entry has not reached the relay".into())
+        })?;
         let created_at = newest.created_at;
         // A NULL plaintext is an entry this device cannot decrypt. Handing back
         // the entry before it would be worse than failing: the person asked for
@@ -1384,8 +1386,11 @@ fn to_entries(
     rows.into_iter()
         .map(|r| {
             let device_label = labels.get(&r.device_id).cloned();
+            // The relay's id, because that is still what `Entry.id` means to a
+            // shell and to `delete_entry`. Every row has one: the only writer is
+            // the relay-delivered ingest path.
             Entry::new(
-                r.id,
+                r.relay_id.unwrap_or(r.local_id),
                 r.user_id,
                 r.plaintext,
                 r.created_at,
@@ -2281,7 +2286,8 @@ mod tests {
     fn cached(id: i64, device_id: &str) -> entries_cache::CachedEntry {
         entries_cache::CachedEntry {
             user_id: "u".into(),
-            id,
+            local_id: id,
+            relay_id: Some(id),
             ciphertext: vec![1],
             plaintext: Some(format!("entry {id}")),
             created_at: 1_000 + id,

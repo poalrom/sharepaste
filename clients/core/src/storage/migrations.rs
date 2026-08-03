@@ -24,15 +24,15 @@ CREATE TABLE IF NOT EXISTS devices (
 );
 
 CREATE TABLE IF NOT EXISTS entries_cache (
+  local_id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id          TEXT NOT NULL,
-  id               INTEGER NOT NULL,
+  relay_id         INTEGER,
   ciphertext       BLOB NOT NULL,
   plaintext        TEXT,
   plaintext_sha256 TEXT,
   created_at       INTEGER NOT NULL,
   last_use         INTEGER NOT NULL DEFAULT 0,
-  device_id        TEXT NOT NULL,
-  PRIMARY KEY (user_id, id)
+  device_id        TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS pending_uploads (
@@ -40,11 +40,13 @@ CREATE TABLE IF NOT EXISTS pending_uploads (
   user_id          TEXT NOT NULL,
   kind             TEXT NOT NULL,
   entry_id         INTEGER,
+  local_entry_id   INTEGER,
   ciphertext       BLOB,
   plaintext_sha256 TEXT,
   captured_at      INTEGER NOT NULL,
   attempts         INTEGER NOT NULL DEFAULT 0,
-  last_error       TEXT
+  last_error       TEXT,
+  refused_at       INTEGER
 );
 CREATE INDEX IF NOT EXISTS pending_uploads_user_id_rowid ON pending_uploads (user_id, rowid);
 
@@ -72,18 +74,68 @@ const ENTRIES_CACHE_ADDED_COLUMNS: &[(&str, &str)] = &[
     ("plaintext_sha256", "TEXT"),
 ];
 
-/// Indexes that name a column [`ENTRIES_CACHE_ADDED_COLUMNS`] adds.
+/// The same, for `pending_uploads`.
 ///
-/// Deliberately not in `SCHEMA`: `execute_batch(SCHEMA)` runs first, and on an
-/// installed database the columns these order by do not exist yet. The same
+/// `local_entry_id` names the entry a queued act belongs to — the row a capture
+/// created, the row a use acts on — which is what lets a queued act be found
+/// from its entry. `refused_at` is when the relay turned the act down for what
+/// it is rather than for being out of reach.
+const PENDING_UPLOADS_ADDED_COLUMNS: &[(&str, &str)] =
+    &[("local_entry_id", "INTEGER"), ("refused_at", "INTEGER")];
+
+/// Indexes on `entries_cache`, created after the rebuild below rather than in
+/// `SCHEMA`.
+///
+/// `execute_batch(SCHEMA)` runs first, and against an installed database the
+/// columns these order by do not exist until the rebuild has run. The same
 /// reason the relay's own migration keeps its two entry indexes out of its
 /// schema string.
+///
+/// The unique index is what makes a relay id mean one row *per Pairing*: two
+/// pairings on one machine are two relays' numbering, and nothing says they do
+/// not collide. NULLs are distinct in a SQLite unique index, which is exactly
+/// what an entry the relay has not named yet needs.
 const ENTRIES_CACHE_INDEXES: &str = r#"
 DROP INDEX IF EXISTS entries_cache_user_id_id;
+CREATE UNIQUE INDEX IF NOT EXISTS entries_cache_user_relay_id
+  ON entries_cache (user_id, relay_id);
 CREATE INDEX IF NOT EXISTS entries_cache_user_last_use
-  ON entries_cache (user_id, last_use DESC, id DESC);
+  ON entries_cache (user_id, last_use DESC, local_id DESC);
 CREATE INDEX IF NOT EXISTS entries_cache_user_sha256
   ON entries_cache (user_id, plaintext_sha256);
+"#;
+
+/// Rebuild `entries_cache` so an Entry exists before the relay names it.
+///
+/// A rebuild rather than `ALTER`s, for the same reason [`REBUILD_PENDING_UPLOADS`]
+/// is one: the key moves and `id` has to *stop* being `NOT NULL`, and SQLite can
+/// relax neither in place. The relay's id becomes `relay_id`, nullable, and the
+/// row's own identity becomes `local_id`, assigned here and stable until the row
+/// is deleted.
+///
+/// `ORDER BY id` on the copy is the load-bearing clause: `local_id` is allocated
+/// in insertion order, so copying in relay-id order is what makes the two agree
+/// about relative age for every row that predates this change. Without it the
+/// tiebreak in `(last_use DESC, local_id DESC)` would reverse pairs of entries
+/// that share a millisecond.
+const REBUILD_ENTRIES_CACHE: &str = r#"
+CREATE TABLE entries_cache_rebuilt (
+  local_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id          TEXT NOT NULL,
+  relay_id         INTEGER,
+  ciphertext       BLOB NOT NULL,
+  plaintext        TEXT,
+  plaintext_sha256 TEXT,
+  created_at       INTEGER NOT NULL,
+  last_use         INTEGER NOT NULL DEFAULT 0,
+  device_id        TEXT NOT NULL
+);
+INSERT INTO entries_cache_rebuilt
+  (user_id, relay_id, ciphertext, plaintext, plaintext_sha256, created_at, last_use, device_id)
+  SELECT user_id, id, ciphertext, plaintext, plaintext_sha256, created_at, last_use, device_id
+  FROM entries_cache ORDER BY id;
+DROP TABLE entries_cache;
+ALTER TABLE entries_cache_rebuilt RENAME TO entries_cache;
 "#;
 
 /// Rebuild `pending_uploads` so one queue can hold a capture and a use.
@@ -118,6 +170,8 @@ pub(crate) fn run(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch(SCHEMA)?;
     rename_watermark_to_sequence(conn)?;
     add_missing_columns(conn, "accounts", ACCOUNTS_ADDED_COLUMNS)?;
+    // Before the rebuild, which copies both of these columns across: an
+    // installed database has neither, and the rebuild's `SELECT` names them.
     let added = add_missing_columns(conn, "entries_cache", ENTRIES_CACHE_ADDED_COLUMNS)?;
     if added.contains(&"last_use") {
         // An entry never used since capture has `last_use == created_at`, which
@@ -127,8 +181,10 @@ pub(crate) fn run(conn: &Connection) -> Result<(), AppError> {
     if added.contains(&"plaintext_sha256") {
         backfill_plaintext_hashes(conn)?;
     }
+    rebuild_entries_cache(conn)?;
     conn.execute_batch(ENTRIES_CACHE_INDEXES)?;
     rebuild_pending_uploads(conn)?;
+    add_missing_columns(conn, "pending_uploads", PENDING_UPLOADS_ADDED_COLUMNS)?;
     Ok(())
 }
 
@@ -202,6 +258,16 @@ fn backfill_plaintext_hashes(conn: &Connection) -> Result<(), AppError> {
             ])?;
         }
     }
+    tx.commit()?;
+    Ok(())
+}
+
+fn rebuild_entries_cache(conn: &Connection) -> Result<(), AppError> {
+    if columns(conn, "entries_cache")?.contains("local_id") {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(REBUILD_ENTRIES_CACHE)?;
     tx.commit()?;
     Ok(())
 }
@@ -369,7 +435,7 @@ mod tests {
         run(&c).unwrap();
 
         let rows: Vec<(i64, i64, Option<String>)> = c
-            .prepare("SELECT id, last_use, plaintext_sha256 FROM entries_cache ORDER BY id")
+            .prepare("SELECT relay_id, last_use, plaintext_sha256 FROM entries_cache ORDER BY relay_id")
             .unwrap()
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .unwrap()
@@ -383,6 +449,93 @@ mod tests {
             "a plaintext already cached is hashed on upgrade, not on its next capture"
         );
         assert_eq!(rows[1].2, None, "an Undecryptable entry has nothing to hash");
+    }
+
+    /*
+     * An Entry exists before the relay names it (ADR 0013), so the cache is
+     * rekeyed on an id the relay did not assign — and an installed database has
+     * to come across whole. Everything the row was is checked, not just its
+     * count: the ciphertext is the only copy of the content, and a rebuild that
+     * dropped the plaintext would silently un-decrypt a history.
+     */
+    #[test]
+    fn an_installed_entries_cache_comes_across_whole_and_in_order() {
+        let c = installed();
+        run(&c).unwrap();
+        run(&c).unwrap();
+
+        let rows: Vec<(i64, i64, Vec<u8>, Option<String>, i64, String)> = c
+            .prepare(
+                "SELECT local_id, relay_id, ciphertext, plaintext, created_at, device_id
+                 FROM entries_cache ORDER BY local_id",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+            })
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2, "no entry may be lost to the rebuild");
+        assert_eq!(rows[0], (1, 1, vec![0x00], Some("hello".into()), 1000, "d".into()));
+        assert_eq!(rows[1], (2, 2, vec![0x00], None, 2000, "d".into()));
+
+        // The load-bearing half: `local_id` order matches `relay_id` order, so
+        // the tiebreak in `(last_use DESC, local_id DESC)` still reads relative
+        // age the same way for everything that predates this change.
+        let by_relay: Vec<i64> = c
+            .prepare("SELECT local_id FROM entries_cache ORDER BY relay_id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        let mut sorted = by_relay.clone();
+        sorted.sort_unstable();
+        assert_eq!(by_relay, sorted, "local ids must agree with relay ids about age");
+    }
+
+    /// Two pairings are two relays' numbering, and nothing says they do not
+    /// collide. One pairing's own numbering has to stay unique, or the relay's
+    /// echo of one entry would overwrite another.
+    #[test]
+    fn a_relay_id_is_unique_per_pairing_only() {
+        let c = fresh();
+        c.execute_batch(
+            "INSERT INTO entries_cache (user_id, relay_id, ciphertext, created_at, last_use, device_id)
+               VALUES ('a', 1, x'00', 1, 1, 'd'), ('b', 1, x'00', 1, 1, 'd');",
+        )
+        .unwrap();
+        let dup = c.execute_batch(
+            "INSERT INTO entries_cache (user_id, relay_id, ciphertext, created_at, last_use, device_id)
+               VALUES ('a', 1, x'00', 2, 2, 'd');",
+        );
+        assert!(dup.is_err(), "(user_id, relay_id) must be unique");
+
+        // And a Pairing may hold any number of entries the relay has not named.
+        c.execute_batch(
+            "INSERT INTO entries_cache (user_id, relay_id, ciphertext, created_at, last_use, device_id)
+               VALUES ('a', NULL, x'00', 3, 3, 'd'), ('a', NULL, x'00', 4, 4, 'd');",
+        )
+        .unwrap();
+    }
+
+    /// Both are unused until a later ticket writes them, and both have to exist
+    /// on an installed database as well as a fresh one.
+    #[test]
+    fn the_pending_queue_grows_its_entry_link_and_its_refusal() {
+        for c in [installed(), Connection::open_in_memory().unwrap()] {
+            run(&c).unwrap();
+            run(&c).unwrap();
+            let cols = columns_of(&c, "pending_uploads");
+            assert!(cols.contains(&"local_entry_id".to_string()), "got: {cols:?}");
+            assert!(cols.contains(&"refused_at".to_string()), "got: {cols:?}");
+            assert_eq!(
+                cols.iter().filter(|c| *c == "refused_at").count(),
+                1,
+                "ALTER must not repeat"
+            );
+        }
     }
 
     /// The FIFO order *is* the rowid, so a rebuild that reassigned them would

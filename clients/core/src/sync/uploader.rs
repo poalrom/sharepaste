@@ -454,7 +454,7 @@ mod tests {
             crate::storage::entries_cache::upsert_and_prune(
                 &c,
                 crate::storage::entries_cache::NewCachedEntry {
-                    user_id: "u", id: 7, ciphertext: b"ct", plaintext: Some("older"),
+                    user_id: "u", relay_id: Some(7), ciphertext: b"ct", plaintext: Some("older"),
                     plaintext_sha256: None, created_at: captured_at, last_use: captured_at,
                     device_id: "d",
                 },
@@ -476,7 +476,7 @@ mod tests {
         let used = crate::storage::entries_cache::list_recent(&c, "u", None, 10)
             .unwrap()
             .into_iter()
-            .find(|e| e.id == 7)
+            .find(|e| e.relay_id == Some(7))
             .expect("the used entry is still cached");
         assert!(
             used.last_use > captured_at,
@@ -564,7 +564,7 @@ mod tests {
         let c = conn.lock().await;
         let cached = crate::storage::entries_cache::list_recent(&c, "u", None, 10).unwrap();
         assert_eq!(cached.len(), 1, "the uploaded Entry is not in this device's own cache");
-        assert_eq!(cached[0].id, 42, "cached under the id the relay assigned");
+        assert_eq!(cached[0].relay_id, Some(42), "cached under the id the relay assigned");
         assert_eq!(cached[0].plaintext.as_deref(), Some("copied on this phone"));
         assert_eq!(
             cached[0].device_id, "this-phone",
