@@ -16,7 +16,7 @@ const base: EntryView = {
   last_use: NOW - 2 * 60_000,
   device_id: "own",
   origin_label: "own",
-  undecryptable: false,
+  undecryptable: false, pending: false, refused_reason: null,
 };
 
 let ipc: MockIpc;
@@ -72,7 +72,7 @@ describe("EntryRow", () => {
   });
 
   it("explains itself instead of copying an undecryptable entry", async () => {
-    renderRow({ preview: "", undecryptable: true });
+    renderRow({ preview: "", undecryptable: true, pending: false, refused_reason: null });
     expect(screen.queryByRole("button", { name: "Copy and keep open" })).toBeNull();
     fireEvent.click(screen.getByTestId("entry-row"));
     await waitFor(() => {

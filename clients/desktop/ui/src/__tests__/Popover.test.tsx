@@ -112,8 +112,8 @@ describe("Popover", () => {
    */
   it("the History icon opens the reader on the selected entry", async () => {
     servedHistory = [
-      { id: 11, user_id: "u-active", preview: "one", plaintext: "one", created_at: 1, last_use: 1, device_id: "d", origin_label: "d", undecryptable: false },
-      { id: 22, user_id: "u-active", preview: "two", plaintext: "two", created_at: 2, last_use: 2, device_id: "d", origin_label: "d", undecryptable: false },
+      { id: 11, user_id: "u-active", preview: "one", plaintext: "one", created_at: 1, last_use: 1, device_id: "d", origin_label: "d", undecryptable: false, pending: false, refused_reason: null },
+      { id: 22, user_id: "u-active", preview: "two", plaintext: "two", created_at: 2, last_use: 2, device_id: "d", origin_label: "d", undecryptable: false, pending: false, refused_reason: null },
     ];
     const view = render(<Popover />);
     await waitFor(() => expect(view.getAllByTestId("entry-row")).toHaveLength(2));
@@ -134,7 +134,7 @@ describe("Popover event subscriptions", () => {
     render(<Popover />);
     await waitFor(() => expect(ipc.handlers.get("history-changed")).toHaveLength(1));
 
-    servedHistory = [{ id: 7, user_id: "u-active", preview: "Refetched", plaintext: "Refetched", created_at: 3, last_use: 3, device_id: "d-active", origin_label: "d-ac", undecryptable: false }];
+    servedHistory = [{ id: 7, user_id: "u-active", preview: "Refetched", plaintext: "Refetched", created_at: 3, last_use: 3, device_id: "d-active", origin_label: "d-ac", undecryptable: false, pending: false, refused_reason: null }];
     act(() => ipc.emit("history-changed", { user_id: "u-active" }));
     await waitFor(() => {
       expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([7]);
@@ -191,7 +191,7 @@ describe("Popover event subscriptions", () => {
     const flushed: EntryView = {
       id: 3, user_id: "u-active", preview: "offline-burst-three",
       plaintext: "offline-burst-three", created_at: 3, last_use: 3,
-      device_id: "d-active", origin_label: "d-ac", undecryptable: false,
+      device_id: "d-active", origin_label: "d-ac", undecryptable: false, pending: false, refused_reason: null,
     };
     act(() => ipc.emit("entry-added", { user_id: "u-active", entry: flushed }));
 
@@ -206,6 +206,56 @@ describe("Popover event subscriptions", () => {
   });
 
   /*
+   * A flush and a refusal update one row and refetch nothing. Nothing reorders at
+   * a flush — the relay stamps a pending act exactly where the device already
+   * showed it — and the row is addressed by an id that does not change, so the
+   * keyboard cursor stays on it.
+   */
+  it("updates a row in place on entry-settled and entry-refused, with no refetch", async () => {
+    servedHistory = [
+      { id: 3, user_id: "u-active", preview: "queued", plaintext: "queued", created_at: 0, last_use: 0, device_id: "d-active", origin_label: "d-ac", undecryptable: false, pending: true, refused_reason: null },
+      { id: 2, user_id: "u-active", preview: "settled", plaintext: "settled", created_at: 2, last_use: 2, device_id: "d-active", origin_label: "d-ac", undecryptable: false, pending: false, refused_reason: null },
+    ];
+    render(<Popover />);
+    await waitFor(() => expect(useHistoryStore.getState().entries).toHaveLength(2));
+    act(() => useUiStore.setState({ selectedIndex: 0 }));
+    const listed = () => ipc.invoke.mock.calls.filter((c) => c[0] === "list_history").length;
+    const before = listed();
+
+    act(() => ipc.emit("entry-settled", { user_id: "u-active", entry_id: 3 }));
+    expect(useHistoryStore.getState().entries.map((e) => [e.id, e.pending])).toEqual([
+      [3, false],
+      [2, false],
+    ]);
+
+    act(() =>
+      ipc.emit("entry-refused", {
+        user_id: "u-active",
+        entry_id: 3,
+        reason: "payload too large",
+      }),
+    );
+    const [head] = useHistoryStore.getState().entries;
+    expect(head?.id).toBe(3);
+    expect(head?.pending).toBe(true);
+    expect(head?.refused_reason).toBe("payload too large");
+
+    expect(listed()).toBe(before);
+    expect(useUiStore.getState().selectedIndex).toBe(0);
+  });
+
+  it("ignores both events for a non-active Pairing", async () => {
+    servedHistory = [
+      { id: 3, user_id: "u-active", preview: "queued", plaintext: "queued", created_at: 0, last_use: 0, device_id: "d-active", origin_label: "d-ac", undecryptable: false, pending: true, refused_reason: null },
+    ];
+    render(<Popover />);
+    await waitFor(() => expect(useHistoryStore.getState().entries).toHaveLength(1));
+
+    act(() => ipc.emit("entry-settled", { user_id: "u-oldest", entry_id: 3 }));
+    expect(useHistoryStore.getState().entries[0]?.pending).toBe(true);
+  });
+
+  /*
    * The banner this replaces named an entry id that appeared nowhere in the UI.
    * The row is the surface now (plan §0.12), and there is no longer an event
    * either: `CoreEvent::DecryptionError` was deleted because `EntryAdded`
@@ -214,7 +264,7 @@ describe("Popover event subscriptions", () => {
    * nothing the popover has to be told separately.
    */
   it("leaves an undecryptable entry to its row and raises no banner", async () => {
-    servedHistory = [{ id: 42, user_id: "u-active", preview: "", plaintext: null, created_at: 1, last_use: 1, device_id: "d-active", origin_label: "d-ac", undecryptable: true }];
+    servedHistory = [{ id: 42, user_id: "u-active", preview: "", plaintext: null, created_at: 1, last_use: 1, device_id: "d-active", origin_label: "d-ac", undecryptable: true, pending: false, refused_reason: null }];
     const { findAllByTestId, queryByTestId } = render(<Popover />);
     await waitFor(() => expect(ipc.handlers.get("contact")).toHaveLength(1));
 
@@ -419,7 +469,7 @@ describe("Popover keyboard and row surfaces", () => {
     last_use: capturedAt,
     device_id: "d-active",
     origin_label: "d-ac",
-    undecryptable: false,
+    undecryptable: false, pending: false, refused_reason: null,
     ...over,
   });
 
@@ -465,7 +515,7 @@ describe("Popover keyboard and row surfaces", () => {
   });
 
   it("explains an Undecryptable entry in a strip instead of copying it", async () => {
-    servedHistory = [entry({ preview: "", plaintext: null, undecryptable: true })];
+    servedHistory = [entry({ preview: "", plaintext: null, undecryptable: true, pending: false, refused_reason: null })];
     const view = render(<Popover />);
     const row = await view.findByTestId("entry-row");
 

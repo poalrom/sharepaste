@@ -189,6 +189,26 @@ data class UiState(
     }
 
     /**
+     * Change what one row says about itself, leaving its place alone.
+     *
+     * Gated on the **Viewed** Pairing for the reason `EntryAdded` is: a live
+     * session belongs to the Active Pairing and goes on flushing while somebody is
+     * looking at another Pairing's History, and its acts are not part of the list
+     * on screen.
+     *
+     * A row this list has never heard of leaves the state untouched, including
+     * [scanned] — a filtered view whose rows came from the same list must not be
+     * left holding a copy the fold has moved past.
+     */
+    fun patchEntry(userId: String, entryId: Long, change: (Entry) -> Entry): UiState {
+        if (userId != viewedPairing || entries.none { it.id == entryId }) return this
+        val patch = { rows: List<Entry> ->
+            rows.map { if (it.id == entryId) change(it) else it }
+        }
+        return copy(entries = patch(entries), scanned = scanned.copy(entries = patch(scanned.entries)))
+    }
+
+    /**
      * The rows on screen, and the needle that left them.
      *
      * The screen reads this and never [entries]: the list, the `n/m` count and

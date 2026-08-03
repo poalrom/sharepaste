@@ -36,6 +36,16 @@ export type EntryView = {
   device_label?: string;
   origin_label: string;
   undecryptable: boolean;
+  /**
+   * An act against this entry has not reached the relay.
+   *
+   * True of a refusal too: the act is still owed. What the row draws is that the
+   * relay has not heard the latest word about it, and `refused_reason` is what
+   * says the waiting has stopped.
+   */
+  pending: boolean;
+  /** Why the relay turned the act down, when it did. */
+  refused_reason: string | null;
 };
 
 export type Pairing = {

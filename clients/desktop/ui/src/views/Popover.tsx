@@ -30,6 +30,8 @@ export default function Popover() {
   const hydrateHistory = useHistoryStore((s) => s.hydrate);
   const addEntry = useHistoryStore((s) => s.add);
   const removeEntry = useHistoryStore((s) => s.remove);
+  const settleEntry = useHistoryStore((s) => s.settle);
+  const refuseEntry = useHistoryStore((s) => s.refuse);
   const setStatus = useStatusStore((s) => s.set);
   const setLastContact = useContactStore((s) => s.setLastContact);
   const status = useStatusStore((s) => (active ? s.byUser[active] : undefined));
@@ -105,6 +107,16 @@ export default function Popover() {
         noteChange({ kind: "deleted", user_id, entry_id });
         if (user_id === usePairingsStore.getState().active) removeEntry(entry_id);
       }));
+      // In place and by id, with no refetch: nothing reorders at a flush and the
+      // id does not change, so the keyboard cursor stays where it was.
+      unsub.push(await events.onEntrySettled(({ user_id, entry_id }) => {
+        noteChange({ kind: "settled", user_id, entry_id });
+        if (user_id === usePairingsStore.getState().active) settleEntry(entry_id);
+      }));
+      unsub.push(await events.onEntryRefused(({ user_id, entry_id, reason }) => {
+        noteChange({ kind: "refused", user_id, entry_id, reason });
+        if (user_id === usePairingsStore.getState().active) refuseEntry(entry_id, reason);
+      }));
       const accs = await cmd.listPairings();
       if (cancelled) return;
       hydratePairings(accs);
@@ -165,7 +177,10 @@ export default function Popover() {
       cancelled = true;
       unsub.forEach((u) => u());
     };
-  }, [addEntry, hydratePairings, hydrateHistory, removeEntry, setLastContact, setStatus]);
+  }, [
+    addEntry, hydratePairings, hydrateHistory, refuseEntry, removeEntry, setLastContact,
+    settleEntry, setStatus,
+  ]);
 
   const conn = CONNECTION[status?.state ?? "Disconnected"];
   const degraded = active !== undefined && conn.degraded ? conn : undefined;

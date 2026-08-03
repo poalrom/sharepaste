@@ -8,6 +8,17 @@ export type HistoryState = {
   hydrate: (rows: EntryView[]) => void;
   add: (e: EntryView) => void;
   remove: (id: number) => void;
+  /**
+   * One act reached the relay, so its row has stopped waiting.
+   *
+   * In place and by id, with no refetch: nothing reorders at a flush — the relay
+   * stamps a pending act exactly where the device already showed it — and the id
+   * does not change either, so the reader's selection and the popover's keyboard
+   * cursor stay where they were.
+   */
+  settle: (id: number) => void;
+  /** The relay turned an act down for what it is. Same rules as `settle`. */
+  refuse: (id: number, reason: string) => void;
   clear: () => void;
 };
 
@@ -16,6 +27,14 @@ export const useHistoryStore = create<HistoryState>((set) => ({
   hydrate: (rows) => set({ entries: rows }),
   add: (entry) => set((s) => ({ entries: dedupePrepend(s.entries, entry) })),
   remove: (id) => set((s) => ({ entries: s.entries.filter((e) => e.id !== id) })),
+  settle: (id) =>
+    set((s) => ({
+      entries: patch(s.entries, id, { pending: false, refused_reason: null }),
+    })),
+  refuse: (id, reason) =>
+    set((s) => ({
+      entries: patch(s.entries, id, { pending: true, refused_reason: reason }),
+    })),
   clear: () => set({ entries: [] }),
 }));
 
@@ -25,7 +44,9 @@ export const useHistoryStore = create<HistoryState>((set) => ({
  */
 type Change =
   | { kind: "added"; user_id: string; entry: EntryView }
-  | { kind: "deleted"; user_id: string; entry_id: number };
+  | { kind: "deleted"; user_id: string; entry_id: number }
+  | { kind: "settled"; user_id: string; entry_id: number }
+  | { kind: "refused"; user_id: string; entry_id: number; reason: string };
 
 /** The replay log of every snapshot currently in flight. */
 const inFlight = new Set<Change[]>();
@@ -85,7 +106,9 @@ export async function hydrateFrom(
   for (const change of log) {
     if (change.user_id !== userId) continue;
     if (change.kind === "added") store.add(change.entry);
-    else store.remove(change.entry_id);
+    else if (change.kind === "deleted") store.remove(change.entry_id);
+    else if (change.kind === "settled") store.settle(change.entry_id);
+    else store.refuse(change.entry_id, change.reason);
   }
   return rows;
 }
@@ -112,4 +135,18 @@ export function useFilteredEntries(): EntryView[] {
 function dedupePrepend(existing: EntryView[], next: EntryView): EntryView[] {
   const without = existing.filter((e) => e.id !== next.id);
   return [next, ...without].slice(0, 100);
+}
+
+/**
+ * Change what one row says about itself, leaving its place alone.
+ *
+ * A new array, because zustand compares by reference, and a new object only for
+ * the row that moved — every other row keeps its identity so React re-renders
+ * one `<li>` rather than a hundred. A row this list has never heard of is
+ * ignored: the events carry every Pairing, and the surfaces filter by the one on
+ * screen.
+ */
+function patch(existing: EntryView[], id: number, fields: Partial<EntryView>): EntryView[] {
+  if (!existing.some((e) => e.id === id)) return existing;
+  return existing.map((e) => (e.id === id ? { ...e, ...fields } : e));
 }

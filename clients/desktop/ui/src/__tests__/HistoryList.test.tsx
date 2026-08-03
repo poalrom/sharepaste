@@ -14,8 +14,8 @@ describe("HistoryList", () => {
     ipc = mockIpc();
     useUiStore.setState({ filter: "", selectedIndex: 0, mainSection: "history" });
     useHistoryStore.setState({ entries: [
-      { id: 1, user_id: "u", preview: "Hello", plaintext: "Hello", created_at: 1, last_use: 1, device_id: "d", origin_label: "d", undecryptable: false },
-      { id: 2, user_id: "u", preview: "World", plaintext: "World", created_at: 2, last_use: 2, device_id: "d", origin_label: "d", undecryptable: false },
+      { id: 1, user_id: "u", preview: "Hello", plaintext: "Hello", created_at: 1, last_use: 1, device_id: "d", origin_label: "d", undecryptable: false, pending: false, refused_reason: null },
+      { id: 2, user_id: "u", preview: "World", plaintext: "World", created_at: 2, last_use: 2, device_id: "d", origin_label: "d", undecryptable: false, pending: false, refused_reason: null },
     ]});
     usePairingsStore.setState({
       pairings: [{ user_id: "u", device_id: "d", label: "mac", server_url: "https://s", relay_host: "s", status: "Online", pending: 0, is_active: true }],

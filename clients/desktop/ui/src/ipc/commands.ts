@@ -20,6 +20,7 @@ export const cmd = {
                          tauri.invoke<EntryView[]>("list_history", { args }),
   copyToClipboard:     (args: { user_id: string; entry_id: number }) => tauri.invoke<void>("copy_to_clipboard", { args }),
   deleteEntry:         (args: { user_id: string; entry_id: number }) => tauri.invoke<void>("delete_entry", { args }),
+  resendEntry:         (args: { user_id: string; entry_id: number }) => tauri.invoke<void>("resend_entry", { args }),
   clearHistory:        (args: { user_id: string }) => tauri.invoke<void>("clear_history", { args }),
   getContact:        (args: { user_id: string }) => tauri.invoke<Contact>("get_contact", { args }),
   getSettings:         (): Promise<Settings> => tauri.invoke("get_settings"),

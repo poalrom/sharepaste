@@ -9,9 +9,9 @@ describe("history store", () => {
 
   it("add prepends and dedupes by id", () => {
     const { add } = useHistoryStore.getState();
-    add({ id: 1, user_id: "u", preview: "a", plaintext: "a", created_at: 1, last_use: 1, device_id: "d", origin_label: "d", undecryptable: false });
-    add({ id: 2, user_id: "u", preview: "b", plaintext: "b", created_at: 2, last_use: 2, device_id: "d", origin_label: "d", undecryptable: false });
-    add({ id: 1, user_id: "u", preview: "a-new", plaintext: "a-new", created_at: 3, last_use: 3, device_id: "d", origin_label: "d", undecryptable: false });
+    add({ id: 1, user_id: "u", preview: "a", plaintext: "a", created_at: 1, last_use: 1, device_id: "d", origin_label: "d", undecryptable: false, pending: false, refused_reason: null });
+    add({ id: 2, user_id: "u", preview: "b", plaintext: "b", created_at: 2, last_use: 2, device_id: "d", origin_label: "d", undecryptable: false, pending: false, refused_reason: null });
+    add({ id: 1, user_id: "u", preview: "a-new", plaintext: "a-new", created_at: 3, last_use: 3, device_id: "d", origin_label: "d", undecryptable: false, pending: false, refused_reason: null });
     const state = useHistoryStore.getState();
     expect(state.entries.map((e) => e.id)).toEqual([1, 2]);
     expect(state.entries[0]?.preview).toBe("a-new");
@@ -19,14 +19,14 @@ describe("history store", () => {
 
   it("remove filters by id", () => {
     const { add, remove } = useHistoryStore.getState();
-    add({ id: 1, user_id: "u", preview: "a", plaintext: "a", created_at: 1, last_use: 1, device_id: "d", origin_label: "d", undecryptable: false });
+    add({ id: 1, user_id: "u", preview: "a", plaintext: "a", created_at: 1, last_use: 1, device_id: "d", origin_label: "d", undecryptable: false, pending: false, refused_reason: null });
     remove(1);
     expect(useHistoryStore.getState().entries.length).toBe(0);
   });
 
   const row = (id: number, user_id = "u"): EntryView => ({
     id, user_id, preview: `p${id}`, plaintext: `p${id}`, created_at: id,
-    last_use: id, device_id: "d", origin_label: "d", undecryptable: false,
+    last_use: id, device_id: "d", origin_label: "d", undecryptable: false, pending: false, refused_reason: null,
   });
 
   /*

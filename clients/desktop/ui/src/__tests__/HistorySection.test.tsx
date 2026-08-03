@@ -77,9 +77,9 @@ const OVERSIZE = `HEAD-${"A".repeat(RENDER_CAP)}-TAIL`;
  * more recently than it was.
  */
 const entriesA: EntryView[] = [
-  { id: 11, user_id: "u-a", preview: MULTILINE_PREVIEW, plaintext: MULTILINE, created_at: NOW - 2 * MINUTE, last_use: NOW - 2 * MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
-  { id: 12, user_id: "u-a", preview: "bravo", plaintext: "bravo", created_at: NOW - 6 * HOUR, last_use: NOW - 30 * MINUTE, device_id: "dev-phone", device_label: "IPHONE-15", origin_label: "IPHONE-15", undecryptable: false },
-  { id: 13, user_id: "u-a", preview: "charlie", plaintext: "charlie", created_at: NOW - 3 * HOUR, last_use: NOW - 3 * HOUR, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
+  { id: 11, user_id: "u-a", preview: MULTILINE_PREVIEW, plaintext: MULTILINE, created_at: NOW - 2 * MINUTE, last_use: NOW - 2 * MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false, pending: false, refused_reason: null },
+  { id: 12, user_id: "u-a", preview: "bravo", plaintext: "bravo", created_at: NOW - 6 * HOUR, last_use: NOW - 30 * MINUTE, device_id: "dev-phone", device_label: "IPHONE-15", origin_label: "IPHONE-15", undecryptable: false, pending: false, refused_reason: null },
+  { id: 13, user_id: "u-a", preview: "charlie", plaintext: "charlie", created_at: NOW - 3 * HOUR, last_use: NOW - 3 * HOUR, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false, pending: false, refused_reason: null },
 ];
 
 /**
@@ -87,8 +87,8 @@ const entriesA: EntryView[] = [
  * id, so a seed that outlives its one hydration would land on this row.
  */
 const entriesB: EntryView[] = [
-  { id: 21, user_id: "u-b", preview: "from the laptop", plaintext: "from the laptop", created_at: NOW - MINUTE, last_use: NOW - MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
-  { id: 13, user_id: "u-b", preview: "same id other pairing", plaintext: "same id other pairing", created_at: NOW - 2 * MINUTE, last_use: NOW - 2 * MINUTE, device_id: "dev-b", device_label: "PIXEL-9", origin_label: "PIXEL-9", undecryptable: false },
+  { id: 21, user_id: "u-b", preview: "from the laptop", plaintext: "from the laptop", created_at: NOW - MINUTE, last_use: NOW - MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false, pending: false, refused_reason: null },
+  { id: 13, user_id: "u-b", preview: "same id other pairing", plaintext: "same id other pairing", created_at: NOW - 2 * MINUTE, last_use: NOW - 2 * MINUTE, device_id: "dev-b", device_label: "PIXEL-9", origin_label: "PIXEL-9", undecryptable: false, pending: false, refused_reason: null },
 ];
 
 const bulkEntries = (count: number): EntryView[] =>
@@ -101,7 +101,7 @@ const bulkEntries = (count: number): EntryView[] =>
     last_use: NOW - i * MINUTE,
     device_id: "dev-a",
     origin_label: "dev-",
-    undecryptable: false,
+    undecryptable: false, pending: false, refused_reason: null,
   }));
 
 let ipc: MockIpc;
@@ -210,7 +210,7 @@ describe("HistorySection — the reader", () => {
   it("matches a query against a word past the Preview's cap on an entry's third line", async () => {
     expect(LONG_PREVIEW).not.toContain(THIRD_LINE_WORD);
     historyByUser["u-a"] = [
-      { id: 14, user_id: "u-a", preview: LONG_PREVIEW, plaintext: LONG_PLAINTEXT, created_at: NOW - 4 * MINUTE, last_use: NOW - MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false },
+      { id: 14, user_id: "u-a", preview: LONG_PREVIEW, plaintext: LONG_PLAINTEXT, created_at: NOW - 4 * MINUTE, last_use: NOW - MINUTE, device_id: "dev-a", device_label: "MBP-14", origin_label: "MBP-14", undecryptable: false, pending: false, refused_reason: null },
       ...entriesA,
     ];
     await renderPane();
@@ -546,7 +546,7 @@ describe("HistorySection — undecryptable entries", () => {
     last_use: NOW - MINUTE,
     device_id: "dev-a",
     origin_label: "dev-",
-    undecryptable: true,
+    undecryptable: true, pending: false, refused_reason: null,
   };
 
   beforeEach(() => {

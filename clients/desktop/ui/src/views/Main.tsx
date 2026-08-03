@@ -54,6 +54,8 @@ export default function Main() {
   const hydrateHistory = useHistoryStore((s) => s.hydrate);
   const addEntry = useHistoryStore((s) => s.add);
   const removeEntry = useHistoryStore((s) => s.remove);
+  const settleEntry = useHistoryStore((s) => s.settle);
+  const refuseEntry = useHistoryStore((s) => s.refuse);
   const setStatus = useStatusStore((s) => s.set);
   const setLastContact = useContactStore((s) => s.setLastContact);
   const now = useNow(60_000);
@@ -120,6 +122,16 @@ export default function Main() {
         noteChange({ kind: "deleted", user_id, entry_id });
         if (user_id === viewedUserId()) removeEntry(entry_id);
       }));
+      // In place and by id, with no refetch: nothing reorders at a flush and the
+      // id does not change, so the reader's selection stays where it was.
+      unsub.push(await events.onEntrySettled(({ user_id, entry_id }) => {
+        noteChange({ kind: "settled", user_id, entry_id });
+        if (user_id === viewedUserId()) settleEntry(entry_id);
+      }));
+      unsub.push(await events.onEntryRefused(({ user_id, entry_id, reason }) => {
+        noteChange({ kind: "refused", user_id, entry_id, reason });
+        if (user_id === viewedUserId()) refuseEntry(entry_id, reason);
+      }));
       const rows = await cmd.listPairings();
       if (cancelled) return;
       hydratePairings(rows);
@@ -165,7 +177,10 @@ export default function Main() {
       cancelled = true;
       unsub.forEach((u) => u());
     };
-  }, [addEntry, hydrateHistory, hydratePairings, removeEntry, setLastContact, setStatus]);
+  }, [
+    addEntry, hydrateHistory, hydratePairings, refuseEntry, removeEntry, setLastContact,
+    settleEntry, setStatus,
+  ]);
 
   // Keyed on `seq`, not the toast object, so the same message twice restarts
   // the window instead of inheriting what is left of the first one.

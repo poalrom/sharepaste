@@ -813,6 +813,26 @@ class SharepasteViewModel(
                 }
             }
 
+            // One act reached the Relay, so its row has stopped waiting. In place
+            // and by id, with **no refresh**: nothing reorders at a flush — the
+            // Relay stamps a pending act exactly where this phone already showed
+            // it — and the id does not change either, so nothing the reader is
+            // looking at moves under them.
+            is CoreEvent.EntrySettled -> _state.update { current ->
+                current.patchEntry(event.userId, event.entryId) {
+                    it.copy(pending = false, refusedReason = null)
+                }
+            }
+
+            // The Relay turned an act down for what it is. Same rules, and not a
+            // Notice: the refusal is about one row, the row is on screen, and it
+            // carries its own reason and its own way out.
+            is CoreEvent.EntryRefused -> _state.update { current ->
+                current.patchEntry(event.userId, event.entryId) {
+                    it.copy(pending = true, refusedReason = event.reason)
+                }
+            }
+
             is CoreEvent.HistoryChanged -> {
                 if (event.userId == _state.value.viewedPairing) {
                     viewModelScope.launch { refreshHistory(event.userId) }
