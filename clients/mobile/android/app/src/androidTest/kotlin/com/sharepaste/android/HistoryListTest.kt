@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -732,6 +733,35 @@ class HistoryListTest {
     }
 
     /**
+     * The `✕` ends where the buttons on the rows end.
+     *
+     * The Filter band is full-bleed and pays its own insets, which is the only
+     * arrangement in which this can be true: a band carrying the screen's
+     * gutter would set its control a gutter further in than the column of row
+     * buttons directly beneath it, and a control out of line with the column it
+     * sits on top of is the first thing an eye finds here.
+     *
+     * Asserted rather than eyeballed because the two numbers live in different
+     * files and neither one is wrong on its own. They agree today because both
+     * read [Fui.RowInset]; this fails the moment one of them stops.
+     */
+    @Test
+    fun the_clear_control_ends_where_the_rows_own_buttons_end() {
+        show(filtering("ssh", threeEntries))
+
+        val clear = compose.onNodeWithTag(TAG_FILTER_CLEAR).getUnclippedBoundsInRoot().right
+        val recall = compose.onNodeWithTag(entryRecallTag(3)).getUnclippedBoundsInRoot().right
+
+        assertEquals(
+            "the ✕ and the first row's Recall have to end on one line",
+            recall.value,
+            clear.value,
+            0.5f,
+        )
+        Evidence.log("right edge    = ✕ and RECALL both end at ${clear.value.toInt()}dp from the left")
+    }
+
+    /**
      * The Filter narrows the rows, and the count says how far.
      *
      * Case-insensitively, because a needle is matched against text somebody
@@ -832,20 +862,29 @@ class HistoryListTest {
     }
 
     /**
-     * The `✕` is there exactly while there is a needle to clear.
+     * The `✕` is there exactly while there is a needle to clear, and the empty
+     * band says what it is for.
      *
      * Chrome that is always present and usually inert is chrome a thumb learns
      * to ignore. The count is not conditional in the same way: a phone with
      * Entries always says how many, which is where the hundred-row boundary is
      * legible before anybody reaches it.
+     *
+     * The placeholder is the only label this field has — it has no room for the
+     * floating one a Material field would charge it for — so an empty band that
+     * has lost it is a band nobody can tell is typeable. It is drawn under the
+     * field rather than beside it, which is a thing that renders identically
+     * right up until the caret lands in the wrong place.
      */
     @Test
     fun the_clear_control_appears_only_with_something_to_clear() {
         show(filtering("", threeEntries))
         compose.onNodeWithTag(TAG_FILTER_CLEAR).assertDoesNotExist()
         compose.onNodeWithTag(TAG_FILTER_COUNT).assertTextEquals("3/3")
+        compose.onNodeWithText(resources.getString(R.string.filter_placeholder)).assertIsDisplayed()
 
         show(filtering("ssh", threeEntries))
+        compose.onNodeWithText(resources.getString(R.string.filter_placeholder)).assertDoesNotExist()
         compose.onNodeWithTag(TAG_FILTER_CLEAR).performClick()
 
         assertEquals("the ✕ must empty the field and nothing else", listOf(""), typed)

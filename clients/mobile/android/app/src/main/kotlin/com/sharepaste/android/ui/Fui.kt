@@ -173,6 +173,14 @@ object Fui {
     /** The screen's own gutter. */
     val Gutter = 14.dp
 
+    /**
+     * Where a row's own control stops, short of [Gutter] because the control
+     * carries its own touch slop. Every button down the right-hand edge of the
+     * History lands on this, the Filter's `✕` included — they read as one
+     * column and only stay one if the number is shared.
+     */
+    val RowInset = 8.dp
+
     val Notch = 6.dp
 
     // ── Type ─────────────────────────────────────────────────────────────────
@@ -371,6 +379,13 @@ fun Hairline(modifier: Modifier = Modifier, color: Color = Fui.Hairline) {
  * Chrome is what cannot scroll away. Everything the History pins above its list
  * is one of these, which is what makes "140dp of chrome" a number rather than an
  * accident.
+ *
+ * [gutter] is the screen's own inset, and the Filter is the one band that sets
+ * it to zero: a field is a surface somebody types on, and a surface stopping
+ * short of the edge reads as a control sitting inside the band rather than as
+ * the band itself. Content that does that pays its own insets, which is also
+ * the only way the `✕` can line up with the buttons on the rows below instead
+ * of with the text beside it.
  */
 @Composable
 fun ChromeBand(
@@ -378,6 +393,7 @@ fun ChromeBand(
     modifier: Modifier = Modifier,
     background: Color = Fui.Band,
     scanlines: Boolean = false,
+    gutter: Dp = Fui.Gutter,
     content: @Composable RowScope.() -> Unit,
 ) {
     Column(modifier.fillMaxWidth()) {
@@ -387,7 +403,7 @@ fun ChromeBand(
                 .height(height)
                 .background(background)
                 .then(if (scanlines) Modifier.fuiScanlines() else Modifier)
-                .padding(horizontal = Fui.Gutter),
+                .padding(horizontal = gutter),
             verticalAlignment = Alignment.CenterVertically,
             content = content,
         )
@@ -580,42 +596,32 @@ fun GlyphButton(
 }
 
 /**
- * A text field in the console's own voice.
+ * A labelled text field in the console's own voice: the two on the Pairing
+ * screen, and nothing else.
  *
  * Material's outlined field underneath, because a hand-rolled one would owe the
  * platform a cursor, a selection handle, an IME contract and an accessibility
  * tree. Only its colours, shape and type are ours.
  *
- * [label] is nullable because one caller cannot afford it. Material floats the
- * label above the value and charges the height for it either way; the History's
- * Filter is a 56dp chrome band and has nowhere to put it. A field with no label
- * has no accessible name either, which is why [contentDescription] exists beside
- * it — a placeholder disappears the moment somebody types, and a TalkBack user
- * who has typed is exactly the one who needs telling which field they are in.
- *
- * [leading] and [trailing] are Material's icon slots under the names they are
- * being used for: the Filter puts a glyph in one and a count with a `✕` in the
- * other, and neither is an icon.
+ * The [label] is what names the field to TalkBack and what carries the focus,
+ * so the outline is allowed to be loud here: a form asks which of several boxes
+ * you are in. The Filter has one field, no label and no room for the answer,
+ * which is why it draws its own band rather than passing arguments to this.
  */
 @Composable
 fun FuiTextField(
     value: String,
     onValueChange: (String) -> Unit,
+    label: String,
     modifier: Modifier = Modifier,
-    label: String? = null,
     placeholder: String? = null,
-    contentDescription: String? = null,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
-    leading: @Composable (() -> Unit)? = null,
-    trailing: @Composable (() -> Unit)? = null,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        label = label?.let { { Text(it, style = Fui.Micro) } },
+        label = { Text(label, style = Fui.Micro) },
         placeholder = placeholder?.let { { Text(it, style = Fui.Data, color = Fui.TextDim) } },
-        leadingIcon = leading,
-        trailingIcon = trailing,
         singleLine = true,
         shape = RectangleShape,
         textStyle = Fui.Data,
@@ -631,15 +637,7 @@ fun FuiTextField(
             focusedContainerColor = Fui.Recess,
             unfocusedContainerColor = Fui.Recess,
         ),
-        modifier = modifier
-            .fillMaxWidth()
-            .then(
-                if (contentDescription == null) {
-                    Modifier
-                } else {
-                    Modifier.semantics { this.contentDescription = contentDescription }
-                },
-            ),
+        modifier = modifier.fillMaxWidth(),
     )
 }
 

@@ -4,9 +4,12 @@ import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
@@ -15,6 +18,7 @@ import com.sharepaste.android.ui.PairingState
 import com.sharepaste.android.ui.Screen
 import com.sharepaste.android.ui.SharepasteApp
 import com.sharepaste.android.ui.TAG_BACK_TO_HISTORY
+import com.sharepaste.android.ui.TAG_FILTER_FIELD
 import com.sharepaste.android.ui.TAG_HISTORY_LIST
 import com.sharepaste.android.ui.TAG_PAIRINGS_SCREEN
 import com.sharepaste.android.ui.TAG_PAIRING_SCREEN
@@ -433,6 +437,58 @@ class BackNavigationTest {
         pressBack()
         assertTrue("back on an unfiltered History has to leave the app", awaitFinishing())
         Evidence.log("back/filter   = the first press emptied \"ssh\", the second left the app")
+    }
+
+    /**
+     * Back leaves the field, not just the needle.
+     *
+     * A press that empties the Filter and hands the field back still focused
+     * leaves a caret blinking in a band that says `FILTER HISTORY`: the screen
+     * looks like it is still being typed into, and the next press goes to the
+     * IME rather than out of the app. Clearing the text without clearing the
+     * focus is the half-fix that looks right in a screenshot of the state
+     * holder and wrong on the phone.
+     *
+     * The `✕` deliberately does **not** do this, which is why the assertion
+     * lives against the gesture and not against the action both share: a hand
+     * that reached into the band to clear a query is about to type another one.
+     */
+    @Test
+    fun back_hands_the_filter_field_back_unfocused() {
+        open(
+            UiState(
+                screen = Screen.History,
+                pairings = listOf(holder),
+                activeUserId = holder.userId,
+                foreground = true,
+            ),
+        )
+        compose.onNodeWithTag(TAG_FILTER_FIELD).performTextInput("ssh")
+        compose.onNodeWithTag(TAG_FILTER_FIELD).assertIsFocused()
+
+        backUntilTheFilterIsEmpty()
+
+        compose.onNodeWithTag(TAG_FILTER_FIELD).assertIsNotFocused()
+        assertFalse("the press that cleared the Filter may not also leave", activity.isFinishing)
+        Evidence.log("back/focus    = the Filter emptied and the field stopped holding the caret")
+    }
+
+    /**
+     * Presses back until the needle is gone, and says so if it never is.
+     *
+     * Not a single press, because a focused field means a keyboard: the IME
+     * takes the first event and the app's handler takes the next, which is the
+     * behaviour [back_on_the_history_clears_a_filter_before_it_exits] documents
+     * from the other side. Stops on the press that empties the Filter, so the
+     * app is never asked to exit.
+     */
+    private fun backUntilTheFilterIsEmpty() {
+        repeat(3) {
+            if (shown.value.filter.isEmpty()) return
+            pressBack()
+            compose.waitForIdle()
+        }
+        throw AssertionError("three presses and the Filter still reads \"${shown.value.filter}\"")
     }
 
     private companion object {

@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
@@ -36,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -229,7 +231,7 @@ private fun IdentityBand(state: UiState, actions: AppActions) {
                 .fillMaxWidth()
                 .height(52.dp)
                 .background(Brush.verticalGradient(listOf(Fui.CyanA08, Color.Transparent)))
-                .padding(start = Fui.Gutter, end = 8.dp),
+                .padding(start = Fui.Gutter, end = Fui.RowInset),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -291,6 +293,14 @@ private fun IdentityBand(state: UiState, actions: AppActions) {
  * until it is used. The count is not conditional in the same way — a phone with
  * Entries always says how many, which is where the hundred-row boundary is
  * legible before anybody hits it.
+ *
+ * **The band is the field, edge to edge, and draws no outline in any state.**
+ * Material's outlined field is a box you put on a form beside other boxes; this
+ * is the one thing on its band, so a frame around it only says "not the part
+ * either side of me" about two strips of nothing. Focus has the caret to say it
+ * with. That leaves [BasicTextField] and a decoration this file owns, which is
+ * also what buys the exact insets: the glyph on the screen's gutter like every
+ * heading, and the `✕` on [Fui.RowInset] like every button on the rows below.
  */
 @Composable
 private fun FilterBand(state: UiState, onFilter: (String) -> Unit) {
@@ -298,15 +308,22 @@ private fun FilterBand(state: UiState, onFilter: (String) -> Unit) {
     // to be a count that exists, and during a scan the field is a keystroke
     // ahead of the answer.
     val filtering = state.shown.needle.isNotEmpty()
-    ChromeBand(height = FilterHeight) {
-        FuiTextField(
+    val named = stringResource(R.string.filter_field)
+    ChromeBand(height = FilterHeight, background = Fui.Recess, gutter = 0.dp) {
+        Text(
+            text = "⌕",
+            style = Fui.Glyph,
+            color = Fui.TextDim,
+            // Decorative, as every glyph in this app that is not itself a
+            // control is: the field beside it already has a name.
+            modifier = Modifier.padding(start = Fui.Gutter, end = 10.dp).clearAndSetSemantics {},
+        )
+        BasicTextField(
             value = state.filter,
             onValueChange = onFilter,
-            placeholder = stringResource(R.string.filter_placeholder),
-            // The label is what a 56dp band cannot afford, and the label is the
-            // only thing that would have named this field to TalkBack — the
-            // placeholder disappears at the first keystroke.
-            contentDescription = stringResource(R.string.filter_field),
+            singleLine = true,
+            textStyle = Fui.Data.copy(color = Fui.TextPrimary),
+            cursorBrush = SolidColor(Fui.Cyan400),
             keyboardOptions = KeyboardOptions(
                 // A needle is matched case-insensitively against text somebody
                 // else copied, so a capital first letter and a corrected word
@@ -314,30 +331,46 @@ private fun FilterBand(state: UiState, onFilter: (String) -> Unit) {
                 capitalization = KeyboardCapitalization.None,
                 autoCorrectEnabled = false,
             ),
-            leading = {
-                Text(
-                    text = "⌕",
-                    style = Fui.Glyph,
-                    color = Fui.TextDim,
-                    // Decorative, as every glyph in this app that is not itself
-                    // a control is: the field beside it already has a name.
-                    modifier = Modifier.clearAndSetSemantics {},
-                )
+            decorationBox = { field ->
+                // Stacked, not sequenced: the caret belongs at the start of an
+                // empty field, which it only is if the two share an origin.
+                //
+                // The placeholder is the only thing naming this field on screen
+                // and it leaves at the first keystroke, which is why the node
+                // carries a name of its own for the TalkBack user who has typed.
+                Box {
+                    if (state.filter.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.filter_placeholder),
+                            style = Fui.Data,
+                            color = Fui.TextDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    field()
+                }
             },
-            trailing = { FilterTrailing(state, filtering, onFilter) },
-            modifier = Modifier.testTag(TAG_FILTER_FIELD),
+            modifier = Modifier
+                .weight(1f)
+                .testTag(TAG_FILTER_FIELD)
+                .semantics { contentDescription = named },
         )
+        FilterTrailing(state, filtering, onFilter)
     }
 }
 
 /**
  * How much of the History survives the needle, and the way out.
  *
- * **A node of its own inside the field's, and it has to be.** A text field
- * merges its decoration into one accessible node, which would leave the count
- * as a fragment of the field's name and give a live region nothing to be. A
- * merging node is where that merge stops — which is also why the `✕` beside it
- * stays reachable — so this asks to be one.
+ * Ends on [Fui.RowInset], the same inset every row's button ends on, because
+ * the `✕` sits directly above a column of them and a control half a gutter out
+ * of line with that column is the first thing an eye finds on this screen.
+ *
+ * **The count is its own accessible node.** It was a fragment of the field's
+ * name for as long as it was a text field's decoration, which left a live
+ * region with nothing to be; now it is a sibling of the field rather than
+ * inside it, and merging its descendants is all it takes.
  *
  * Spoken as a sentence rather than as `3/100`, which TalkBack reads out as a
  * date or as "three slash one hundred" depending on the engine. The visible
@@ -355,6 +388,7 @@ private fun FilterTrailing(state: UiState, filtering: Boolean, onFilter: (String
     val held = state.entries.size
     val spoken = stringResource(R.string.filter_count_spoken, shown, held)
     Row(
+        modifier = Modifier.padding(start = 10.dp, end = Fui.RowInset),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -557,7 +591,7 @@ private fun EntryRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(Fui.RowHeight)
-                    .padding(end = 8.dp),
+                    .padding(end = Fui.RowInset),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -682,7 +716,7 @@ private fun UndecryptableRow(entry: Entry, onDelete: (Entry) -> Unit, modifier: 
                 .fillMaxWidth()
                 .height(Fui.RowHeight)
                 .background(Fui.AlertA16)
-                .padding(end = 8.dp),
+                .padding(end = Fui.RowInset),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {

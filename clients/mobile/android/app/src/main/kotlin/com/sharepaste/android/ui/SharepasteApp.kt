@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
 import com.sharepaste.android.scan.CameraProblem
 import com.sharepaste.core.Entry
 import kotlinx.coroutines.flow.Flow
@@ -205,14 +206,28 @@ fun SharepasteApp(
                 }
 
                 Screen.History -> {
-                    // The same action as the `✕` in the Filter band, and only
-                    // while that control is on screen. With no Filter this is
-                    // the root and back exits, which is the platform's answer.
+                    // Not quite the `✕` in the Filter band, and only while that
+                    // control is on screen. With no Filter this is the root and
+                    // back exits, which is the platform's answer.
                     //
-                    // Three presses leave the app while the keyboard is up: the
-                    // IME eats the first, this takes the second. That is the
-                    // cost of a Filter that does not vanish on a stray gesture.
-                    BackHandler(enabled = state.filter.isNotEmpty()) { actions.setFilter("") }
+                    // **Back leaves the field, the `✕` stays in it.** Both empty
+                    // the needle, but they are different intentions: the `✕` is
+                    // a hand already in the band clearing a query to type the
+                    // next one, while back is somebody done with filtering. A
+                    // field still holding a caret and the focus after the second
+                    // one reads as a Filter that only looks cleared, and it takes
+                    // a third press to leave a screen that appears to be at rest.
+                    //
+                    // Three presses do still leave the app while the keyboard is
+                    // up: the IME eats the first, this takes the second. That is
+                    // the cost of a Filter that does not vanish on a stray
+                    // gesture — but the second press now finishes the job, so
+                    // the third leaves an app that is visibly ready to be left.
+                    val focus = LocalFocusManager.current
+                    BackHandler(enabled = state.filter.isNotEmpty()) {
+                        focus.clearFocus()
+                        actions.setFilter("")
+                    }
                     HistoryScreen(state = state, actions = actions, headMoves = headMoves)
                 }
 
