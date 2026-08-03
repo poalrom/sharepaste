@@ -93,6 +93,14 @@ pub struct Entry {
     pub device_label: Option<String>,
     pub origin_label: String,
     pub undecryptable: bool,
+    /// An act against this entry has not reached the relay.
+    ///
+    /// True of a refusal too: the act is still owed. What a row draws is that the
+    /// relay has not heard the latest word about it, and `refused_reason` is what
+    /// says the waiting has stopped.
+    pub pending: bool,
+    /// Why the relay turned the act down, when it did.
+    pub refused_reason: Option<String>,
 }
 
 impl From<CoreEntry> for Entry {
@@ -108,6 +116,8 @@ impl From<CoreEntry> for Entry {
             device_label,
             origin_label,
             undecryptable,
+            pending,
+            refused_reason,
         } = e;
         Entry {
             id,
@@ -120,25 +130,33 @@ impl From<CoreEntry> for Entry {
             device_label,
             origin_label,
             undecryptable,
+            pending,
+            refused_reason,
         }
     }
 }
 
-/// Where a page of the History resumes from: the `last_use` and `id` of the
-/// last row of the page before it.
+/// Where a page of the History resumes from: the `(rank, ord, id)` of the last
+/// row of the page before it.
 ///
-/// A pair and not an id, because id is no longer the order. Paging by it alone
-/// would skip and repeat rows the moment anything was used.
+/// Three parts and not an id, because the History is two regions in one order
+/// (ADR 0014) and the whole of that order is `(rank ASC, ord DESC, id DESC)`.
+/// Keyset paging over the same tuple is what makes crossing the seam between the
+/// pending region and the settled one no different from any other page boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct HistoryCursor {
-    pub last_use: i64,
+    /// Which region: 0 refused, 1 pending, 2 settled.
+    pub rank: i64,
+    /// The place inside that region.
+    pub ord: i64,
+    /// This device's own id for the row, which keeps the order total.
     pub id: i64,
 }
 
 impl From<HistoryCursor> for CoreHistoryCursor {
     fn from(c: HistoryCursor) -> Self {
-        let HistoryCursor { last_use, id } = c;
-        CoreHistoryCursor { last_use, id }
+        let HistoryCursor { rank, ord, id } = c;
+        CoreHistoryCursor { rank, ord, id }
     }
 }
 

@@ -15,7 +15,7 @@
 use crate::capture::filter::{self, CaptureContext, FilterDecision, PasteboardSniff, SkipReason};
 use crate::crypto::UserKey;
 use crate::errors::AppError;
-use crate::event::{CoreEvent, Entry};
+use crate::event::{CoreEvent, Entry, Queued};
 use crate::http::{ServerClient, TransportPolicy};
 use crate::keychain::{token_account, user_key_account, Keychain};
 use crate::pairing::invite::{claim_invite, persist_claimed_pairing};
@@ -151,19 +151,30 @@ pub enum RecallSource {
     Cache,
 }
 
-/// Where a page of the History resumes from: the `(last_use, id)` of the last
+/// Where a page of the History resumes from: the `(rank, ord, id)` of the last
 /// row of the page before it.
 ///
-/// A pair and not an id, because id is no longer the order. Paging by it alone
-/// would skip and repeat rows the moment anything was used, and the id half is
-/// what keeps the order total when two entries share a millisecond.
+/// Three parts and not an id, because the History is two regions in one order
+/// (ADR 0014) and the whole of that order is `(rank ASC, ord DESC, id DESC)`.
+/// `rank` says which region — refused, pending, settled — `ord` is the place
+/// inside it, and `id` keeps the order total when two rows share an `ord`.
+/// Keyset paging over the same tuple is what makes crossing the seam between
+/// the regions no different from any other page boundary.
 ///
 /// `id` is [`Entry::id`] — this device's own id for the row, not the relay's.
 /// The relay's does not cross this facade at all, and a row that has not reached
 /// the relay has none to page by.
+///
+/// `rank` and `ord` are facts about the *order*, not about the entry, so they are
+/// deliberately not on [`Entry`]: a row says whether it is pending and why it was
+/// refused, and nothing about which of three groups the query put it in. A cursor
+/// is therefore built by the core from the cached row, and a shell that pages
+/// gets one back rather than assembling it — no shipped shell pages yet, and the
+/// one that does will be handed it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 pub struct HistoryCursor {
-    pub last_use: i64,
+    pub rank: i64,
+    pub ord: i64,
     pub id: i64,
 }
 
@@ -765,7 +776,7 @@ impl Sharepaste {
     /// One page of the History, last use first.
     ///
     /// `before` resumes after the last row of the previous page; `limit` is
-    /// clamped to the cache's own cap.
+    /// clamped to the largest page the cache will serve.
     pub async fn list_history(
         &self,
         user_id: &str,
@@ -773,7 +784,7 @@ impl Sharepaste {
         limit: i64,
     ) -> Result<Vec<Entry>, AppError> {
         let conn = self.state.conn.lock().await;
-        let cursor = before.map(|c| (c.last_use, c.id));
+        let cursor = before.map(|c| (c.rank, c.ord, c.id));
         let rows = entries_cache::list_recent(&conn, user_id, cursor, limit)?;
         let labels = devices::map_for(&conn, user_id)?;
         Ok(to_entries(rows, &labels))
@@ -1241,10 +1252,9 @@ impl Sharepaste {
             let local_id = entries_cache::insert_captured(
                 &tx, user_id, &ciphertext, &text, plaintext_sha256, &device_id,
             )?;
-            let queued = pending::enqueue_capture(
+            pending::enqueue_capture(
                 &tx, user_id, local_id, &ciphertext, plaintext_sha256, crate::now_ms(),
             )?;
-            warn_if_dropped(user_id, queued.dropped_oldest);
             let count = pending::count(&tx, user_id)?;
             tx.commit()?;
             let device_label =
@@ -1259,6 +1269,7 @@ impl Sharepaste {
                 0,
                 device_id,
                 device_label,
+                Queued::Pending,
             );
             (entry, count)
         };
@@ -1463,9 +1474,7 @@ impl UseRecorder {
     async fn queue(&self, user_id: &str, entry_id: i64, relay_id: i64) -> Result<(), AppError> {
         let count = {
             let conn = self.state.conn.lock().await;
-            let queued =
-                pending::enqueue_use(&conn, user_id, entry_id, relay_id, crate::now_ms())?;
-            warn_if_dropped(user_id, queued.dropped_oldest);
+            pending::enqueue_use(&conn, user_id, entry_id, relay_id, crate::now_ms())?;
             pending::count(&conn, user_id)?
         };
         self.events.emit(CoreEvent::PendingCount {
@@ -1480,20 +1489,8 @@ impl UseRecorder {
     }
 }
 
-/// The queue is at its per-user cap, so the oldest acts made while offline have
-/// just been discarded unsent. Nothing else surfaces that loss at all.
-fn warn_if_dropped(user_id: &str, dropped: usize) {
-    if dropped > 0 {
-        tracing::warn!(
-            %user_id,
-            dropped,
-            "pending upload queue full; evicted oldest unsent acts"
-        );
-    }
-}
-
 /// Cached rows as a shell renders them, with each Origin resolved against the
-/// Device mirror.
+/// Device mirror and each region read off the row.
 ///
 /// A `device_id` the mirror has never heard of keeps a `None` label rather than
 /// failing the row: a device paired since the last `GET /me`, or a relay too old
@@ -1505,6 +1502,11 @@ fn to_entries(
     rows.into_iter()
         .map(|r| {
             let device_label = labels.get(&r.device_id).cloned();
+            let queued = match r.region.refused_reason {
+                Some(reason) => Queued::Refused(reason),
+                None if r.region.pending() => Queued::Pending,
+                None => Queued::Settled,
+            };
             Entry::new(
                 r.local_id,
                 r.user_id,
@@ -1513,6 +1515,7 @@ fn to_entries(
                 r.last_use,
                 r.device_id,
                 device_label,
+                queued,
             )
         })
         .collect()
@@ -2588,6 +2591,11 @@ mod tests {
             created_at: 1_000 + id,
             last_use: 1_000 + id,
             device_id: device_id.into(),
+            region: entries_cache::Region {
+                rank: 2,
+                ord: 1_000 + id,
+                refused_reason: None,
+            },
         }
     }
 
@@ -2826,8 +2834,14 @@ mod tests {
         let history = rt.block_on(sp.list_history("u", None, 50)).unwrap();
         assert_eq!(history.len(), 1);
         assert!(!history[0].undecryptable);
-        let tail = history.last().unwrap();
-        let cursor = HistoryCursor { last_use: tail.last_use, id: tail.id };
+        // A cursor is taken from a row's region, which is a fact about the order
+        // rather than about the entry, so it comes off the cache rather than off
+        // `Entry` — see `HistoryCursor`.
+        let cursor = rt.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            let row = entries_cache::list_recent(&conn, "u", None, 1).unwrap().remove(0);
+            HistoryCursor { rank: row.region.rank, ord: row.region.ord, id: row.local_id }
+        });
         assert!(rt.block_on(sp.list_history("u", Some(cursor), 50)).unwrap().is_empty());
         assert_eq!(
             rt.block_on(sp.read_entry("u", local_id)).unwrap().as_deref(),

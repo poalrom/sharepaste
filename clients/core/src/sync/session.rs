@@ -50,7 +50,7 @@
 
 use crate::crypto::UserKey;
 use crate::errors::AppError;
-use crate::event::{CoreEvent, Entry};
+use crate::event::{CoreEvent, Entry, Queued};
 use crate::http::dto::{EntryRow, MeResp};
 use crate::http::ServerClient;
 use crate::platform::EventSink;
@@ -738,6 +738,10 @@ async fn run_sse_loop(
                                             last_use,
                                             device_id,
                                             device_label,
+                                            // Delivered by the relay, so the
+                                            // relay has it: this row owes
+                                            // nothing and waits for nothing.
+                                            Queued::Settled,
                                         )
                                     });
                                     (added, out.stored.moved)

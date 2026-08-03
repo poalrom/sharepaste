@@ -164,8 +164,9 @@ pub async fn set_active_pairing(
 #[derive(Deserialize)]
 pub(crate) struct ListHistoryArgs {
     pub(crate) user_id: String,
-    /// Where to resume: the `last_use` and `id` of the last row already shown.
-    /// A pair and not an id, because id is no longer the order.
+    /// Where to resume: the `(rank, ord, id)` of the last row already shown.
+    /// Three parts and not an id, because the History is two regions in one
+    /// order and `(rank, ord, id)` is the whole of it.
     pub(crate) before: Option<HistoryCursor>,
     pub(crate) limit: i64,
 }

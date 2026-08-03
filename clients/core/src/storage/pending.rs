@@ -1,9 +1,12 @@
+//! The queue of acts this device owes the relay.
+//!
+//! The FIFO order is [`head`]'s, and there is no cap on depth: an act this
+//! device has not delivered is undelivered clipboard content, and this queue
+//! used to evict the oldest of them silently to keep a number under a thousand
+//! (ADR 0014). What bounds it is the relay coming back.
+
 use crate::errors::AppError;
 use rusqlite::{params, Connection};
-
-/// The cap that makes the pending queue bounded — invariant 4, whose FIFO half
-/// is [`head`] and whose eviction half is [`enqueue_capture`].
-pub(crate) const MAX_PER_USER: i64 = 1000;
 
 /// What one queued act is.
 ///
@@ -40,21 +43,10 @@ pub(crate) struct PendingUpload {
 const KIND_CAPTURE: &str = "capture";
 const KIND_USE: &str = "use";
 
-/// `rowid` is the insert handle the unit tests drive `ack` / `record_failure`
-/// with; production re-reads the queue head instead and never needs it.
-///
-/// `dropped_oldest` counts pendings evicted at the `MAX_PER_USER` cap - acts
-/// the user performed that will now never reach the relay. The capture loop
-/// logs a warning when it is non-zero; without that the loss is completely
-/// silent.
-#[cfg_attr(not(test), allow(dead_code))]
-#[derive(Debug)]
-pub struct EnqueueResult {
-    pub rowid: i64,
-    pub dropped_oldest: usize,
-}
-
 /// Queue a **Capture**.
+///
+/// Answers the queue rowid, which is the handle a requeue and the unit tests
+/// address the act by; production re-reads the head instead and never needs it.
 ///
 /// `plaintext_sha256` is stored so [`find_by_hash`] can recognise a repeat copy
 /// of something still queued. The queue holds ciphertext, and ciphertext cannot
@@ -66,10 +58,9 @@ pub fn enqueue_capture(
     ciphertext: &[u8],
     plaintext_sha256: &str,
     captured_at: i64,
-) -> Result<EnqueueResult, AppError> {
+) -> Result<i64, AppError> {
     enqueue(
         conn,
-        user_id,
         "INSERT INTO pending_uploads
             (user_id, kind, local_entry_id, ciphertext, plaintext_sha256, captured_at)
          VALUES (?1, 'capture', ?2, ?3, ?4, ?5)",
@@ -91,42 +82,23 @@ pub(crate) fn enqueue_use(
     local_entry_id: i64,
     relay_entry_id: i64,
     at: i64,
-) -> Result<EnqueueResult, AppError> {
+) -> Result<i64, AppError> {
     enqueue(
         conn,
-        user_id,
         "INSERT INTO pending_uploads (user_id, kind, entry_id, local_entry_id, captured_at)
          VALUES (?1, 'use', ?2, ?3, ?4)",
         params![user_id, relay_entry_id, local_entry_id, at],
     )
 }
 
-/// Insert one act and bring the queue back inside its cap.
-///
-/// **No transaction of its own**, deliberately: a capture queues its act inside
-/// the same transaction that inserts the Entry it belongs to, and SQLite has no
-/// nested `BEGIN`. Nothing here needs one — a crash between the insert and the
-/// eviction leaves the queue one row over a cap the next enqueue trims anyway.
+/// Insert one act, and answer where in the queue it landed.
 fn enqueue(
     conn: &Connection,
-    user_id: &str,
     insert: &str,
     args: &[&dyn rusqlite::ToSql],
-) -> Result<EnqueueResult, AppError> {
+) -> Result<i64, AppError> {
     conn.execute(insert, args)?;
-    let rowid = conn.last_insert_rowid();
-    let dropped_oldest = conn.execute(
-        "DELETE FROM pending_uploads
-          WHERE user_id = ?1
-            AND rowid NOT IN (
-              SELECT rowid FROM pending_uploads
-              WHERE user_id = ?1
-              ORDER BY rowid DESC
-              LIMIT ?2
-            )",
-        params![user_id, MAX_PER_USER],
-    )?;
-    Ok(EnqueueResult { rowid, dropped_oldest })
+    Ok(conn.last_insert_rowid())
 }
 
 pub(crate) fn head(conn: &Connection, user_id: &str) -> Result<Option<PendingUpload>, AppError> {
@@ -270,7 +242,8 @@ mod tests {
 
     /// A capture whose local entry id is derived from the text, so a test can
     /// assert the link without threading a cache insert through every case.
-    fn capture(c: &Connection, user: &str, text: &str, at: i64) -> EnqueueResult {
+    /// Answers the queue rowid.
+    fn capture(c: &Connection, user: &str, text: &str, at: i64) -> i64 {
         enqueue_capture(c, user, text.len() as i64, text.as_bytes(), &plaintext_sha256(text), at)
             .unwrap()
     }
@@ -287,11 +260,11 @@ mod tests {
     }
 
     #[test]
-    fn enqueue_returns_rowid_and_no_drops() {
+    fn enqueue_answers_where_the_act_landed() {
         let c = open_in_memory().unwrap();
-        let r = capture(&c, "u", "x", 1);
-        assert!(r.rowid > 0);
-        assert_eq!(r.dropped_oldest, 0);
+        let rowid = capture(&c, "u", "x", 1);
+        assert!(rowid > 0);
+        assert_eq!(head(&c, "u").unwrap().unwrap().rowid, rowid);
         assert_eq!(count(&c, "u").unwrap(), 1);
     }
 
@@ -328,7 +301,7 @@ mod tests {
     fn ack_removes_row() {
         let c = open_in_memory().unwrap();
         let r = capture(&c, "u", "x", 1);
-        ack(&c, r.rowid).unwrap();
+        ack(&c, r).unwrap();
         assert!(head(&c, "u").unwrap().is_none());
     }
 
@@ -336,9 +309,9 @@ mod tests {
     fn record_failure_increments_attempts_and_stores_error() {
         let c = open_in_memory().unwrap();
         let r = capture(&c, "u", "x", 1);
-        let n = record_failure(&c, r.rowid, "boom").unwrap();
+        let n = record_failure(&c, r, "boom").unwrap();
         assert_eq!(n, 1);
-        let n2 = record_failure(&c, r.rowid, "again").unwrap();
+        let n2 = record_failure(&c, r, "again").unwrap();
         assert_eq!(n2, 2);
         let h = head(&c, "u").unwrap().unwrap();
         assert_eq!(h.last_error.as_deref(), Some("again"));
@@ -359,7 +332,7 @@ mod tests {
         let c = open_in_memory().unwrap();
         let first = capture(&c, "u", "first", 1);
         capture(&c, "u", "second", 2);
-        requeue_to_back(&c, first.rowid, 30).unwrap();
+        requeue_to_back(&c, first, 30).unwrap();
 
         assert_eq!(count(&c, "u").unwrap(), 2, "moved, not duplicated");
         let h = head(&c, "u").unwrap().unwrap();
@@ -384,7 +357,7 @@ mod tests {
 
         let queued = enqueue_use(&c, "u", 12, 500, 2).unwrap();
         assert_eq!(head(&c, "u").unwrap().unwrap().local_entry_id, Some(12));
-        requeue_to_back(&c, queued.rowid, 30).unwrap();
+        requeue_to_back(&c, queued, 30).unwrap();
         let moved = head(&c, "u").unwrap().unwrap();
         assert_eq!(moved.local_entry_id, Some(12), "the link is a fresh act's too");
         assert_eq!(moved.kind, PendingKind::Use(500), "and so is the relay's id");
@@ -396,11 +369,11 @@ mod tests {
     fn a_requeued_pending_keeps_its_hash_and_drops_its_attempts() {
         let c = open_in_memory().unwrap();
         let first = capture(&c, "u", "first", 1);
-        record_failure(&c, first.rowid, "boom").unwrap();
-        requeue_to_back(&c, first.rowid, 30).unwrap();
+        record_failure(&c, first, "boom").unwrap();
+        requeue_to_back(&c, first, 30).unwrap();
 
         let moved = find_by_hash(&c, "u", &plaintext_sha256("first")).unwrap().unwrap();
-        assert_ne!(moved, first.rowid);
+        assert_ne!(moved, first);
         let h = head(&c, "u").unwrap().unwrap();
         assert_eq!(h.rowid, moved);
         assert_eq!(h.attempts, 0);
@@ -408,14 +381,21 @@ mod tests {
         assert_eq!(h.captured_at, 30);
     }
 
+    /*
+     * The queue used to evict its oldest acts at a cap of a thousand, silently
+     * destroying clipboard content that had reached nowhere else to keep a number
+     * down (ADR 0014). A thousand and five offline acts are a thousand and five.
+     */
     #[test]
-    fn over_cap_drops_oldest_only_for_that_user() {
+    fn nothing_is_ever_evicted_from_the_queue() {
         let c = open_in_memory().unwrap();
-        for i in 0..MAX_PER_USER + 5 {
+        for i in 0..1_005 {
             capture(&c, "u", "x", i);
         }
-        for i in 0..3 { capture(&c, "v", "x", i); }
-        assert_eq!(count(&c, "u").unwrap(), MAX_PER_USER);
+        for i in 0..3 {
+            capture(&c, "v", "x", i);
+        }
+        assert_eq!(count(&c, "u").unwrap(), 1_005);
         assert_eq!(count(&c, "v").unwrap(), 3);
     }
 }

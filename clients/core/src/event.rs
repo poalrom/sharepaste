@@ -13,6 +13,26 @@ use crate::render;
 use crate::sync::ConnectionState;
 use serde::Serialize;
 
+/// What this device still owes the relay for one entry.
+///
+/// One value handed to [`Entry::new`] rather than two fields set beside each
+/// other, because they are one fact with two readings: a refusal is un-flushed
+/// by definition, and a shell handed them separately could draw a refusal that
+/// also claims to be on its way. It does not cross a shell boundary — the two
+/// fields it derives do, because two booleans-worth of fact is what a row needs
+/// and an enum across uniffi is not.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Queued {
+    /// The relay has this entry and everything this device knows about it.
+    #[default]
+    Settled,
+    /// An act against it has not reached the relay yet.
+    Pending,
+    /// The relay turned the act down for what it is — too large, malformed —
+    /// and said this. Still on this device until it is resent or deleted.
+    Refused(String),
+}
+
 /// One entry as a shell renders it in a list.
 ///
 /// `preview` and `plaintext` are two different things and each of them means
@@ -66,6 +86,14 @@ pub struct Entry {
     pub device_label: Option<String>,
     pub origin_label: String,
     pub undecryptable: bool,
+    /// An act against this entry has not reached the relay.
+    ///
+    /// True of a refusal too: the act is still owed. What a shell draws is that
+    /// the relay has not heard the latest word about this row, and the reason
+    /// below is what says the waiting has stopped.
+    pub pending: bool,
+    /// Why the relay turned the act down, when it did.
+    pub refused_reason: Option<String>,
 }
 
 impl Entry {
@@ -76,8 +104,8 @@ impl Entry {
     /// while each of them filled the struct itself, `preview` came to mean the
     /// Preview on one path and the whole plaintext on another. No test caught
     /// it because both were self-consistent. `preview` and `undecryptable` now
-    /// follow from `plaintext`, and `origin_label` from the two Origin fields,
-    /// in one place.
+    /// follow from `plaintext`, `origin_label` from the two Origin fields, and
+    /// `pending` and `refused_reason` from [`Queued`], in one place.
     pub(crate) fn new(
         id: i64,
         user_id: String,
@@ -86,12 +114,18 @@ impl Entry {
         last_use: i64,
         device_id: String,
         device_label: Option<String>,
+        queued: Queued,
     ) -> Self {
         Entry {
             preview: plaintext.as_deref().map(render::preview).unwrap_or_default(),
             origin_label: render::origin_label(device_label.as_deref(), &device_id),
             // A missing plaintext is the one fact that means Undecryptable.
             undecryptable: plaintext.is_none(),
+            pending: !matches!(queued, Queued::Settled),
+            refused_reason: match queued {
+                Queued::Refused(reason) => Some(reason),
+                _ => None,
+            },
             id,
             user_id,
             plaintext,

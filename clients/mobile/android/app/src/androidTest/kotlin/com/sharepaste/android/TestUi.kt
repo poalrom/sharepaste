@@ -86,6 +86,10 @@ fun entry(
     // An Entry never used since capture, which is the ordinary case and the one
     // a test that says nothing about use means.
     lastUse: Long = createdAt,
+    // Settled by default: the Relay has this Entry and everything about it, which
+    // is what a test saying nothing about the queue means.
+    pending: Boolean = false,
+    refusedReason: String? = null,
 ) = Entry(
     id = id,
     userId = userId,
@@ -97,6 +101,8 @@ fun entry(
     deviceLabel = deviceLabel,
     originLabel = originLabel,
     undecryptable = undecryptable,
+    pending = pending,
+    refusedReason = refusedReason,
 )
 
 /**

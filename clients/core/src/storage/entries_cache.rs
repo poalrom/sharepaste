@@ -29,6 +29,36 @@ pub struct CachedEntry {
     /// since capture, which is the truth about it rather than a placeholder.
     pub last_use: i64,
     pub device_id: String,
+    /// Which region of the History this row is in, and where in it.
+    ///
+    /// Read by [`list_recent`] alone and carried out with the row because the
+    /// facade needs both halves of it: the rank says what a shell draws, and the
+    /// `(rank, ord)` pair is half of the cursor the next page resumes from.
+    pub region: Region,
+}
+
+/// Where one row sits in the two-region order (ADR 0014).
+///
+/// The History is this device's pending acts, in the order it will send them,
+/// above the entries the relay has ordered by last use. `rank` is which of the
+/// three groups a row is in and `ord` is its place inside that group, so
+/// `(rank ASC, ord DESC, local_id DESC)` is the whole order and the seam between
+/// the regions is not a special case in it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Region {
+    /// 0 refused, 1 pending, 2 settled.
+    pub rank: i64,
+    /// The queue rowid for ranks 0 and 1; `last_use` for rank 2.
+    pub ord: i64,
+    /// What the relay said when it turned the act down. Rank 0 only.
+    pub refused_reason: Option<String>,
+}
+
+impl Region {
+    /// Whether an act against this row is still owed to the relay.
+    pub fn pending(&self) -> bool {
+        self.rank < RANK_SETTLED
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +75,18 @@ pub(crate) struct NewCachedEntry<'a> {
 
 pub(crate) const MAX_PER_USER: i64 = 100;
 pub(crate) const MAX_AGE_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
+/// The rank the caps apply to, named so the three queries that mention it agree.
+pub(crate) const RANK_SETTLED: i64 = 2;
+
+/// The most rows one page may ask for.
+///
+/// Deliberately not [`MAX_PER_USER`]: that bounds the region the relay has
+/// ordered, and the un-flushed region is unbounded on purpose — a hundred and
+/// fifty offline captures are a hundred and fifty rows, and evicting one to
+/// protect a number is the trade ADR 0014 refuses. A ceiling still exists so a
+/// caller cannot ask for the whole table by accident.
+pub(crate) const MAX_PAGE: i64 = 1_000;
 
 /// What goes in `plaintext_sha256`, defined once by the column's owner.
 ///
@@ -313,35 +355,96 @@ pub(crate) fn find_by_hash(
     Ok(id)
 }
 
-/// One page of the History, last use first.
+/// The three regions of the History as one ordered list, by rank.
 ///
-/// `before` is the `(last_use, local_id)` of the last row of the previous page.
-/// It is a tuple and not an id because id is not the order: paging by it alone
-/// would skip and repeat rows the moment anything was used.
+/// The order is `(rank ASC, ord DESC, local_id DESC)` and every arm supplies its
+/// own `ord`, which is why this is a `UNION ALL` rather than a join with a
+/// `CASE`: the three groups are ordered by three different facts, and each arm
+/// says which one it is ordered by beside the rank that selects it.
 ///
-/// The tiebreak is `local_id`, and every id here is one: it is the only number
-/// every row has, and a row that has not reached the relay still has to page.
-pub fn list_recent(conn: &Connection, user_id: &str, before: Option<(i64, i64)>, limit: i64) -> Result<Vec<CachedEntry>, AppError> {
-    let limit = limit.clamp(1, MAX_PER_USER);
-    let mut rows: Vec<CachedEntry> = if let Some((last_use, id)) = before {
-        let mut stmt = conn.prepare(
-            "SELECT user_id, local_id, relay_id, ciphertext, plaintext, created_at, last_use, device_id
-             FROM entries_cache
-             WHERE user_id = ?1 AND (last_use < ?2 OR (last_use = ?2 AND local_id < ?3))
-             ORDER BY last_use DESC, local_id DESC LIMIT ?4"
-        )?;
-        let out = stmt.query_map(params![user_id, last_use, id, limit], map_row)?.collect::<Result<Vec<_>, _>>()?;
-        out
-    } else {
-        let mut stmt = conn.prepare(
-            "SELECT user_id, local_id, relay_id, ciphertext, plaintext, created_at, last_use, device_id
-             FROM entries_cache
-             WHERE user_id = ?1
-             ORDER BY last_use DESC, local_id DESC LIMIT ?2"
-        )?;
-        let out = stmt.query_map(params![user_id, limit], map_row)?.collect::<Result<Vec<_>, _>>()?;
-        out
+/// `MAX(rowid)` for rank 1 and not the first: two offline re-copies of one entry
+/// enqueue two acts, and the row has to rise on the second. The bare
+/// `last_error` beside `MAX(rowid)` in rank 0 takes its value from the row that
+/// produced the maximum — SQLite's documented behaviour for a single `min`/`max`
+/// aggregate — which is the reason the refusal reason is readable here at all
+/// without a second correlated lookup.
+const HISTORY: &str = "
+WITH history AS (
+  SELECT e.user_id, e.local_id, e.relay_id, e.ciphertext, e.plaintext,
+         e.created_at, e.last_use, e.device_id,
+         0 AS rank, MAX(p.rowid) AS ord, p.last_error AS refused_reason
+    FROM entries_cache e
+    JOIN pending_uploads p
+      ON p.user_id = e.user_id AND p.local_entry_id = e.local_id
+         AND p.refused_at IS NOT NULL
+   WHERE e.user_id = ?1
+   GROUP BY e.local_id
+
+  UNION ALL
+
+  SELECT e.user_id, e.local_id, e.relay_id, e.ciphertext, e.plaintext,
+         e.created_at, e.last_use, e.device_id,
+         1 AS rank, MAX(p.rowid) AS ord, NULL AS refused_reason
+    FROM entries_cache e
+    JOIN pending_uploads p
+      ON p.user_id = e.user_id AND p.local_entry_id = e.local_id
+         AND p.refused_at IS NULL
+   WHERE e.user_id = ?1
+     AND NOT EXISTS (
+           SELECT 1 FROM pending_uploads r
+            WHERE r.user_id = e.user_id AND r.local_entry_id = e.local_id
+              AND r.refused_at IS NOT NULL)
+   GROUP BY e.local_id
+
+  UNION ALL
+
+  SELECT e.user_id, e.local_id, e.relay_id, e.ciphertext, e.plaintext,
+         e.created_at, e.last_use, e.device_id,
+         2 AS rank, e.last_use AS ord, NULL AS refused_reason
+    FROM entries_cache e
+   WHERE e.user_id = ?1
+     AND NOT EXISTS (
+           SELECT 1 FROM pending_uploads p
+            WHERE p.user_id = e.user_id AND p.local_entry_id = e.local_id)
+)
+SELECT user_id, local_id, relay_id, ciphertext, plaintext, created_at, last_use,
+       device_id, rank, ord, refused_reason
+  FROM history
+ WHERE ?2 = 0
+    OR rank > ?3
+    OR (rank = ?3 AND (ord < ?4 OR (ord = ?4 AND local_id < ?5)))
+ ORDER BY rank ASC, ord DESC, local_id DESC
+ LIMIT ?6
+";
+
+/// One page of the History: this device's pending acts, in the order it will
+/// send them, above the entries the relay has ordered by last use (ADR 0014).
+///
+/// `before` is the `(rank, ord, local_id)` of the last row of the previous page.
+/// Keyset paging reads the same three-part tuple the list is ordered by, so
+/// crossing the seam between the regions is not a special case: the page after
+/// the last pending row is the first settled one.
+///
+/// The seam does not move at a flush. The relay stamps a pending act on arrival
+/// exactly where this device already showed it, so a row changes rank without
+/// changing place.
+pub fn list_recent(
+    conn: &Connection,
+    user_id: &str,
+    before: Option<(i64, i64, i64)>,
+    limit: i64,
+) -> Result<Vec<CachedEntry>, AppError> {
+    let limit = limit.clamp(1, MAX_PAGE);
+    // `?2` is the presence of a cursor, so one statement serves both pages
+    // rather than two copies of a fifty-line union drifting apart.
+    let (has_cursor, rank, ord, id) = match before {
+        Some((rank, ord, id)) => (1, rank, ord, id),
+        None => (0, 0, 0, 0),
     };
+    let mut stmt = conn.prepare(HISTORY)?;
+    let mut rows: Vec<CachedEntry> = stmt
+        .query_map(params![user_id, has_cursor, rank, ord, id, limit], map_row)?
+        .collect::<Result<Vec<_>, _>>()?;
     rows.shrink_to_fit();
     Ok(rows)
 }
@@ -399,6 +502,11 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CachedEntry> {
         created_at: r.get(5)?,
         last_use: r.get(6)?,
         device_id: r.get(7)?,
+        region: Region {
+            rank: r.get(8)?,
+            ord: r.get(9)?,
+            refused_reason: r.get(10)?,
+        },
     })
 }
 
@@ -427,8 +535,8 @@ mod tests {
         list_recent(c, user, None, 200).unwrap().iter().filter_map(|r| r.relay_id).collect()
     }
 
-    fn cursor(row: &CachedEntry) -> (i64, i64) {
-        (row.last_use, row.local_id)
+    fn cursor(row: &CachedEntry) -> (i64, i64, i64) {
+        (row.region.rank, row.region.ord, row.local_id)
     }
 
     fn ids_of(rows: &[CachedEntry]) -> Vec<i64> {
@@ -513,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn paging_with_a_last_use_and_id_cursor() {
+    fn paging_with_a_rank_ord_and_id_cursor() {
         let c = open_in_memory().unwrap();
         for i in 1..=10 { ins(&c, "u", i, None, i, 9_999); }
         let first = list_recent(&c, "u", None, 3).unwrap();
@@ -534,6 +642,174 @@ mod tests {
         let tail = first.last().unwrap();
         let page = list_recent(&c, "u", Some(cursor(tail)), 2).unwrap();
         assert_eq!(ids_of(&page), vec![2, 1]);
+    }
+
+    /// A capture with its act queued against it, as `capture_or_use` makes one.
+    fn capture(c: &Connection, user: &str, text: &str) -> i64 {
+        let hash = plaintext_sha256(text);
+        let local_id = insert_captured(c, user, b"sealed", text, &hash, "this-device").unwrap();
+        crate::storage::pending::enqueue_capture(c, user, local_id, b"sealed", &hash, 1).unwrap();
+        local_id
+    }
+
+    fn local_ids(rows: &[CachedEntry]) -> Vec<i64> {
+        rows.iter().map(|r| r.local_id).collect()
+    }
+
+    /*
+     * ADR 0014, as one list. The pending acts sit above the entries the relay has
+     * ordered, in the order this device will send them, and the seam does not move
+     * at the flush — the relay stamps a pending act exactly where the device
+     * already showed it.
+     */
+    #[test]
+    fn the_order_is_identical_either_side_of_a_flush() {
+        let c = open_in_memory().unwrap();
+        let now = 100_000_000_000_i64;
+        // Two the relay already has, oldest first.
+        let old = ins(&c, "u", 1, Some("a week ago"), now - 10_000, now);
+        let newer = ins(&c, "u", 2, Some("yesterday"), now - 5_000, now);
+        // And a burst made with no relay in reach.
+        let one = capture(&c, "u", "burst one");
+        let two = capture(&c, "u", "burst two");
+        let three = capture(&c, "u", "burst three");
+
+        let offline = list_recent(&c, "u", None, 50).unwrap();
+        assert_eq!(
+            local_ids(&offline),
+            vec![three, two, one, newer, old],
+            "the queue, newest act first, above what the relay has ordered"
+        );
+        assert_eq!(
+            offline.iter().map(|r| r.region.rank).collect::<Vec<_>>(),
+            vec![1, 1, 1, 2, 2]
+        );
+
+        // The relay takes them in queue order and stamps each one as it arrives,
+        // which is what a flush is.
+        for (n, local_id) in [one, two, three].into_iter().enumerate() {
+            let at = now + n as i64;
+            attach_relay_id(&c, "u", local_id, 100 + n as i64, at, at, now).unwrap();
+            crate::storage::pending::delete_for_entry(&c, "u", local_id).unwrap();
+        }
+
+        let flushed = list_recent(&c, "u", None, 50).unwrap();
+        assert_eq!(
+            local_ids(&flushed),
+            local_ids(&offline),
+            "the flush moved nothing: the same rows in the same places"
+        );
+        assert!(flushed.iter().all(|r| r.region.rank == RANK_SETTLED));
+    }
+
+    /*
+     * `pending::find_by_hash` matches captures head-first, so two offline
+     * re-copies of one entry enqueue two acts against it. `MAX(rowid)` and not the
+     * first is what makes the row rise on the second one.
+     */
+    #[test]
+    fn an_entry_re_copied_offline_twice_stays_at_the_top() {
+        let c = open_in_memory().unwrap();
+        let now = 100_000_000_000_i64;
+        let old = ins(&c, "u", 1, Some("three weeks old"), now - 100_000, now);
+        let later = capture(&c, "u", "captured after it");
+
+        // Re-copying the old entry queues a use against it, which lifts it above
+        // the capture made since.
+        crate::storage::pending::enqueue_use(&c, "u", old, 1, 2).unwrap();
+        assert_eq!(local_ids(&list_recent(&c, "u", None, 50).unwrap()), vec![old, later]);
+
+        // Something else is copied, and then the old entry again.
+        let newest = capture(&c, "u", "and something else");
+        assert_eq!(
+            local_ids(&list_recent(&c, "u", None, 50).unwrap()),
+            vec![newest, old, later]
+        );
+        crate::storage::pending::enqueue_use(&c, "u", old, 1, 3).unwrap();
+        assert_eq!(
+            local_ids(&list_recent(&c, "u", None, 50).unwrap()),
+            vec![old, newest, later],
+            "the second re-copy has to lift it again, which the first act's rowid cannot say"
+        );
+    }
+
+    /*
+     * A hundred and fifty offline captures are a hundred and fifty rows: the caps
+     * bound what the relay has ordered, and an act still owed to the relay is
+     * undelivered content. After the flush the settled region is a hundred and the
+     * ones that fell off are the oldest.
+     */
+    #[test]
+    fn a_hundred_and_fifty_offline_captures_are_a_hundred_and_fifty_rows() {
+        let c = open_in_memory().unwrap();
+        let now = 100_000_000_000_i64;
+        let ids: Vec<i64> = (0..150).map(|i| capture(&c, "u", &format!("copy {i}"))).collect();
+        assert_eq!(list_recent(&c, "u", None, MAX_PAGE).unwrap().len(), 150);
+
+        for (n, local_id) in ids.iter().enumerate() {
+            let at = now + n as i64;
+            attach_relay_id(&c, "u", *local_id, 1_000 + n as i64, at, at, now).unwrap();
+            crate::storage::pending::delete_for_entry(&c, "u", *local_id).unwrap();
+        }
+
+        let after = list_recent(&c, "u", None, MAX_PAGE).unwrap();
+        assert_eq!(after.len() as i64, MAX_PER_USER, "the settled region is capped");
+        let kept = local_ids(&after);
+        assert_eq!(kept.first(), Some(&ids[149]), "newest first");
+        assert_eq!(kept.last(), Some(&ids[50]), "and the fifty oldest fell off");
+    }
+
+    /*
+     * The seam is a page boundary like any other: a cursor taken from the last
+     * pending row hands back the first settled one, with no gap and no repeat.
+     */
+    #[test]
+    fn paging_crosses_the_seam_with_no_gap_and_no_repeat() {
+        let c = open_in_memory().unwrap();
+        let now = 100_000_000_000_i64;
+        let settled: Vec<i64> =
+            (1..=3).map(|i| ins(&c, "u", i, None, now - (10 - i) * 100, now)).collect();
+        let pending: Vec<i64> = (0..2).map(|i| capture(&c, "u", &format!("queued {i}"))).collect();
+
+        let whole = local_ids(&list_recent(&c, "u", None, 50).unwrap());
+        let mut paged = Vec::new();
+        let mut cursor_at = None;
+        loop {
+            let page = list_recent(&c, "u", cursor_at, 2).unwrap();
+            if page.is_empty() {
+                break;
+            }
+            cursor_at = Some(cursor(page.last().unwrap()));
+            paged.extend(local_ids(&page));
+        }
+        assert_eq!(paged, whole, "paging two at a time reads exactly the same list");
+        assert_eq!(paged.len(), pending.len() + settled.len());
+    }
+
+    /*
+     * A refusal is not producible until the uploader can set `refused_at`, so the
+     * rank the order gives it is exercised from a fixture: above every live
+     * pending act, because it is the actionable one.
+     */
+    #[test]
+    fn a_refused_act_ranks_above_the_live_ones_and_carries_its_reason() {
+        let c = open_in_memory().unwrap();
+        let refused = capture(&c, "u", "too large for this relay");
+        let live = capture(&c, "u", "still on its way");
+        c.execute(
+            "UPDATE pending_uploads SET refused_at = 5, last_error = 'payload too large'
+              WHERE local_entry_id = ?1",
+            params![refused],
+        )
+        .unwrap();
+
+        let rows = list_recent(&c, "u", None, 50).unwrap();
+        assert_eq!(local_ids(&rows), vec![refused, live]);
+        assert_eq!(rows[0].region.rank, 0);
+        assert_eq!(rows[0].region.refused_reason.as_deref(), Some("payload too large"));
+        assert!(rows[0].region.pending(), "a refused act is still owed");
+        assert_eq!(rows[1].region.rank, 1);
+        assert_eq!(rows[1].region.refused_reason, None);
     }
 
     #[test]
