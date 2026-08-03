@@ -97,7 +97,10 @@ impl Uploader {
                 _ = self.trigger.notified() => {},
             }
             if let Err(e) = self.flush_once().await {
-                if matches!(e, AppError::Auth(_)) {
+                // A rejected token and an expired Pairing are both facts about
+                // the Pairing rather than about the act, and both end the
+                // session: nothing this uploader retries can fix either.
+                if matches!(e, AppError::Auth(_) | AppError::PairExpired(_)) {
                     return UploaderExit::AuthFailed;
                 }
                 tracing::warn!(err = %e, "uploader flush errored; will retry on next trigger");
@@ -115,10 +118,11 @@ impl Uploader {
     /// Drain the queue head-first, whatever kind each act is.
     ///
     /// One loop and one set of failure arms for both kinds, because the failure
-    /// rules are the same rules: a rejected token stops everything, malformed
-    /// input is dropped rather than retried forever, and anything else leaves
-    /// the row where it is for the next trigger. What differs is only what the
-    /// relay is asked to do and what the answer is recorded against.
+    /// rules are the same rules: a rejected token or an expired Pairing stops
+    /// everything, an act the relay refuses for what it *is* leaves the queue so
+    /// nothing waits behind it, and anything else leaves the row where it is for
+    /// the next trigger. What differs is only what the relay is asked to do and
+    /// what the answer is recorded against.
     pub(crate) async fn flush_once(&self) -> Result<(), AppError> {
         loop {
             let head = {
@@ -200,11 +204,24 @@ impl Uploader {
                             );
                         }
                     }
-                    // A capture raises no `EntryAdded`: the Entry has existed
-                    // since it was captured and the shells have had it all along.
-                    // A use raises no `EntryAdded` either, and nothing reorders
-                    // at a flush — the relay stamps a pending act exactly where
-                    // this device already showed it.
+                    // One act left the queue, so its row may have stopped
+                    // waiting. `EntrySettled` and not `HistoryChanged`: nothing
+                    // reorders at a flush — the relay stamps a pending act exactly
+                    // where this device already showed it — so a shell has one row
+                    // to update in place and no reason to refetch a hundred.
+                    //
+                    // Nothing for a withdrawn act: its row is gone, and
+                    // `EntryDeleted` already said so.
+                    if withdrawn.is_none() {
+                        if let Some(entry_id) = item.local_entry_id {
+                            self.events.emit(CoreEvent::EntrySettled {
+                                user_id: self.user_id.clone(),
+                                entry_id,
+                            });
+                        }
+                    }
+                    // A use of an entry another device also holds *did* move it,
+                    // and only a refetch can put a hundred rows back in order.
                     if reordered {
                         self.events.emit(CoreEvent::HistoryChanged {
                             user_id: self.user_id.clone(),
@@ -212,18 +229,32 @@ impl Uploader {
                     }
                     self.pending_count(count);
                 }
-                Err(AppError::Auth(s)) => {
+                // A fact about the Pairing rather than about the act: nothing this
+                // uploader can retry will change either, and the session has to
+                // come down and say so.
+                Err(e @ (AppError::Auth(_) | AppError::PairExpired(_))) => {
                     let conn = self.conn.lock().await;
-                    pending::record_failure(&conn, item.rowid, &s)?;
-                    return Err(AppError::Auth(s));
+                    pending::record_failure(&conn, item.rowid, &e.to_string())?;
+                    return Err(e);
                 }
-                Err(AppError::BadInput(s)) => {
+                // **Refused, not dropped.** 400 and 413 are facts about *this act*
+                // and will be answered identically forever, so it leaves the
+                // deliverable queue and stays on this device with its reason
+                // (ADR 0015). This arm used to delete the row and write a warning
+                // — clipboard content destroyed, and only the log told.
+                Err(AppError::BadInput(reason)) => {
                     let count = {
                         let conn = self.conn.lock().await;
-                        pending::ack(&conn, item.rowid)?;
-                        tracing::warn!(err = %s, rowid = item.rowid, "dropped malformed pending entry");
+                        pending::refuse(&conn, item.rowid, crate::now_ms(), &reason)?;
                         pending::count(&conn, &self.user_id)?
                     };
+                    if let Some(entry_id) = item.local_entry_id {
+                        self.events.emit(CoreEvent::EntryRefused {
+                            user_id: self.user_id.clone(),
+                            entry_id,
+                            reason,
+                        });
+                    }
                     self.pending_count(count);
                 }
                 Err(e) => {
@@ -509,6 +540,171 @@ mod tests {
             sink.entries().is_empty(),
             "a flush creates nothing, so it announces nothing"
         );
+    }
+
+    /// A relay that answers one fixed error for every upload.
+    struct RefusingRelay(fn() -> AppError);
+
+    #[async_trait]
+    impl UploadTransport for RefusingRelay {
+        async fn upload(&self, _ct: &str) -> Result<Uploaded, AppError> {
+            Err((self.0)())
+        }
+
+        async fn use_entry(&self, _entry_id: i64) -> Result<Used, AppError> {
+            Err((self.0)())
+        }
+
+        async fn delete_entry(&self, _entry_id: i64) -> Result<(), AppError> {
+            Err((self.0)())
+        }
+    }
+
+    /*
+     * ADR 0015. A 413 is a fact about *this act* and will be answered identically
+     * forever, so the act leaves the deliverable queue and stays on this device
+     * with its reason. This arm used to delete the row and write a warning: a
+     * person's clipboard content destroyed, and only the log told.
+     *
+     * And nothing waits behind it. `head` skips a refusal, so the act queued after
+     * one is delivered rather than blocked on something waiting cannot fix.
+     */
+    #[tokio::test]
+    async fn a_refused_act_keeps_its_row_and_lets_the_queue_past_it() {
+        let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
+        paired(&conn).await;
+        let refused = queue_capture(&conn, "too large for this relay").await;
+        let behind = queue_capture(&conn, "queued behind it").await;
+
+        // First flush: the relay refuses everything it is offered.
+        let (up, sink) = uploader(
+            conn.clone(),
+            Arc::new(RefusingRelay(|| AppError::BadInput("payload too large".into()))),
+        );
+        up.flush_once().await.unwrap();
+
+        {
+            let c = conn.lock().await;
+            assert_eq!(
+                pending::count(&c, "u").unwrap(),
+                2,
+                "nothing is deleted: both acts are still on this device"
+            );
+            assert!(
+                pending::head(&c, "u").unwrap().is_none(),
+                "and neither is deliverable, because this relay refused both"
+            );
+        }
+        assert_eq!(
+            sink.refusals(),
+            vec![
+                (refused, "payload too large".to_string()),
+                (behind, "payload too large".to_string()),
+            ],
+            "one refusal per refused act, each carrying what the relay said"
+        );
+        assert!(sink.settled().is_empty(), "and nothing settled");
+        assert!(!sink.saw_history_changed("u"), "nor did anything reorder");
+        assert_eq!(cached(&conn).await.len(), 2, "both rows are still here");
+    }
+
+    /*
+     * The half that makes skipping a refusal safe: the act behind one is still
+     * delivered. A refusal was never going to be delivered by waiting, so nothing
+     * about the order is loosened by stepping over it.
+     */
+    #[tokio::test]
+    async fn the_act_behind_a_refusal_is_still_delivered() {
+        let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
+        paired(&conn).await;
+        let refused = queue_capture(&conn, "the relay will not take this").await;
+        let behind = queue_capture(&conn, "but it will take this").await;
+        {
+            let c = conn.lock().await;
+            let rowid = pending::rowid_for_entry(&c, "u", refused).unwrap().unwrap();
+            pending::refuse(&c, rowid, 1, "payload too large").unwrap();
+        }
+
+        let (up, sink) = uploader(conn.clone(), Arc::new(OkTransport::new()));
+        up.flush_once().await.unwrap();
+
+        let c = conn.lock().await;
+        assert_eq!(pending::count(&c, "u").unwrap(), 1, "the refusal is what is left");
+        assert_eq!(sink.settled(), vec![behind]);
+        let rows = crate::storage::entries_cache::list_recent(&c, "u", None, 50).unwrap();
+        assert_eq!(
+            rows.iter().find(|r| r.local_id == behind).unwrap().relay_id,
+            Some(42),
+            "the act behind the refusal reached the relay"
+        );
+        assert_eq!(
+            rows.iter().find(|r| r.local_id == refused).unwrap().relay_id,
+            None,
+            "and the refused one did not"
+        );
+    }
+
+    /*
+     * A 500 is not a refusal. The queue exists to survive a relay that is not
+     * there, and a relay restarting mid-flush must not shred the ordering.
+     */
+    #[tokio::test]
+    async fn a_server_error_leaves_the_act_queued_and_blocking() {
+        let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
+        paired(&conn).await;
+        queue_capture(&conn, "first").await;
+        queue_capture(&conn, "second").await;
+
+        let (up, sink) = uploader(
+            conn.clone(),
+            Arc::new(RefusingRelay(|| AppError::Network("status 500: restarting".into()))),
+        );
+        let err = up.flush_once().await.unwrap_err();
+        assert!(matches!(err, AppError::Network(_)), "got {err:?}");
+
+        let c = conn.lock().await;
+        assert_eq!(pending::count(&c, "u").unwrap(), 2);
+        let head = pending::head(&c, "u").unwrap().unwrap();
+        assert_eq!(head_text(&head), "first", "still at the head, still blocking");
+        assert_eq!(head.attempts, 1, "and counted as an attempt rather than a refusal");
+        assert!(sink.refusals().is_empty());
+    }
+
+    /*
+     * A 410 is a fact about the **Pairing**, not about the act. It used to fall
+     * through to the generic retry arm and be attempted forever; it now brings the
+     * session down, where the connection chrome can say what is wrong.
+     */
+    #[tokio::test]
+    async fn an_expired_pairing_brings_the_session_down_and_refuses_nothing() {
+        let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
+        paired(&conn).await;
+        queue_capture(&conn, "owed to a pairing that has expired").await;
+
+        let (up, sink) = uploader(
+            conn.clone(),
+            Arc::new(RefusingRelay(|| AppError::PairExpired("gone".into()))),
+        );
+        up.trigger.notify_one();
+        assert_eq!(up.run(CancellationToken::new()).await, UploaderExit::AuthFailed);
+
+        let c = conn.lock().await;
+        assert_eq!(pending::count(&c, "u").unwrap(), 1, "the act is kept");
+        assert!(
+            pending::head(&c, "u").unwrap().is_some(),
+            "and stays deliverable: nothing about it was refused"
+        );
+        assert!(sink.refusals().is_empty());
+    }
+
+    /// The plaintext of a queued capture, decrypted as the relay's echo would be.
+    fn head_text(head: &pending::PendingUpload) -> String {
+        let pending::PendingKind::Capture(ciphertext) = &head.kind else {
+            panic!("expected a queued capture at the head");
+        };
+        let plain = crate::crypto::decrypt(&crate::testing::test_user_key(), "u", ciphertext)
+            .expect("the queue holds what this pairing's key sealed");
+        String::from_utf8(plain).unwrap()
     }
 
     /*

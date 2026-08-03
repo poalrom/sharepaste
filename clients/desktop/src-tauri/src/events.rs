@@ -15,6 +15,8 @@ pub(crate) const ACTIVE_PAIRING_CHANGED: &str  = "active-pairing-changed";
 pub(crate) const CONNECTION_STATE: &str = "connection-state";
 pub(crate) const ENTRY_ADDED: &str     = "entry-added";
 pub(crate) const ENTRY_DELETED: &str   = "entry-deleted";
+pub(crate) const ENTRY_SETTLED: &str   = "entry-settled";
+pub(crate) const ENTRY_REFUSED: &str   = "entry-refused";
 pub(crate) const HISTORY_CHANGED: &str = "history-changed";
 pub(crate) const PENDING_COUNT: &str   = "pending-count";
 pub(crate) const CONTACT_EVENT: &str      = "contact";
@@ -51,6 +53,19 @@ pub(crate) struct EntryAdded { pub user_id: String, pub entry: sharepaste_core::
 
 #[derive(Serialize, Clone)]
 pub(crate) struct EntryDeleted { pub user_id: String, pub entry_id: i64 }
+
+/// One act reached the relay, so its row may have stopped waiting.
+///
+/// The row is addressed by its own id, which a flush does not change, so a shell
+/// updates it in place. Deliberately not `history-changed`: nothing reorders at a
+/// flush, and a refetch per acked act is the cost this distinction exists to
+/// avoid.
+#[derive(Serialize, Clone)]
+pub(crate) struct EntrySettled { pub user_id: String, pub entry_id: i64 }
+
+/// The relay turned an act down for what it is, and said this.
+#[derive(Serialize, Clone)]
+pub(crate) struct EntryRefused { pub user_id: String, pub entry_id: i64, pub reason: String }
 
 #[derive(Serialize, Clone)]
 pub(crate) struct PendingCount { pub user_id: String, pub count: i64 }
@@ -130,6 +145,12 @@ impl EventSink for TauriEventSink {
             }
             CoreEvent::PairShortcode { code, expires_at } => {
                 let _ = self.app.emit(PAIR_SHORTCODE, PairShortcode { code, expires_at });
+            }
+            CoreEvent::EntrySettled { user_id, entry_id } => {
+                let _ = self.app.emit(ENTRY_SETTLED, EntrySettled { user_id, entry_id });
+            }
+            CoreEvent::EntryRefused { user_id, entry_id, reason } => {
+                let _ = self.app.emit(ENTRY_REFUSED, EntryRefused { user_id, entry_id, reason });
             }
             CoreEvent::PairClaimed { user_id, device_label } => {
                 let _ = self.app.emit(PAIR_CLAIMED, PairClaimed { user_id, device_label });

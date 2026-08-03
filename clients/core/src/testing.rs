@@ -111,6 +111,28 @@ impl RecordingSink {
             .collect()
     }
 
+    /// Every entry id reported settled, in order — one per act the relay took.
+    pub fn settled(&self) -> Vec<i64> {
+        self.events()
+            .into_iter()
+            .filter_map(|e| match e {
+                CoreEvent::EntrySettled { entry_id, .. } => Some(entry_id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every refusal reported, as `(entry_id, reason)`, in order.
+    pub fn refusals(&self) -> Vec<(i64, String)> {
+        self.events()
+            .into_iter()
+            .filter_map(|e| match e {
+                CoreEvent::EntryRefused { entry_id, reason, .. } => Some((entry_id, reason)),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn saw_history_changed(&self, user_id: &str) -> bool {
         self.events()
             .iter()

@@ -1049,6 +1049,37 @@ impl Sharepaste {
         Ok(())
     }
 
+    /// Put a **Refused** act back in the queue.
+    ///
+    /// A fresh act and not a retry, so it goes to the back of the queue and
+    /// thereby to the head of the History, and it carries nothing forward from the
+    /// refusal that preceded it — `requeue_to_back` copies the act and leaves
+    /// `refused_at`, `attempts` and `last_error` behind with the row it replaces.
+    ///
+    /// **Not a Use.** There is no relay record to move: the relay never took this
+    /// act, which is what a refusal means.
+    ///
+    /// If nothing about the cause has changed it will be refused again, which is
+    /// honest. The verb is for after the relay's limit or the Active Pairing has
+    /// changed, and there is no way for this device to know that has happened.
+    pub async fn resend(&self, user_id: &str, entry_id: i64) -> Result<(), AppError> {
+        {
+            let conn = self.state.conn.lock().await;
+            let rowid = pending::rowid_for_entry(&conn, user_id, entry_id)?.ok_or_else(|| {
+                AppError::NotFound(format!("no act queued for entry {entry_id}"))
+            })?;
+            pending::requeue_to_back(&conn, rowid, crate::now_ms())?;
+        }
+        // The row left the refused region for the head of the pending one, which
+        // reorders the list. The queue depth is unchanged — the act moved, it did
+        // not multiply — so nothing reports one.
+        self.events.emit(CoreEvent::HistoryChanged {
+            user_id: user_id.to_string(),
+        });
+        self.nudge_uploader(user_id);
+        Ok(())
+    }
+
     /// Delete every entry for one Pairing, on the relay and locally, and empty
     /// the queue with them.
     ///
@@ -2493,6 +2524,52 @@ mod tests {
         assert_eq!(out.text, "behind a silent relay");
         assert_eq!(out.source, RecallSource::Cache, "the bound was reached, so it is ours");
         assert_eq!(clipboard.writes(), vec!["behind a silent relay".to_string()]);
+    }
+
+    /*
+     * Resend, end to end. A fresh act and not a retry: it carries nothing forward
+     * from the refusal, leads the History afterwards, and flushes if the relay
+     * will now take it.
+     */
+    #[test]
+    fn resending_a_refused_act_clears_the_refusal_and_leads_the_history() {
+        let Rig { sp, sink, .. } = rig();
+        sp.runtime.block_on(sp.offer("u", "the relay would not take this")).unwrap();
+        sp.runtime.block_on(sp.offer("u", "captured after it")).unwrap();
+        let refused = history_ids(&sp)[1];
+        sp.runtime.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            let rowid = pending::rowid_for_entry(&conn, "u", refused).unwrap().unwrap();
+            pending::record_failure(&conn, rowid, "an earlier attempt").unwrap();
+            pending::refuse(&conn, rowid, 1, "payload too large").unwrap();
+        });
+
+        // A refusal leads the History, above every act still on its way.
+        let before = sp.runtime.block_on(sp.list_history("u", None, 50)).unwrap();
+        assert_eq!(before[0].id, refused);
+        assert_eq!(before[0].refused_reason.as_deref(), Some("payload too large"));
+        assert!(before[0].pending, "the act is still owed");
+
+        sp.runtime.block_on(sp.resend("u", refused)).unwrap();
+
+        let after = sp.runtime.block_on(sp.list_history("u", None, 50)).unwrap();
+        assert_eq!(after[0].id, refused, "and still leads it, now as a fresh act");
+        assert_eq!(after[0].refused_reason, None, "the reason is gone");
+        assert!(after[0].pending);
+        let head = sp.runtime.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            (
+                pending::count(&conn, "u").unwrap(),
+                pending::head(&conn, "u").unwrap().unwrap(),
+            )
+        });
+        assert_eq!(head.0, 2, "the act moved; nothing was queued beside it");
+        assert_eq!(head.1.attempts, 0, "and carries nothing forward from the refusal");
+        assert_eq!(head.1.last_error, None);
+        assert!(
+            sink.saw_history_changed("u"),
+            "the row left the refused region, which reorders the list"
+        );
     }
 
     /*

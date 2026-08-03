@@ -70,6 +70,7 @@ pub fn launch() {
             commands::list_history,
             commands::copy_to_clipboard,
             commands::delete_entry,
+            commands::resend_entry,
             commands::clear_history,
             commands::get_settings,
             commands::update_settings,

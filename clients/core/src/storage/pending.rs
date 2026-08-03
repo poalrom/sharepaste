@@ -101,12 +101,19 @@ fn enqueue(
     Ok(conn.last_insert_rowid())
 }
 
+/// The next act the relay should be asked to take.
+///
+/// **Refused acts are skipped.** A refusal is a fact about *that act* and will be
+/// refused identically forever, so leaving it at the head would block everything
+/// behind it on something waiting cannot fix (ADR 0015). Skipping it is not a
+/// loosening of the order: what would have followed it was never going to be
+/// delivered by queueing behind it.
 pub(crate) fn head(conn: &Connection, user_id: &str) -> Result<Option<PendingUpload>, AppError> {
     let mut stmt = conn.prepare(
         "SELECT rowid, user_id, kind, entry_id, ciphertext, captured_at, attempts, last_error,
                 local_entry_id
          FROM pending_uploads
-         WHERE user_id = ?1
+         WHERE user_id = ?1 AND refused_at IS NULL
          ORDER BY rowid ASC LIMIT 1"
     )?;
     let row = stmt
@@ -192,6 +199,25 @@ pub(crate) fn requeue_to_back(conn: &Connection, rowid: i64, at: i64) -> Result<
 /// nobody wants any more.
 pub(crate) fn ack(conn: &Connection, rowid: i64) -> Result<usize, AppError> {
     let n = conn.execute("DELETE FROM pending_uploads WHERE rowid = ?1", params![rowid])?;
+    Ok(n)
+}
+
+/// Mark one act **Refused**: the relay turned it down for what it is.
+///
+/// It stays in the queue and stops being deliverable, which is the whole shape of
+/// a refusal (ADR 0015). The alternative this replaces deleted the row and wrote
+/// a warning to the log — code destroying a person's clipboard content and
+/// telling only the log about it.
+pub(crate) fn refuse(
+    conn: &Connection,
+    rowid: i64,
+    at: i64,
+    reason: &str,
+) -> Result<usize, AppError> {
+    let n = conn.execute(
+        "UPDATE pending_uploads SET refused_at = ?2, last_error = ?3 WHERE rowid = ?1",
+        params![rowid, at, reason],
+    )?;
     Ok(n)
 }
 

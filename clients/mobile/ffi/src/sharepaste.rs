@@ -226,6 +226,14 @@ impl Sharepaste {
         Ok(self.block_on(self.inner.delete_entry(&user_id, entry_id))?)
     }
 
+    /// Put a **Refused** act back in the queue.
+    ///
+    /// A fresh act and not a retry, so it leads the History afterwards and
+    /// carries nothing forward from the refusal.
+    pub fn resend(&self, user_id: String, entry_id: i64) -> Result<(), AppError> {
+        Ok(self.block_on(self.inner.resend(&user_id, entry_id))?)
+    }
+
     pub fn clear_history(&self, user_id: String) -> Result<(), AppError> {
         Ok(self.block_on(self.inner.clear_history(&user_id))?)
     }

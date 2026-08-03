@@ -158,6 +158,20 @@ pub enum CoreEvent {
     ConnectionState { user_id: String, state: ConnectionState, last_error: Option<String> },
     EntryAdded { user_id: String, entry: Entry },
     EntryDeleted { user_id: String, entry_id: i64 },
+    /// One act reached the relay, so the row it belonged to may have stopped
+    /// waiting.
+    ///
+    /// **Not `HistoryChanged`.** Nothing reorders at a flush — the relay stamps a
+    /// pending act exactly where the device already showed it — so a shell has one
+    /// row to update and no reason to refetch a hundred. The row is addressed by
+    /// its own id, which a flush does not change.
+    EntrySettled { user_id: String, entry_id: i64 },
+    /// The relay turned an act down for what it is, and said this.
+    ///
+    /// Not `HistoryChanged` for the same reason, and not a `Notice`: a refusal is
+    /// about one row, the row is on screen, and it carries its own reason and its
+    /// own way out.
+    EntryRefused { user_id: String, entry_id: i64, reason: String },
     HistoryChanged { user_id: String },
     PendingCount { user_id: String, count: i64 },
     Contact { user_id: String, last_contact_at: Option<i64> },

@@ -221,6 +221,18 @@ pub async fn delete_entry(
     state.core.delete_entry(&args.user_id, args.entry_id).await
 }
 
+/// Put a **Refused** act back in the queue.
+///
+/// A fresh act and not a retry, so it leads the History afterwards and carries
+/// nothing forward from the refusal.
+#[tauri::command]
+pub async fn resend_entry(
+    args: EntryScopedArgs,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), AppError> {
+    state.core.resend(&args.user_id, args.entry_id).await
+}
+
 #[tauri::command]
 pub async fn clear_history(
     args: UserScopedArgs,

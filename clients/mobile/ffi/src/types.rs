@@ -471,6 +471,15 @@ pub enum CoreEvent {
     ConnectionState { user_id: String, state: ConnectionState, last_error: Option<String> },
     EntryAdded { user_id: String, entry: Entry },
     EntryDeleted { user_id: String, entry_id: i64 },
+    /// One act reached the relay, so its row may have stopped waiting.
+    ///
+    /// The row is addressed by its own id, which a flush does not change, so a
+    /// shell updates it in place. Deliberately not `HistoryChanged`: nothing
+    /// reorders at a flush, and a refetch per acked act is the cost this
+    /// distinction exists to avoid.
+    EntrySettled { user_id: String, entry_id: i64 },
+    /// The relay turned an act down for what it is, and said this.
+    EntryRefused { user_id: String, entry_id: i64, reason: String },
     HistoryChanged { user_id: String },
     PendingCount { user_id: String, count: i64 },
     Contact { user_id: String, last_contact_at: Option<i64> },
@@ -497,6 +506,12 @@ impl From<CoreCoreEvent> for CoreEvent {
             }
             CoreCoreEvent::EntryDeleted { user_id, entry_id } => {
                 CoreEvent::EntryDeleted { user_id, entry_id }
+            }
+            CoreCoreEvent::EntrySettled { user_id, entry_id } => {
+                CoreEvent::EntrySettled { user_id, entry_id }
+            }
+            CoreCoreEvent::EntryRefused { user_id, entry_id, reason } => {
+                CoreEvent::EntryRefused { user_id, entry_id, reason }
             }
             CoreCoreEvent::HistoryChanged { user_id } => CoreEvent::HistoryChanged { user_id },
             CoreCoreEvent::PendingCount { user_id, count } => {
