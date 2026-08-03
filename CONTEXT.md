@@ -46,8 +46,9 @@ _Avoid_: backend, host, cloud, server
 ### Clipboard
 
 **Entry**:
-One clipboard payload, captured and encrypted on its origin device and
-identified by a relay-assigned id.
+One clipboard payload, captured and encrypted on its origin device. It exists
+from the moment of capture, on the device that made it. The relay-assigned id
+it acquires later is what makes it shared, not what makes it real.
 _Avoid_: clip, item, paste, snippet
 
 **Preview**:
@@ -55,21 +56,26 @@ The decrypted, single-line rendering of an entry as shown in a list.
 _Avoid_: excerpt, summary
 
 **History**:
-A user's entries ordered by last use, newest first, as held by the relay and
-mirrored locally. Not capture order: an entry recalled today leads a history of
-entries captured since.
+A user's entries, newest first. Two regions in one order: this device's pending
+acts, in the order it will send them, above the entries the relay has ordered
+by last use. Not capture order — an entry recalled today leads a history of
+entries captured since — and the seam does not move at flush, because the relay
+stamps a pending act on arrival exactly where the device already showed it.
 _Avoid_: log, feed, buffer
 
 **Use**:
-Any act that puts an entry at the head of the history: capturing it, recalling
-it, or copying its text again on a device that already holds it. Reading an
-entry is not a use.
+Any act the relay records against an entry so that it leads the history:
+capturing it, recalling it, or copying its text again on a device that already
+holds it. Reading an entry is not a use, and neither is resending a pending —
+there is no relay record to move.
 _Avoid_: bump, touch, promote, access, reuse
 
 **Last Use**:
-The moment of an entry's most recent use, on whichever device. It orders the
-history and measures how long the entry is kept, so an entry in regular use is
-never the one dropped to make room.
+The moment of an entry's most recent use, on whichever device, as recorded by
+the relay. It orders the entries the relay knows and measures how long an entry
+is kept, so an entry in regular use is never the one dropped to make room. An
+entry whose latest act is still pending has no last use for that act: the queue
+orders it until the relay stamps it.
 _Avoid_: bumped at, updated at, modified, sort key, last accessed
 
 **Filter**:
@@ -113,11 +119,25 @@ _Avoid_: source, sender, author
 
 **Pending**:
 An act this device holds but has not yet placed on the relay, because the relay
-could not be reached: a capture, or a use. A pending capture is not an Entry —
-it carries no relay-assigned id, and no other device knows of it — and becomes
-one when the relay takes it. Pendings reach the relay in the order they were
-made, so an outage cannot reorder what happened during it.
+could not be reached: a capture, or a use. The payload of a pending capture is
+an Entry from the moment it is made; what is missing is the relay's id, and so
+no other device knows of it yet. Pendings reach the relay in the order of the
+acts that queued them — recalling, re-copying or resending one is a fresh act,
+which moves it to the back of the queue and thereby to the head of the history.
 _Avoid_: outbox, backlog, unsent, pending entry
+
+**Refused**:
+A pending the relay turned down for what it is rather than for being out of
+reach — too large, malformed. It leaves the queue so that nothing waits behind
+it, and stays on this device until it is resent or deleted. Being unreachable
+is never a refusal: that is what the queue is for.
+_Avoid_: failed, error, dead letter, bounced
+
+**Resend**:
+Putting a refused pending back in the queue. A fresh act and not a retry, so it
+goes to the back of the queue, leads the history, and carries nothing forward
+from the refusal that preceded it.
+_Avoid_: retry, requeue, try again
 
 **Contact**:
 The most recent moment a device had a live connection to the relay, evidenced
