@@ -7,6 +7,42 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.6.0
+
+**Both clients, and your relay with them.** Your history is now ordered by when you last
+*used* an entry rather than when it was captured, and both clients can narrow it to what
+you type. **Update the relay before the clients** — half the ordering is its work, and a
+relay still on the old schema leaves every recall changing nothing.
+
+- **Recalling an entry moves it to the top, on every device.** A recall used to leave no
+  trace at all: the text reached your clipboard and the list looked exactly as it had a
+  second earlier, so the thing you reach for ten times a day sank underneath things you
+  pasted once. It is the same entry that moves — same text, same origin, same capture
+  time; nothing is copied and nothing new is made.
+- **Copying something you already have counts as using it.** Both clients used to treat
+  that as a refusal — this machine said `ALREADY HERE` — which was true about the storage
+  and no use to you. It now moves the entry you already have to the top, and the phone
+  says **Already saved** rather than reporting a failure.
+- **Both retention limits measure from last use.** The hundred entries a relay keeps, and
+  the thirty days it keeps them for, now count from when you last used an entry, so
+  something in regular use is never the thing dropped to make room.
+- **Type to narrow your history.** New on the phone: a field under the contact line that
+  hides every row whose text does not contain what you typed, with a count of what is
+  left and a `✕` to clear it. It never asks the relay, so it can only find what has
+  already reached that phone — and it matches the whole entry rather than the one line
+  you can see, so a word buried on an entry's third line still finds it. On this machine
+  the box you already had is now called **Filter**, which is what it always did.
+- **The phone's `RECALL LATEST` is now `RECALL FIRST`.** It hands over the first row of
+  the list in front of you, which with a filter on need not be the newest entry — and
+  that is the row already marked in the list, so the button and the list cannot disagree
+  about which entry you are about to get. It takes what the phone already holds instead
+  of fetching, so it can no longer hand you something you never saw. The recall on the
+  notification is unchanged: still the last entry used, still fetched.
+- **The phone shows a hundred entries instead of fifty**, which is everything it keeps.
+- **Ages on this machine read from last use.** The age column runs down the list in order
+  again instead of showing a three-week-old entry above a two-minute-old one, and an
+  entry's detail pane says `USED` beside `CAPTURED` when the two differ.
+
 ## 0.5.1
 
 **Icons.** The phone never had one of its own; this machine's changes colour. Nothing else
