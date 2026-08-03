@@ -7,6 +7,40 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.7.0
+
+**Both clients. Your relay needs nothing.** Copying something while your relay is out of
+reach used to show you nothing at all: the entry existed, queued and encrypted, but your
+history looked as though the copy had never happened — you could not search it, recall it,
+or change your mind about it until the relay came back. Every copy is now a row the moment
+you make it, on both clients, and the relay is not involved in the change, so there is no
+order to update things in.
+
+- **An offline copy is in your history straight away**, at the top, tinted the same amber
+  as the count of things waiting. You can find it with Filter, read it in full, and recall
+  it onto your clipboard — all of that now works on something the relay has never seen,
+  because the copy is on the machine you made it on.
+- **You can take a copy back.** Deleting one of these removes the entry *and* the upload
+  that was going to publish it, with nothing in reach and no trace anywhere else — the
+  queue survives a force-quit, so before this there was no way to stop a mistaken copy
+  from reaching the relay eventually. Deleting an entry the relay already has is unchanged.
+- **A refused copy says why, and offers to try again.** If your relay turns something down
+  for what it is — one entry over its size limit — that row now tells you so in the
+  relay's own words and carries a **Resend**. Nothing queues up behind it while it waits
+  for you, which is the other half: one oversized copy used to be able to hold up
+  everything made after it.
+- **Being out of reach is never a refusal.** No copy is ever given up on for being
+  unreachable, and none is dropped to keep the queue short. An earlier limit quietly
+  discarded the oldest thing waiting once a thousand had piled up — deleting clipboard
+  content that had reached nowhere else, and telling only the log about it.
+- **Nothing jumps when the relay comes back.** What you saw before a flush is what you see
+  after it: same rows, same order, same place in the list, and the entry you had selected
+  stays selected. The relay stamps each copy exactly where your machine already showed it.
+- **A long offline stretch is not truncated.** The hundred entries kept per device, and the
+  thirty days, now measure only the entries your relay has ordered. A hundred and fifty
+  copies made offline are a hundred and fifty rows, because throwing one away to keep a
+  number tidy would be throwing away the only copy of it.
+
 ## 0.6.1
 
 **Only the phone changes.** A patch over 0.6.0's Filter, which shipped as a boxed field
