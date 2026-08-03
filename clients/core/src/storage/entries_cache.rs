@@ -12,7 +12,7 @@ pub struct CachedEntry {
     ///
     /// An Entry exists from the moment of capture, on the device that made it,
     /// and the relay's id is what makes it *shared* rather than what makes it
-    /// real (ADR 0013). So the row needs an identity the relay did not assign,
+    /// real (ADR 0016). So the row needs an identity the relay did not assign,
     /// and this is it: nothing about a flush changes it, which is what lets a
     /// shell keep a row's selection and keyboard cursor across one.
     pub local_id: i64,
@@ -934,7 +934,7 @@ mod tests {
     }
 
     /*
-     * An Entry exists before the relay names it (ADR 0013), so a capture is a
+     * An Entry exists before the relay names it (ADR 0016), so a capture is a
      * row from the moment it is made — findable, readable and deletable there,
      * with no relay id and nothing the caps can measure.
      */

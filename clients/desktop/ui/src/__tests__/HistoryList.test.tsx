@@ -170,7 +170,7 @@ describe("HistoryList", () => {
 describe("HistoryList — the un-flushed region", () => {
   /**
    * The relay stamped neither timestamp, because it has never seen this entry:
-   * the row exists on the strength of the capture alone (ADR 0013).
+   * the row exists on the strength of the capture alone (ADR 0016).
    */
   const unflushed: EntryView = {
     id: 3, user_id: "u", preview: "offline copy", plaintext: "offline copy",

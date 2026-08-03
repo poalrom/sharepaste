@@ -331,7 +331,7 @@ thing either way — the outcome, in a word, over the sentence that explains it.
   wrong about is the payload: a pending capture's payload was always an **Entry**
   — it exists from the moment of capture, on the device that made it, and the
   relay-assigned id it acquires later is what makes it *shared* rather than what
-  makes it real (ADR 0013). So the payload is now a row, tinted `Fui.AmberA16`
+  makes it real (ADR 0016). So the payload is now a row, tinted `Fui.AmberA16`
   while the act is owed, and the band is the head of a region you can see rather
   than a statement about something offscreen. The band and its readout survive
   intact (ADR 0014). The reasoning below stands as written for what it was about,

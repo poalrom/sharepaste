@@ -118,7 +118,7 @@ describe("EntryRow", () => {
 
 /**
  * An act this device holds and the relay has not: a capture with no relay id and
- * so no stamp at all, which is why both timestamps are 0 (ADR 0013).
+ * so no stamp at all, which is why both timestamps are 0 (ADR 0016).
  */
 const unflushed: Partial<EntryView> = {
   preview: "offline copy",

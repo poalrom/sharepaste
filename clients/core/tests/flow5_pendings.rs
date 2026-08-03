@@ -106,7 +106,7 @@ impl Rig {
 }
 
 /*
- * ADR 0013 and ADR 0014 together, end to end.
+ * ADR 0016 and ADR 0014 together, end to end.
  *
  * Three captures are made before any session exists, so nothing can flush them:
  * the uploader lives on the session (ADR 0007). Before the session comes up there

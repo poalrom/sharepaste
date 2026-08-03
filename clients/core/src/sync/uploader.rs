@@ -280,7 +280,7 @@ impl Uploader {
     /// Attach what the relay recorded to the Entry the capture already created.
     ///
     /// **Reconciliation, not insertion.** The Entry exists from the moment of
-    /// capture (ADR 0013), so this flush has nothing to create and nothing to
+    /// capture (ADR 0016), so this flush has nothing to create and nothing to
     /// announce: it hands the row the relay's id, the `created_at` every other
     /// device will see it dated by, and its `last_use`. The `local_id` does not
     /// move, which is what lets both shells keep a row's selection and keyboard

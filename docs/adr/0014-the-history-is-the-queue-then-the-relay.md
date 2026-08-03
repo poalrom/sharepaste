@@ -1,7 +1,7 @@
 # The history is the queue, then the relay
 
 With an **Entry** existing before the relay names it
-([ADR 0013](0013-an-entry-exists-before-the-relay-names-it.md)), it needs a place in a list whose
+([ADR 0016](0016-an-entry-exists-before-the-relay-names-it.md)), it needs a place in a list whose
 only sort key is relay-stamped **Last Use** — a value it does not have and will not have until
 flush. The **History** is therefore two regions in one order: this device's pending acts, newest
 first, in the order it will send them, above the entries the relay has ordered by last use. No
@@ -87,7 +87,7 @@ rows that have no `last_use` at all. Rejected: it surfaces half of a two-part de
 
 **Cap the display at a hundred and leave the queue at a thousand.** No shrink, no destroyed acts,
 two numbers. Rejected on one consequence: an act you cannot see, you cannot withdraw, and
-withdrawal is the strongest thing [ADR 0013](0013-an-entry-exists-before-the-relay-names-it.md)
+withdrawal is the strongest thing [ADR 0016](0016-an-entry-exists-before-the-relay-names-it.md)
 buys. A rule with a footnote about the newest hundred is worse than a list that gets long.
 
 **One cap of a hundred over the merged list, evicting from the bottom.** No shrink, one number.

@@ -92,7 +92,7 @@ export async function resendEntry(entry: EntryView): Promise<void> {
  *
  * The tint behind a row says the relay has not heard the latest act; this says
  * what the relay did say, and there is no local clock to stand in when it has
- * said nothing (ADR 0013). An entry the relay has never stamped carries
+ * said nothing (ADR 0016). An entry the relay has never stamped carries
  * `last_use === 0`, and an age rendered from that reads as 1970 rather than as
  * new, so its slot is empty — nothing is lost beside it, because such an entry
  * was captured here and so never printed an Origin either.

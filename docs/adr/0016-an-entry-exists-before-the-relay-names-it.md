@@ -1,5 +1,10 @@
 # An entry exists before the relay names it
 
+> **Renumbered from 0013, 2026-08-03.** Two efforts allocated 0013 the same day and
+> [the Filter's](0013-the-filter-is-a-text-field-first.md) landed first, so this one took the
+> next free number instead — which is why 0014 and 0015, decided in the same session as this,
+> cite a decision numbered after them. Nothing about the decision changed.
+
 An offline capture never reached the local history: `enqueue_capture` encrypts and queues
 (`facade.rs:1153-1175`) and only the uploader's ack inserts a row (`uploader.rs:162-165`), so a
 device that has just copied three things shows none of them, cannot **Filter** for them, and

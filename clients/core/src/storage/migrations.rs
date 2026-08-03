@@ -452,7 +452,7 @@ mod tests {
     }
 
     /*
-     * An Entry exists before the relay names it (ADR 0013), so the cache is
+     * An Entry exists before the relay names it (ADR 0016), so the cache is
      * rekeyed on an id the relay did not assign — and an installed database has
      * to come across whole. Everything the row was is checked, not just its
      * count: the ciphertext is the only copy of the content, and a rebuild that

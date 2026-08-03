@@ -5,7 +5,7 @@ deletes the row (`uploader.rs:203-211`), a use of a vanished entry is dropped (`
 anything unmapped — including `PairExpired`, since 410 matches none of the three arms — fails at
 the head forever, blocking everything behind it, with `attempts` counted and never compared to
 anything (`pending.rs:200`). Once a **Pending** is a visible row
-([ADR 0013](0013-an-entry-exists-before-the-relay-names-it.md)) each of those becomes a row that
+([ADR 0016](0016-an-entry-exists-before-the-relay-names-it.md)) each of those becomes a row that
 silently disappears or sits amber forever. So a pending the relay turned down *for what it is*
 becomes **Refused**: it leaves the queue, so nothing waits behind it, and stays on the device
 until it is **Resent** or deleted. Being out of reach is never a refusal — that is what the queue

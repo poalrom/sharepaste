@@ -1277,7 +1277,7 @@ impl Sharepaste {
     /// Encrypt, store the Entry, queue the act, report.
     ///
     /// **The Entry and the act go in together, in one transaction.** An Entry
-    /// exists from the moment of capture (ADR 0013), and the row is what the
+    /// exists from the moment of capture (ADR 0016), and the row is what the
     /// queued act is *for*: a queue row with no entry would be an act nobody can
     /// see or withdraw, and an entry with no queued act would be content that
     /// never reaches the relay. Either half alone is a worse state than neither.
@@ -2254,7 +2254,7 @@ mod tests {
     }
 
     /*
-     * ADR 0013, at the seam a shell sees. An Entry exists from the moment of
+     * ADR 0016, at the seam a shell sees. An Entry exists from the moment of
      * capture: it is a row in the History with its preview, its plaintext and
      * this device as its Origin, before any relay has been reached — the whole
      * reason the local history stopped lying about what the device holds.
@@ -2332,7 +2332,7 @@ mod tests {
      * Making a mistaken copy visible without making it withdrawable would show
      * you the mistake and hand you nothing. The queue is durable across a
      * force-quit, so this is the only thing that stops an un-flushed capture
-     * reaching the relay when it comes back (ADR 0013) — and it is the one delete
+     * reaching the relay when it comes back (ADR 0016) — and it is the one delete
      * that works with nothing in reach: no other device knows of the row, so
      * there is nothing out there to take back.
      */

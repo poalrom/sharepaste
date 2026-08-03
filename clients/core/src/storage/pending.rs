@@ -251,7 +251,7 @@ pub(crate) fn rowid_for_entry(
 ///
 /// What deleting an un-flushed row amounts to: the queue is durable across a
 /// force-quit, so without this there is no way to stop a mistaken copy reaching
-/// the relay (ADR 0013).
+/// the relay (ADR 0016).
 pub(crate) fn delete_for_entry(
     conn: &Connection,
     user_id: &str,
