@@ -162,10 +162,35 @@ Row columns, fixed so nothing reflows:
 | Origin is another device | `IPHONE-15 · 6h` — label truncated to 12 chars, full in `title` |
 | Origin is this device | `2m` — device omitted |
 | Undecryptable | `KEY MISMATCH`, alert tone |
+| The relay has never stamped it | empty |
+| Refused | the reason, alert tone |
+
+*The last three rows added on `pendings`, 2026-08-03.* **The slot always shows the
+relay's last word**, and it is decided in one place — `timeSlot` in `EntryRow.tsx`,
+which both lists import so the two cannot drift. The precedence, top down: the
+refusal reason; `KEY MISMATCH`; nothing at all when `last_use === 0`; otherwise
+`relativeAge(last_use)` with the Origin beside it.
+
+A refusal wins over `KEY MISMATCH` because it is the actionable one. The empty
+slot is gated on the stamp and **not** on `pending`, which is the load-bearing
+detail: `entry-settled` deliberately carries no timestamp — a stamp per acked act
+is the refetch that event exists to avoid — so a row that settles in place is a
+settled row still holding `last_use === 0`, and gating on `pending` would print
+`655mo` on the newest row in the list the moment the queue drained. There is one
+clock in this system and it is the relay's (ADR 0014); silence is what this device
+honestly has until a snapshot brings the stamp.
 
 Rows are **not** dimmed when offline and carry no per-row `CACHED` marker — a
 window-level fact is stated once, in the degraded strip. *(Follows from §0.8;
 resolved by extension rather than asked.)*
+
+*Extended on `pendings`, 2026-08-03.* Still true and still the right rule, and it
+is what makes the amber tint admissible rather than a contradiction of it:
+**offline is a window-level fact, un-flushed is a per-row one.** A row the relay
+has not heard the latest word about takes `rgba(245, 182, 66, 0.08)` behind it —
+the same amber as the `N PENDING` in both footers — and nothing on it is
+recoloured, which is the half of this rule that ADR 0002 cut the `CACHED` marker
+for. A refused row is the exception, and earns it by carrying an action.
 
 `PanelMessage` covers `NO ACCOUNTS PAIRED` (solid `PAIR A DEVICE`), `NO ACTIVE
 ACCOUNT` (outline `CHOOSE ACCOUNT`), `HISTORY EMPTY`, and `NO MATCHES` +
@@ -256,6 +281,18 @@ Undecryptable rows stay arrow-navigable so the `01..11` index stays continuous;
 only `✕` is live on them. The global decryption banner is deleted — the row is
 local, persistent, and points at the actual entry, whereas the banner named an
 entry id (`Popover.tsx:82`) that appears nowhere in the UI.
+
+*Extended on `pendings`, 2026-08-03.* The selected-row controls gain `↻` beside
+`⧉` and `✕`, shown only on a **Refused** row: the relay turned that act down for
+what it is, and a **Resend** is a fresh act rather than a retry, so it leads the
+History afterwards and carries nothing forward from the refusal (ADR 0015). Both
+`⧉` and `✕` stay live on a refused row — its text is stranded on this device, so
+copying it must stay possible, and deleting it withdraws the act with it.
+
+The footer below is **unchanged**, and deliberately: the counts all stay, on both
+footers and both pairing cards (ADR 0014). A row you can see does not make the
+number redundant — it states how many acts are owed, which the region's height
+does not.
 
 Footer: `Online` → nominal `ONLINE`; `Connecting` → caution `SYNCING` (pulse,
 reduced-motion aware); `Disconnected` → standby `OFFLINE`; `AuthFailed` → alert

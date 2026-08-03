@@ -212,6 +212,27 @@ The list-end sentinel — `— OLDEST OF 100 KEPT —` — renders only when the
 at the cache cap, so a user with nine entries never sees a limit that has not
 bitten them.
 
+*Extended on `pendings`, 2026-08-03.* **The row treatment and the time slot.** A
+row the relay has not heard the latest word about takes
+`rgba(245, 182, 66, 0.08)` behind it — the same amber as the `N PENDING` in the
+footer and on the pairing cards — and nothing on it is recoloured, per the rule
+ADR 0002 cut the per-row `CACHED` marker for. The time slot is the popover's
+decision, imported rather than restated — see `popover-redesign.md` §5 for the
+precedence. A refused row's controls gain `↻`.
+
+**The reader pane beside it.** The `CAPTURED … · USED …` line is the relay's word
+too, so an entry the relay has not stamped reads `WAITING FOR THE RELAY` there
+instead. Formatting a zero `created_at` reads `1970-01-01 · 655mo ago`, which would
+be the reader going on telling the lie the row beside it just stopped telling.
+
+The sentinel above is counted over the **settled** rows alone. It is a statement
+about retention — the hundred rows the relay has ordered — and the caps no longer
+bound the un-flushed region at all: an act this device has not delivered is
+undelivered clipboard content, and evicting one to protect a display invariant is
+the trade ADR 0014 refuses. So a hundred and fifty offline captures are a hundred
+and fifty rows, and a full page of them names no cap, because none has bitten. The
+footer and card counts are **unchanged**.
+
 ---
 
 ## 7. Pairings pane (§0.8, §0.9)

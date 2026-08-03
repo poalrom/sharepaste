@@ -301,6 +301,12 @@ Three splits worth knowing about:
 | `pending_count` — `%1$d Entries are waiting…` | `pending_count` with no count, beside a 34sp readout | The number is what is being reported; the sentence is what it means |
 | — | `pairings_pending` — `%1$d ENTRIES WAITING FOR THE RELAY · …` | A card has no room for a readout and has to carry its own count |
 
+*Overtaken on `pendings`, 2026-08-03.* Both count strings survive unchanged, and
+so does everything else the counts are drawn in (ADR 0014). What changed is that
+they are no longer the *whole* of the pending surface: the payload of a pending
+capture is a row now, and the count states how many acts are owed rather than how
+much is invisible.
+
 `offer_button` and `recall_latest_button` keep their long titles: those are the
 **notification's** action labels, and a notification action has no surrounding
 screen to say what it acts on. The bar uses `offer_bar` / `recall_latest_bar`.
@@ -320,11 +326,21 @@ thing either way — the outcome, in a word, over the sentence that explains it.
 
 ## 5. Cut, deliberately
 
-* **`QUEUED HERE` rows.** The mock's pending state lists the queued payloads as
-  rows. A **Pending** is not an Entry — it carries no relay-assigned id and the
-  facade exposes only a count — so drawing rows for them would mean widening the
-  facade to make a design read. The band and its readout say the same thing
-  truthfully.
+* **`QUEUED HERE` rows.** *Overtaken on `pendings`, 2026-08-03.* A **Pending** act
+  still never appears as a row, and this bullet is right about that. What it was
+  wrong about is the payload: a pending capture's payload was always an **Entry**
+  — it exists from the moment of capture, on the device that made it, and the
+  relay-assigned id it acquires later is what makes it *shared* rather than what
+  makes it real (ADR 0013). So the payload is now a row, tinted `Fui.AmberA16`
+  while the act is owed, and the band is the head of a region you can see rather
+  than a statement about something offscreen. The band and its readout survive
+  intact (ADR 0014). The reasoning below stands as written for what it was about,
+  which is the *act*.
+
+  The mock's pending state lists the queued payloads as rows. A **Pending** is not
+  an Entry — it carries no relay-assigned id and the facade exposes only a count —
+  so drawing rows for them would mean widening the facade to make a design read.
+  The band and its readout say the same thing truthfully.
 * **A running `02:00` countdown** under the viewfinder — and, in the end, the
   strip that replaced it. The reasoning was right the first time and simply had
   further to go. This phone is the claimer: it reads a shortcode carrying no
