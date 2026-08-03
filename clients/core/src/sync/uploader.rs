@@ -243,17 +243,27 @@ impl Uploader {
                 // (ADR 0015). This arm used to delete the row and write a warning
                 // — clipboard content destroyed, and only the log told.
                 Err(AppError::BadInput(reason)) => {
-                    let count = {
+                    let (count, claimed) = {
                         let conn = self.conn.lock().await;
-                        pending::refuse(&conn, item.rowid, crate::now_ms(), &reason)?;
-                        pending::count(&conn, &self.user_id)?
+                        let claimed =
+                            pending::refuse(&conn, item.rowid, crate::now_ms(), &reason)? > 0;
+                        (pending::count(&conn, &self.user_id)?, claimed)
                     };
-                    if let Some(entry_id) = item.local_entry_id {
-                        self.events.emit(CoreEvent::EntryRefused {
+                    // Zero claimed rows means another uploader was told the same
+                    // thing about the same act: a session being replaced leaves
+                    // the outgoing one mid-flush while the incoming one starts, so
+                    // two of them can read one head. One act earns one refusal.
+                    match (claimed, item.local_entry_id) {
+                        (true, Some(entry_id)) => self.events.emit(CoreEvent::EntryRefused {
                             user_id: self.user_id.clone(),
                             entry_id,
                             reason,
-                        });
+                        }),
+                        (false, _) => tracing::info!(
+                            rowid = item.rowid,
+                            "this act had already been refused; the refusal is not repeated"
+                        ),
+                        (true, None) => {}
                     }
                     self.pending_count(count);
                 }
@@ -606,6 +616,93 @@ mod tests {
         assert!(sink.settled().is_empty(), "and nothing settled");
         assert!(!sink.saw_history_changed("u"), "nor did anything reorder");
         assert_eq!(cached(&conn).await.len(), 2, "both rows are still here");
+    }
+
+    /*
+     * The half a live relay caught: a refusal must not be offered again on the
+     * *next* trigger either. The uploader is nudged by every reconnect, so a
+     * refusal that came back to the head would be re-offered — and re-refused —
+     * for as long as the session lived, which is one `EntryRefused` per reconnect
+     * for a fact that has not changed.
+     */
+    #[tokio::test]
+    async fn a_refusal_is_not_offered_again_on_the_next_flush() {
+        let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
+        paired(&conn).await;
+        let refused = queue_capture(&conn, "too large for this relay").await;
+        let transport = Arc::new(OkTransport::new());
+        let refusing = Arc::new(RefusingRelay(|| AppError::BadInput("payload too large".into())));
+
+        let (up, sink) = uploader(conn.clone(), refusing);
+        up.flush_once().await.unwrap();
+        assert_eq!(sink.refusals(), vec![(refused, "payload too large".to_string())]);
+
+        // The next trigger, over a relay that would take anything it was offered.
+        // It must be offered nothing.
+        let (up, later) = uploader(conn.clone(), transport.clone());
+        up.flush_once().await.unwrap();
+
+        assert_eq!(
+            transport.count.load(Ordering::SeqCst),
+            0,
+            "a refused act is not deliverable, so nothing was sent"
+        );
+        assert!(later.refusals().is_empty(), "and nothing was refused a second time");
+        let c = conn.lock().await;
+        assert_eq!(pending::count(&c, "u").unwrap(), 1, "the act is still here");
+    }
+
+    /*
+     * Two uploaders, one head. Found against a live relay, which is where it can
+     * happen: `start_session` cancels the session it replaces, but a cancellation
+     * is only noticed at the `select!`, so an outgoing uploader already inside
+     * `flush_once` runs to the end of it while the incoming one starts. Both read
+     * the same head, both are told 413, and the shell would be handed the same
+     * refusal twice for one act.
+     *
+     * `refused_at` is what settles it: the second `refuse` claims nothing, and it
+     * is the claim rather than the relay's answer that earns the event. The same
+     * contract `ack`'s rowcount already carries for the withdrawal race.
+     */
+    #[tokio::test]
+    async fn one_act_earns_one_refusal_however_many_uploaders_are_told() {
+        let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
+        paired(&conn).await;
+        let entry = queue_capture(&conn, "too large for this relay").await;
+        let refusing = || Arc::new(RefusingRelay(|| AppError::BadInput("payload too large".into())));
+
+        // Both hold the head at the same moment, exactly as the two flushes do.
+        let head = {
+            let c = conn.lock().await;
+            pending::head(&c, "u").unwrap().unwrap()
+        };
+        let (outgoing, from_outgoing) = uploader(conn.clone(), refusing());
+        let (incoming, from_incoming) = uploader(conn.clone(), refusing());
+        let (a, b) = tokio::join!(outgoing.flush_once(), incoming.flush_once());
+        a.unwrap();
+        b.unwrap();
+
+        let reported: Vec<(i64, String)> = from_outgoing
+            .refusals()
+            .into_iter()
+            .chain(from_incoming.refusals())
+            .collect();
+        assert_eq!(
+            reported,
+            vec![(entry, "payload too large".to_string())],
+            "one act, one refusal, whichever uploader claimed it"
+        );
+        let c = conn.lock().await;
+        assert_eq!(pending::count(&c, "u").unwrap(), 1, "and the act is kept, once");
+        assert!(
+            pending::head(&c, "u").unwrap().is_none(),
+            "and is no longer deliverable"
+        );
+        assert_eq!(
+            pending::refuse(&c, head.rowid, 99, "again").unwrap(),
+            0,
+            "a refusal is claimed once and only once"
+        );
     }
 
     /*

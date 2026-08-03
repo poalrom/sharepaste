@@ -208,6 +208,12 @@ pub(crate) fn ack(conn: &Connection, rowid: i64) -> Result<usize, AppError> {
 /// a refusal (ADR 0015). The alternative this replaces deleted the row and wrote
 /// a warning to the log — code destroying a person's clipboard content and
 /// telling only the log about it.
+///
+/// Reports zero when the act was already refused, and its caller has to know for
+/// the same reason [`ack`]'s zero matters: a session being replaced leaves the
+/// outgoing uploader mid-flush while the incoming one starts, so two of them can
+/// read one head and both be told 413. One act earns one refusal, and `refused_at`
+/// is what says which of the two claimed it.
 pub(crate) fn refuse(
     conn: &Connection,
     rowid: i64,
@@ -215,7 +221,8 @@ pub(crate) fn refuse(
     reason: &str,
 ) -> Result<usize, AppError> {
     let n = conn.execute(
-        "UPDATE pending_uploads SET refused_at = ?2, last_error = ?3 WHERE rowid = ?1",
+        "UPDATE pending_uploads SET refused_at = ?2, last_error = ?3
+          WHERE rowid = ?1 AND refused_at IS NULL",
         params![rowid, at, reason],
     )?;
     Ok(n)
