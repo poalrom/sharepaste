@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { cmd } from "../../ipc/commands";
-import { agePhrase, relativeAge } from "../../lib/format";
+import { agePhrase } from "../../lib/format";
 import {
   hydrateFrom,
   useContactStore,
@@ -9,7 +9,7 @@ import {
   usePairingsStore,
   useUiStore,
 } from "../../store";
-import { copyEntry, deleteEntry } from "../EntryRow";
+import { ALERT_SLOT, copyEntry, deleteEntry, timeSlot } from "../EntryRow";
 import { PanelMessage, Strip } from "../fui";
 import EntryDetail from "./EntryDetail";
 
@@ -170,6 +170,16 @@ export default function HistorySection({ now }: { now: number }) {
     return () => document.removeEventListener("keydown", handler);
   }, [filtered, selectedIndex, setSelectedIndex, setFilter]);
 
+  /*
+    The sentinel below is a statement about retention, so only the rows the
+    relay has ordered count toward the cap it names. Nothing bounds the
+    un-flushed region — evicting an act this device has not delivered to protect
+    a display invariant is the trade ADR 0014 refuses — so a page of un-flushed
+    captures is a page of rows the cap never touched, and counting them would
+    announce a limit that has not bitten.
+  */
+  const settled = entries.filter((e) => !e.pending).length;
+
   // Exactly one of: the rows, or the reason there are none.
   let list: ReactNode;
   if (pairings.length === 0) {
@@ -205,12 +215,14 @@ export default function HistorySection({ now }: { now: number }) {
           // An undecryptable row still counts, so the index stays continuous.
           const { undecryptable } = entry;
           const elsewhere = entry.device_id !== pairing?.device_id;
+          const slot = timeSlot(entry, now);
           return (
             <li
               key={entry.id}
               ref={selected ? selectedRef : undefined}
               data-testid="main-entry-row"
               data-selected={selected}
+              data-pending={entry.pending}
               className="fui-row flex cursor-default items-center gap-2.5 px-3"
               // Movement, not enter: keyboard nav scrolls rows under a resting
               // pointer, and mouseenter would fire on that and snatch the
@@ -236,11 +248,12 @@ export default function HistorySection({ now }: { now: number }) {
                 </span>
               )}
 
-              {undecryptable ? (
-                <span className="shrink-0 text-chrome tracking-phrase text-alert-400">
-                  KEY MISMATCH
+              {slot.tone === "alert" && (
+                <span className={ALERT_SLOT} title={slot.text}>
+                  {slot.text}
                 </span>
-              ) : (
+              )}
+              {slot.tone === "relay" && (
                 <span className="shrink-0 text-chrome tracking-phrase text-text-muted">
                   {elsewhere && (
                     <>
@@ -260,7 +273,7 @@ export default function HistorySection({ now }: { now: number }) {
                       {" · "}
                     </>
                   )}
-                  {relativeAge(entry.last_use, now)}
+                  {slot.age}
                 </span>
               )}
             </li>
@@ -271,7 +284,7 @@ export default function HistorySection({ now }: { now: number }) {
           never be shown a limit that has not bitten them, and a filtered list
           is short for a reason of the reader's own making.
         */}
-        {!filter.trim() && entries.length >= CACHE_CAP && (
+        {!filter.trim() && settled >= CACHE_CAP && (
           <li
             data-testid="list-end"
             className="px-3 py-2 text-center text-chrome tracking-phrase text-text-dim"

@@ -268,6 +268,24 @@ describe("HistorySection — the reader", () => {
     expect(meta).not.toHaveTextContent("USED");
   });
 
+  /*
+    The reader pane beside a row that stopped lying must not go on lying. An act
+    the relay has not taken has no capture time to state — there is one clock in
+    this system and it is the relay's (ADR 0014) — so `created_at` is zero, and
+    formatting it reads `1970-01-01 · 655mo ago`.
+  */
+  it("says the relay has not stamped an un-flushed capture rather than dating it to 1970", async () => {
+    historyByUser["u-a"] = [
+      { id: 9, user_id: "u-a", preview: "offered offline", plaintext: "offered offline", created_at: 0, last_use: 0, device_id: "d-a", origin_label: "d-a", undecryptable: false, pending: true, refused_reason: null },
+    ];
+    await renderPane();
+
+    expect(screen.getByText(/WAITING FOR THE RELAY/)).toBeInTheDocument();
+    expect(screen.queryByText(/CAPTURED/)).toBeNull();
+    expect(screen.queryByText(/1970/)).toBeNull();
+    expect(screen.getByTestId("entry-detail-body")).toHaveTextContent("offered offline");
+  });
+
   it("falls back to a prompt when the addressed position holds no entry", async () => {
     historyByUser["u-a"] = [];
     await renderPane();
@@ -499,6 +517,38 @@ describe("HistorySection — the list-end sentinel", () => {
     expect(screen.getAllByTestId("main-entry-row")).toHaveLength(11);
     expect(screen.queryByTestId("list-end")).toBeNull();
   });
+
+  /*
+    The caps bound the settled region alone (ADR 0014): an act this device has
+    not delivered is undelivered clipboard content, and evicting one to protect a
+    display invariant is the trade that decision refuses. So a page of un-flushed
+    captures is a page of rows the cap has never touched, and announcing one
+    would be the same lie told to a reader with nine entries.
+  */
+  it("stays silent for a page of un-flushed captures", async () => {
+    historyByUser["u-a"] = bulkEntries(CACHE_CAP).map((e) => ({
+      ...e,
+      created_at: 0,
+      last_use: 0,
+      pending: true,
+    }));
+    await renderPane();
+
+    expect(screen.getAllByTestId("main-entry-row")).toHaveLength(CACHE_CAP);
+    expect(screen.queryByTestId("list-end")).toBeNull();
+  });
+
+  // The discriminating case: more rows on screen than the cap, because the queue
+  // is above them, while the region the cap governs is still short of it.
+  it("stays silent while the queue is what pushed the list past the cap", async () => {
+    historyByUser["u-a"] = bulkEntries(CACHE_CAP + 5).map((e, i) =>
+      i < 6 ? { ...e, created_at: 0, last_use: 0, pending: true } : e,
+    );
+    await renderPane();
+
+    expect(screen.getAllByTestId("main-entry-row")).toHaveLength(CACHE_CAP + 5);
+    expect(screen.queryByTestId("list-end")).toBeNull();
+  });
 });
 
 describe("HistorySection — origin", () => {
@@ -706,5 +756,110 @@ describe("HistorySection — empty states", () => {
 
     expect(screen.getAllByTestId("main-entry-row")).toHaveLength(3);
     expect(filterInput()).toHaveValue("");
+  });
+});
+
+/**
+ * The queue, above the entries the relay ordered (ADR 0014). Neither timestamp
+ * is stamped on `unflushed`, because the relay has never seen it: the row exists
+ * on the strength of the capture alone, and it was captured on this device, so
+ * its Origin is suppressed too.
+ */
+const unflushed: EntryView = {
+  id: 31, user_id: "u-a", preview: "offline copy", plaintext: "offline copy",
+  created_at: 0, last_use: 0, device_id: "dev-a", device_label: "MBP-14",
+  origin_label: "MBP-14", undecryptable: false, pending: true, refused_reason: null,
+};
+
+describe("HistorySection — the un-flushed region", () => {
+  beforeEach(() => {
+    historyByUser["u-a"] = [unflushed, ...entriesA];
+  });
+
+  /*
+    The tint is the whole statement (ADR 0002 cut the per-row word it replaces),
+    and the empty slot is the other half of it: there is one clock in this system
+    and it is the relay's, so an entry it has never stamped has no age at all.
+    `relativeAge(0)` would print 655mo beside the newest row in the list.
+  */
+  it("tints the un-flushed capture, and only it, with an empty time slot", async () => {
+    await renderPane();
+
+    const rows = screen.getAllByTestId("main-entry-row");
+    expect(rows[0]).toHaveAttribute("data-pending", "true");
+    expect(rows[0]!.textContent).toBe("01offline copy");
+    expect(rows[1]).toHaveAttribute("data-pending", "false");
+    expect(rows[1]).toHaveTextContent("2m");
+  });
+
+  // Un-flushed is not unusable: the payload is an Entry from the moment of
+  // capture, so the pane's own verbs reach it like any other row.
+  it("copies an un-flushed capture on Enter", async () => {
+    await renderPane();
+
+    fireEvent.keyDown(filterInput(), { key: "Enter" });
+
+    await waitFor(() =>
+      expect(ipc.invoke).toHaveBeenCalledWith("copy_to_clipboard", {
+        args: { user_id: "u-a", entry_id: 31 },
+      }),
+    );
+  });
+
+  // The row carries plaintext from capture, so the predicate has something to
+  // match long before the relay knows the entry exists.
+  it("finds an un-flushed capture by its text", async () => {
+    await renderPane();
+
+    fireEvent.change(filterInput(), { target: { value: "offline" } });
+
+    const rows = screen.getAllByTestId("main-entry-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("offline copy");
+  });
+
+  /*
+    A queued *use* is the other kind of pending, and it acts on an entry the
+    relay already stamped. The slot keeps that stamp: it is stale by definition,
+    since the relay has not recorded the use, and stale is what the relay's last
+    word is.
+  */
+  it("keeps the stale relay age on an entry whose use is still queued", async () => {
+    historyByUser["u-a"] = [{ ...entriesA[1]!, pending: true }, entriesA[0]!];
+    await renderPane();
+
+    const row = screen.getAllByTestId("main-entry-row")[0]!;
+    expect(row).toHaveAttribute("data-pending", "true");
+    expect(row).toHaveTextContent("30m");
+  });
+});
+
+describe("HistorySection — a refused act", () => {
+  const refused: EntryView = { ...unflushed, refused_reason: "payload too large" };
+
+  /*
+    The reason is a word rather than a colour on purpose: selection wins over the
+    tint, so a refused row that said nothing would read as a plain row for as
+    long as it was the addressed one — and this pane opens with row one addressed.
+  */
+  it("states the relay's reason where the age goes, in alert", async () => {
+    historyByUser["u-a"] = [refused, ...entriesA];
+    await renderPane();
+
+    expect(screen.getByText("payload too large")).toHaveClass("text-alert-400");
+    expect(screen.getAllByTestId("main-entry-row")[0]).toHaveAttribute("data-pending", "true");
+  });
+
+  // Orthogonal facts, one slot. Refused wins because it is the one of the two a
+  // person can do something about.
+  it("shows the refusal, not the key mismatch, on a row that is both", async () => {
+    historyByUser["u-a"] = [{ ...refused, preview: "", plaintext: null, undecryptable: true }];
+    await renderPane();
+
+    const row = screen.getAllByTestId("main-entry-row")[0]!;
+    expect(row).toHaveTextContent("payload too large");
+    expect(row).not.toHaveTextContent("KEY MISMATCH");
+    // The Preview column is unchanged by any of this.
+    expect(row).toHaveTextContent("UNDECRYPTABLE");
   });
 });

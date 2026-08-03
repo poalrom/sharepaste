@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { mockIpc, type MockIpc } from "./helpers";
 import { usePairingsStore, useHistoryStore, useUiStore } from "../store";
+import type { EntryView } from "../types";
 import HistoryList from "../views/HistoryList";
 
 let ipc: MockIpc;
@@ -159,5 +160,106 @@ describe("HistoryList", () => {
     fireEvent.keyDown(window, { key: "Backspace" });
     await waitFor(() => expect(ipc.invoke).not.toHaveBeenCalled());
     expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([1, 2]);
+  });
+});
+
+/**
+ * The queue above the relay's history: an offline capture is a row from the
+ * moment it is made, and the only row in this list with no relay stamp on it.
+ */
+describe("HistoryList — the un-flushed region", () => {
+  /**
+   * The relay stamped neither timestamp, because it has never seen this entry:
+   * the row exists on the strength of the capture alone (ADR 0013).
+   */
+  const unflushed: EntryView = {
+    id: 3, user_id: "u", preview: "offline copy", plaintext: "offline copy",
+    created_at: 0, last_use: 0, device_id: "d", origin_label: "d",
+    undecryptable: false, pending: true, refused_reason: null,
+  };
+  const settled: EntryView = {
+    id: 2, user_id: "u", preview: "World", plaintext: "World", created_at: 2, last_use: 2,
+    device_id: "d", origin_label: "d", undecryptable: false, pending: false, refused_reason: null,
+  };
+
+  beforeEach(() => {
+    ipc = mockIpc();
+    // Addressed row second, so the head reads as an unselected reader sees it:
+    // selection wins over the tint, and its controls would join the row's text.
+    useUiStore.setState({ filter: "", selectedIndex: 1, mainSection: "history" });
+    useHistoryStore.setState({ entries: [unflushed, settled] });
+    usePairingsStore.setState({
+      pairings: [{ user_id: "u", device_id: "d", label: "mac", server_url: "https://s", relay_host: "s", status: "Online", pending: 0, is_active: true }],
+      active: "u",
+    });
+  });
+
+  /*
+    Driven through `settle`, which is what `entry-settled` calls: the flush is
+    the moment the tint has to retreat, and it must retreat without the list
+    moving. Nothing reorders at a flush — the relay stamps a pending act exactly
+    where the device already showed it — so a reordering here would be the list
+    contradicting itself for no reason a reader could see.
+  */
+  it("drops the tint when the act settles, leaving the order alone", () => {
+    render(<HistoryList />);
+    expect(screen.getAllByTestId("entry-row")[0]).toHaveAttribute("data-pending", "true");
+    const before = screen.getAllByTestId("entry-row").map((r) => r.textContent);
+
+    act(() => useHistoryStore.getState().settle(3));
+
+    expect(screen.getAllByTestId("entry-row")[0]).toHaveAttribute("data-pending", "false");
+    expect(screen.getAllByTestId("entry-row").map((r) => r.textContent)).toEqual(before);
+  });
+
+  /*
+    `EntrySettled` carries no timestamp, deliberately — a stamp per acked act is
+    the refetch that event exists to avoid — so the row is settled and still has
+    no age of its own. Silence is the honest reading until a snapshot brings the
+    relay's stamp; `relativeAge(0)` would print 655mo on the newest row here.
+  */
+  it("leaves the slot empty until the relay's stamp arrives", () => {
+    render(<HistoryList />);
+    act(() => useHistoryStore.getState().settle(3));
+    expect(screen.getAllByTestId("entry-row")[0]!.textContent).toBe("01offline copy");
+  });
+
+  // The row carries plaintext from capture, so the predicate has something to
+  // match long before the relay knows the entry exists.
+  it("finds an un-flushed capture by its text", () => {
+    useUiStore.setState({ filter: "offline", selectedIndex: 0, mainSection: "history" });
+    render(<HistoryList />);
+    const rows = screen.getAllByTestId("entry-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("offline copy");
+  });
+
+  /*
+    The sentinel is a statement about *retention*: the hundred rows the relay has
+    ordered. The caps no longer bound the un-flushed region at all (ADR 0014), so
+    counting every row would name a cap that has not bitten — which is exactly what
+    the sentinel exists so a person with nine entries never sees.
+  */
+  it("names the cache cap over the settled rows alone", () => {
+    const settledRows = Array.from({ length: 100 }, (_, i) => ({
+      ...settled,
+      id: 1_000 + i,
+      preview: `kept ${i}`,
+      plaintext: `kept ${i}`,
+    }));
+    useUiStore.setState({ filter: "", selectedIndex: 0, mainSection: "history" });
+
+    // A page of un-flushed captures says nothing, however full it is.
+    useHistoryStore.setState({
+      entries: settledRows.map((e) => ({ ...e, created_at: 0, last_use: 0, pending: true })),
+    });
+    const view = render(<HistoryList />);
+    expect(screen.queryByText(/OLDEST OF/)).toBeNull();
+    view.unmount();
+
+    // The same hundred, settled, is the cap actually biting.
+    useHistoryStore.setState({ entries: settledRows });
+    render(<HistoryList />);
+    expect(screen.getByText(/OLDEST OF 100 CACHED/)).toBeInTheDocument();
   });
 });

@@ -88,7 +88,15 @@ export default function HistoryList() {
           ref={i === selectedIndex ? selectedRef : undefined}
         />
       ))}
-      {!filter.trim() && entries.length >= CACHE_CAP && (
+      {/*
+        Counted over the settled rows alone. The sentinel is a statement about
+        *retention* — the hundred rows the relay has ordered — and the caps no
+        longer bound the un-flushed region at all: an act this device has not
+        delivered is undelivered clipboard content, and evicting one to protect a
+        display invariant is the trade ADR 0014 refuses. Counting every row would
+        fire this at a page of offline captures, about a cap that has not bitten.
+      */}
+      {!filter.trim() && entries.filter((e) => !e.pending).length >= CACHE_CAP && (
         <li className="px-3 py-2 text-center text-chrome tracking-phrase text-text-dim">
           — OLDEST OF {CACHE_CAP} CACHED —
         </li>

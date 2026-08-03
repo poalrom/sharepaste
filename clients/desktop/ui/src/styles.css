@@ -181,6 +181,28 @@ body[data-route="main"] {
     transition: background-color var(--dur-fast) ease-out;
   }
 
+  /*
+   * A row whose latest act has not reached the relay (ADR 0014), in the same
+   * amber at the same 8% as `[data-tone="caution"]` below and as the `N PENDING`
+   * in both footers, so one tint means one thing across the shell. No content is
+   * recoloured with it: the Preview stays readable, which is the rule ADR 0002
+   * cut the per-row `CACHED` marker for.
+   *
+   * Above the selected rule and at equal specificity, so selection wins where
+   * the two collide. That costs a selected pending row its tint, and is accepted:
+   * the footer count still states the queue, and losing the selection instead
+   * would leave the popover's keyboard cursor nowhere.
+   *
+   * Measured on the composited tint the way the ramps above are, against
+   * --surface-panel: --amber-400 9.7:1 (10.9:1 bare), --text-body 10.8:1
+   * (12.1:1), --alert-400 on a refused row 6.3:1 (7.0:1), --text-dim on the
+   * index 4.8:1 (5.4:1). The lowest still clears 4.5:1, so the tint the ticket
+   * fixed needed nothing changed.
+   */
+  .fui-row[data-pending="true"] {
+    background: rgba(245, 182, 66, 0.08);
+  }
+
   .fui-row[data-selected="true"] {
     background: var(--surface-active);
     box-shadow: inset 2px 0 0 0 var(--cyan-500);

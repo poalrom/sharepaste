@@ -66,18 +66,89 @@ export async function deleteEntry(entry: EntryView): Promise<void> {
   }
 }
 
+/**
+ * Resending a refused pending, as `↻` means it.
+ *
+ * A fresh act and not a retry (ADR 0015): the core requeues it to the back, so
+ * nothing is patched here. `entry-refused` set what this row says about itself
+ * and `entry-settled` or a second `entry-refused` is what changes it, which is
+ * one source of truth rather than an optimistic local guess beside it.
+ */
+async function resendEntry(entry: EntryView): Promise<void> {
+  try {
+    await cmd.resendEntry({ user_id: entry.user_id, entry_id: entry.id });
+  } catch (e) {
+    console.error("resend failed", e);
+  }
+}
+
+/**
+ * What a row's time slot says, which is always the relay's last word about the
+ * entry.
+ *
+ * The tint behind a row says the relay has not heard the latest act; this says
+ * what the relay did say, and there is no local clock to stand in when it has
+ * said nothing (ADR 0013). An entry the relay has never stamped carries
+ * `last_use === 0`, and an age rendered from that reads as 1970 rather than as
+ * new, so its slot is empty — nothing is lost beside it, because such an entry
+ * was captured here and so never printed an Origin either.
+ *
+ * `last_use` and not `pending` is what that turns on, because the two part
+ * company at a flush: `EntrySettled` carries no stamp — it exists so a flush
+ * costs no refetch per acked act — so a row that settles in place is a settled
+ * row with no age to show until the next snapshot brings one. An entry with a
+ * queued *use* keeps the stale age, because that age is still the last thing the
+ * relay stamped.
+ *
+ * Refused wins over Undecryptable on a row that is both: it is the one of the
+ * two that can be acted on.
+ *
+ * Exported because the popover's row and the main window's own `<li>` both make
+ * this decision, and two copies of it are how they would start disagreeing.
+ */
+export type TimeSlot =
+  /** A refusal, or a key this device does not hold: the slot's only alert-red. */
+  | { tone: "alert"; text: string }
+  /** The age the relay stamped, which the Origin joins when it is elsewhere. */
+  | { tone: "relay"; age: string }
+  /** The relay has never stamped this entry, so it has nothing to say. */
+  | { tone: "silent" };
+
+export function timeSlot(entry: EntryView, now: number): TimeSlot {
+  if (entry.refused_reason !== null) return { tone: "alert", text: entry.refused_reason };
+  if (entry.undecryptable) return { tone: "alert", text: "KEY MISMATCH" };
+  if (entry.last_use === 0) return { tone: "silent" };
+  return { tone: "relay", age: relativeAge(entry.last_use, now) };
+}
+
+/**
+ * The slot's alert-red treatment, shared by both lists for the same reason
+ * [`timeSlot`] is.
+ *
+ * Bounded and truncated, because a refusal reason is the relay's prose rather
+ * than one of this shell's own words. 40% of the row leaves every refusal ADR
+ * 0015 admits — a 400 or a 413 — uncut at 360px of popover, and holds a verbose
+ * one off the Preview, which is what says *which* entry was turned down. The
+ * tooltip is the untruncated counterpart, as it is for the Origin beside it.
+ */
+export const ALERT_SLOT =
+  "max-w-[40%] shrink-0 truncate text-chrome uppercase tracking-phrase text-alert-400";
+
 const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
   { entry, index, selected, ownDeviceId, now, onPoint },
   ref,
 ) {
   const { undecryptable } = entry;
+  const refused = entry.refused_reason !== null;
   const elsewhere = entry.device_id !== ownDeviceId;
+  const slot = timeSlot(entry, now);
 
   return (
     <li
       ref={ref}
       data-testid="entry-row"
       data-selected={selected}
+      data-pending={entry.pending}
       className="fui-row flex cursor-default items-center gap-2 px-3"
       // Movement, not enter: keyboard nav scrolls rows under a resting pointer,
       // and mouseenter would fire on that and snatch the selection back.
@@ -104,9 +175,12 @@ const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
         </span>
       )}
 
-      {undecryptable ? (
-        <span className="shrink-0 text-chrome tracking-phrase text-alert-400">KEY MISMATCH</span>
-      ) : (
+      {slot.tone === "alert" && (
+        <span className={ALERT_SLOT} title={slot.text}>
+          {slot.text}
+        </span>
+      )}
+      {slot.tone === "relay" && (
         <span className="shrink-0 text-chrome tracking-phrase text-text-muted">
           {elsewhere && (
             <>
@@ -122,7 +196,7 @@ const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
               {" · "}
             </>
           )}
-          {relativeAge(entry.last_use, now)}
+          {slot.age}
         </span>
       )}
 
@@ -145,6 +219,22 @@ const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
               }}
             >
               ⧉
+            </IconButton>
+          )}
+          {/* Only a refused act is owed a resend: a pending one is already on
+              its way, and a settled one has nothing left to send. */}
+          {refused && (
+            <IconButton
+              label="Resend entry"
+              title="Resend to the relay"
+              testId={`resend-entry-${entry.id}`}
+              className="text-data"
+              onClick={(e) => {
+                e.stopPropagation();
+                void resendEntry(entry);
+              }}
+            >
+              ↻
             </IconButton>
           )}
           <IconButton
