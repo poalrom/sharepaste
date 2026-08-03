@@ -4,6 +4,8 @@ import { events } from "../ipc/events";
 import { agePhrase } from "../lib/format";
 import { useNow } from "../lib/useNow";
 import {
+  hydrateFrom,
+  noteChange,
   usePairingsStore,
   useHistoryStore,
   useStatusStore,
@@ -91,6 +93,18 @@ export default function Popover() {
     let unsub: Array<() => void> = [];
     let cancelled = false;
     (async () => {
+      // The entry subscriptions come first, before anything is awaited. An
+      // Entry cached between a `list_history` and this line is announced to
+      // nobody and absent from that snapshot, and nothing later provokes a
+      // refetch — see `noteChange`, which is the other half of the same fix.
+      unsub.push(await events.onEntryAdded(({ user_id, entry }) => {
+        noteChange({ kind: "added", user_id, entry });
+        if (user_id === usePairingsStore.getState().active) addEntry(entry);
+      }));
+      unsub.push(await events.onEntryDeleted(({ user_id, entry_id }) => {
+        noteChange({ kind: "deleted", user_id, entry_id });
+        if (user_id === usePairingsStore.getState().active) removeEntry(entry_id);
+      }));
       const accs = await cmd.listPairings();
       if (cancelled) return;
       hydratePairings(accs);
@@ -101,8 +115,11 @@ export default function Popover() {
       for (const a of accs) setStatus(a.user_id, { state: a.status, pending: a.pending });
       const activeUserId = usePairingsStore.getState().active;
       if (activeUserId) {
-        const rows = await cmd.listHistory({ user_id: activeUserId, limit: 100 });
-        if (!cancelled) hydrateHistory(rows);
+        void hydrateFrom(
+          activeUserId,
+          () => cmd.listHistory({ user_id: activeUserId, limit: 100 }),
+          () => cancelled,
+        ).catch(() => {});
         // Contact is stamped by traffic the popover was not open for, so
         // without this the strip reads NEVER until the next event fires. A
         // backend older than this command answers undefined, not a rejection.
@@ -110,12 +127,6 @@ export default function Popover() {
           .then((c) => c && setLastContact(c.user_id, c.last_contact_at))
           .catch(() => {});
       }
-      unsub.push(await events.onEntryAdded(({ user_id, entry }) => {
-        if (user_id === usePairingsStore.getState().active) addEntry(entry);
-      }));
-      unsub.push(await events.onEntryDeleted(({ user_id, entry_id }) => {
-        if (user_id === usePairingsStore.getState().active) removeEntry(entry_id);
-      }));
       unsub.push(await events.onConnectionState(({ user_id, state, last_error }) => {
         setStatus(user_id, last_error !== undefined ? { state, last_error } : { state });
       }));
@@ -132,7 +143,8 @@ export default function Popover() {
         const next = user_id ?? undefined;
         usePairingsStore.getState().setActive(next);
         if (next) {
-          cmd.listHistory({ user_id: next, limit: 100 }).then(hydrateHistory).catch(() => {});
+          void hydrateFrom(next, () => cmd.listHistory({ user_id: next, limit: 100 }))
+            .catch(() => {});
           cmd.getContact({ user_id: next })
             .then((c) => c && setLastContact(c.user_id, c.last_contact_at))
             .catch(() => {});
@@ -142,7 +154,8 @@ export default function Popover() {
       }));
       unsub.push(await events.onHistoryChanged(({ user_id }) => {
         if (user_id !== usePairingsStore.getState().active) return;
-        cmd.listHistory({ user_id, limit: 100 }).then(hydrateHistory).catch(() => {});
+        void hydrateFrom(user_id, () => cmd.listHistory({ user_id, limit: 100 }))
+          .catch(() => {});
       }));
       unsub.push(await events.onContact(({ user_id, last_contact_at }) => {
         setLastContact(user_id, last_contact_at);

@@ -3,6 +3,8 @@ import { cmd } from "../ipc/commands";
 import { events } from "../ipc/events";
 import { useNow } from "../lib/useNow";
 import {
+  hydrateFrom,
+  noteChange,
   useContactStore,
   useHistoryStore,
   usePairingsStore,
@@ -107,6 +109,17 @@ export default function Main() {
     const unsub: Array<() => void> = [];
     let cancelled = false;
     (async () => {
+      // The entry subscriptions come first, before anything is awaited: the
+      // reason is `noteChange`'s, and `HistorySection` takes the snapshot they
+      // have to survive.
+      unsub.push(await events.onEntryAdded(({ user_id, entry }) => {
+        noteChange({ kind: "added", user_id, entry });
+        if (user_id === viewedUserId()) addEntry(entry);
+      }));
+      unsub.push(await events.onEntryDeleted(({ user_id, entry_id }) => {
+        noteChange({ kind: "deleted", user_id, entry_id });
+        if (user_id === viewedUserId()) removeEntry(entry_id);
+      }));
       const rows = await cmd.listPairings();
       if (cancelled) return;
       hydratePairings(rows);
@@ -118,15 +131,10 @@ export default function Main() {
           .then((c) => c && setLastContact(c.user_id, c.last_contact_at))
           .catch(() => {});
       }
-      unsub.push(await events.onEntryAdded(({ user_id, entry }) => {
-        if (user_id === viewedUserId()) addEntry(entry);
-      }));
-      unsub.push(await events.onEntryDeleted(({ user_id, entry_id }) => {
-        if (user_id === viewedUserId()) removeEntry(entry_id);
-      }));
       unsub.push(await events.onHistoryChanged(({ user_id }) => {
         if (user_id !== viewedUserId()) return;
-        cmd.listHistory({ user_id, limit: 100 }).then(hydrateHistory).catch(() => {});
+        void hydrateFrom(user_id, () => cmd.listHistory({ user_id, limit: 100 }))
+          .catch(() => {});
       }));
       unsub.push(await events.onConnectionState(({ user_id, state, last_error }) => {
         setStatus(user_id, last_error !== undefined ? { state, last_error } : { state });

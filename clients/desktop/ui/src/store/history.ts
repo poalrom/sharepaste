@@ -20,6 +20,77 @@ export const useHistoryStore = create<HistoryState>((set) => ({
 }));
 
 /**
+ * One incremental change to the History, kept only long enough to survive a
+ * snapshot that was already on the wire when it happened.
+ */
+type Change =
+  | { kind: "added"; user_id: string; entry: EntryView }
+  | { kind: "deleted"; user_id: string; entry_id: number };
+
+/** The replay log of every snapshot currently in flight. */
+const inFlight = new Set<Change[]>();
+
+/**
+ * Note an incremental change, so no snapshot can silently roll it back.
+ *
+ * **The defect this exists for**, reproduced twice on a Windows smoke run and
+ * recorded as anomaly A of `.scratch/mobile-client/issues/06`: an offline burst
+ * flushed, the relay gained every row, and one of them was on screen
+ * afterwards. Each surface subscribed to `entry-added` only *after* its first
+ * `list_history` had answered, so an Entry the uploader cached in between was
+ * announced to a listener that did not exist and absent from the snapshot. It
+ * stayed lost, because nothing later provokes a refetch: the relay's echo of an
+ * Entry this device uploaded deliberately raises neither event, and a backfill
+ * that ingests only rows the cache already holds does not advance the watermark
+ * and so raises none either.
+ *
+ * Subscribing before the first snapshot is half the fix and not the whole of
+ * it — a snapshot requested before a change and applied after it would undo it.
+ * Every subscription that mutates this store calls this as well, and
+ * [`hydrateFrom`] replays what it recorded.
+ */
+export function noteChange(change: Change): void {
+  for (const log of inFlight) log.push(change);
+}
+
+/**
+ * Replace the list with a fresh snapshot of one Pairing's History, then re-apply
+ * whatever [`noteChange`] recorded while it was on the wire.
+ *
+ * Returns the rows applied, or `undefined` when `stale` says the answer is for
+ * a Pairing no longer on screen — `HistoryList` keys nothing per user, so a slow
+ * response for the pairing just left must not land on top of the one now shown.
+ *
+ * Replayed changes are filtered by `userId`: the same stream carries every
+ * Pairing, and only this one's belongs in this snapshot.
+ */
+export async function hydrateFrom(
+  userId: string,
+  fetch: () => Promise<EntryView[]>,
+  stale?: () => boolean,
+): Promise<EntryView[] | undefined> {
+  const log: Change[] = [];
+  inFlight.add(log);
+  let rows: EntryView[];
+  try {
+    rows = await fetch();
+  } finally {
+    // Before the replay below, or an `add` would record onto the very log it is
+    // being read from.
+    inFlight.delete(log);
+  }
+  if (stale?.()) return undefined;
+  const store = useHistoryStore.getState();
+  store.hydrate(rows);
+  for (const change of log) {
+    if (change.user_id !== userId) continue;
+    if (change.kind === "added") store.add(change.entry);
+    else store.remove(change.entry_id);
+  }
+  return rows;
+}
+
+/**
  * The rows the popover is actually showing.
  *
  * Both the list and the Filter field's count suffix have to agree on this, and

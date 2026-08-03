@@ -151,6 +151,61 @@ describe("Popover event subscriptions", () => {
   });
 
   /*
+   * Anomaly A of `.scratch/mobile-client/issues/06`, reproduced twice on a
+   * Windows smoke run: an offline burst of three flushes, the relay gains three
+   * rows, and one of them is on screen afterwards.
+   *
+   * The window is between this component's first `list_history` and its
+   * `entry-added` subscription. The uploader caches and announces each flushed
+   * Entry the moment the relay takes it, and nothing later provokes a refetch:
+   * the relay's echo of an Entry this device uploaded deliberately raises
+   * neither `entry-added` nor `history-changed`, and a backfill that ingests
+   * only rows the cache already holds does not advance the watermark and so
+   * raises nothing either. An Entry announced inside that window reached
+   * `entries_cache` and never the screen.
+   *
+   * Which entries survived was whichever ones the snapshot happened to catch,
+   * which is why the report says it was "not always the same end of the queue".
+   */
+  it("keeps an entry announced while the first history snapshot is in flight", async () => {
+    let release: (rows: EntryView[]) => void = () => {};
+    const held = new Promise<EntryView[]>((resolve) => {
+      release = resolve;
+    });
+    ipc = mockIpc({
+      invoke: (command, args) => {
+        if (command === "list_pairings") return accounts;
+        if (command === "list_history") return held;
+        if (command === "get_contact") {
+          const { user_id } = (args?.args ?? {}) as { user_id: string };
+          return { user_id, last_contact_at: null };
+        }
+        return undefined;
+      },
+    });
+    render(<Popover />);
+
+    // Subscribed before the snapshot answers, or the announcement below reaches
+    // nobody at all.
+    await waitFor(() => expect(ipc.handlers.get("entry-added")).toHaveLength(1));
+    const flushed: EntryView = {
+      id: 3, user_id: "u-active", preview: "offline-burst-three",
+      plaintext: "offline-burst-three", created_at: 3, last_use: 3,
+      device_id: "d-active", origin_label: "d-ac", undecryptable: false,
+    };
+    act(() => ipc.emit("entry-added", { user_id: "u-active", entry: flushed }));
+
+    // And the snapshot, taken before that Entry existed, must not roll it back.
+    await act(async () => {
+      release([]);
+      await held;
+    });
+    expect(useHistoryStore.getState().entries.map((e) => e.preview)).toEqual([
+      "offline-burst-three",
+    ]);
+  });
+
+  /*
    * The banner this replaces named an entry id that appeared nowhere in the UI.
    * The row is the surface now (plan §0.12), and there is no longer an event
    * either: `CoreEvent::DecryptionError` was deleted because `EntryAdded`

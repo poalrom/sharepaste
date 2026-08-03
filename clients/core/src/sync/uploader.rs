@@ -335,6 +335,34 @@ mod tests {
         }
     }
 
+    /// A relay that keeps what it was given, so a test can replay the fan-out
+    /// the real one performs.
+    ///
+    /// [`OkTransport`] discards the ciphertext, which is enough for the queue's
+    /// own behaviour and not enough to drive an echo: the echo carries the same
+    /// bytes back under the same id, and a test that re-encrypted them would be
+    /// proving something about a nonce.
+    #[derive(Default)]
+    struct EchoingRelay {
+        /// `(id, ciphertext_b64)` in the order the relay took them.
+        accepted: Mutex<Vec<(i64, String)>>,
+    }
+
+    #[async_trait]
+    impl UploadTransport for EchoingRelay {
+        async fn upload(&self, ct: &str) -> Result<Uploaded, AppError> {
+            let mut accepted = self.accepted.lock().await;
+            let id = 101 + accepted.len() as i64;
+            accepted.push((id, ct.to_string()));
+            let at = crate::now_ms();
+            Ok(Uploaded { id, created_at: at, seq: id, last_use: at })
+        }
+
+        async fn use_entry(&self, _entry_id: i64) -> Result<Used, AppError> {
+            Ok(Used { seq: 900, last_use: crate::now_ms() })
+        }
+    }
+
     struct AuthFail;
     #[async_trait]
     impl UploadTransport for AuthFail {
@@ -557,6 +585,74 @@ mod tests {
             sink.entries().len(),
             1,
             "one Entry uploaded is one EntryAdded"
+        );
+    }
+
+    /*
+     * Anomaly A of `.scratch/mobile-client/issues/06`, reproduced twice on a
+     * Windows smoke run: an offline burst of three flushes, `pending_uploads`
+     * goes 3 -> 0, the relay gains three rows, and local history holds one.
+     *
+     * Driven through the uploader rather than by hand, because the claim is
+     * about the ack-then-cache path and nothing else: three captures in, three
+     * rows out, and the relay's echo of all three adding no fourth.
+     */
+    #[tokio::test]
+    async fn an_offline_burst_of_three_leaves_three_rows_and_the_echo_adds_none() {
+        let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
+        paired(&conn).await;
+        let texts = ["offline-burst-one", "offline-burst-two", "offline-burst-three"];
+        for t in texts {
+            queue_capture(&conn, t).await;
+        }
+
+        let transport = Arc::new(EchoingRelay::default());
+        let (up, sink) = uploader(conn.clone(), transport.clone());
+        up.flush_once().await.unwrap();
+
+        let accepted = transport.accepted.lock().await.clone();
+        assert_eq!(accepted.len(), 3, "the relay took all three");
+        {
+            let c = conn.lock().await;
+            assert_eq!(pending::count(&c, "u").unwrap(), 0, "the queue drained");
+            let cached = crate::storage::entries_cache::list_recent(&c, "u", None, 10).unwrap();
+            let held: Vec<&str> = cached.iter().filter_map(|e| e.plaintext.as_deref()).collect();
+            assert_eq!(cached.len(), 3, "every flushed capture is in local history: {held:?}");
+            for t in texts {
+                assert!(held.contains(&t), "{t} is missing from local history: {held:?}");
+            }
+        }
+        assert_eq!(sink.entries().len(), 3, "three captures are three EntryAddeds");
+
+        // The relay's fan-out of the same three, ingested exactly as
+        // `run_sse_loop` ingests one.
+        let key = crate::testing::test_user_key();
+        let c = conn.lock().await;
+        for (id, b64) in &accepted {
+            let out = crate::sync::decryptor::ingest(
+                &c,
+                &key,
+                "u",
+                &EntryRow {
+                    id: *id,
+                    ciphertext: b64.clone(),
+                    created_at: crate::now_ms(),
+                    device_id: "this-phone".into(),
+                    seq: *id,
+                    last_use: crate::now_ms(),
+                },
+                crate::now_ms(),
+            )
+            .unwrap();
+            assert!(
+                !out.stored.first_insert,
+                "the echo of entry {id} was treated as new, so the shell gets a duplicate row"
+            );
+        }
+        assert_eq!(
+            crate::storage::entries_cache::list_recent(&c, "u", None, 10).unwrap().len(),
+            3,
+            "the echo added a fourth row"
         );
     }
 

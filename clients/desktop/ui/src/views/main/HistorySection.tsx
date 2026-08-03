@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { cmd } from "../../ipc/commands";
 import { agePhrase, relativeAge } from "../../lib/format";
 import {
+  hydrateFrom,
   useContactStore,
   useFilteredEntries,
   useHistoryStore,
@@ -87,9 +88,12 @@ export default function HistorySection({ now }: { now: number }) {
     let cancelled = false;
     void (async () => {
       try {
-        const rows = await cmd.listHistory({ user_id: viewed, limit: CACHE_CAP });
-        if (cancelled) return;
-        hydrate(rows);
+        const rows = await hydrateFrom(
+          viewed,
+          () => cmd.listHistory({ user_id: viewed, limit: CACHE_CAP }),
+          () => cancelled,
+        );
+        if (rows === undefined) return;
         // The popover's handoff, consumed once: it named an entry, not a
         // position, and only the hydrated list can turn one into the other.
         const { seedEntryId, setSeedEntryId } = useUiStore.getState();

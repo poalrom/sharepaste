@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useHistoryStore } from "../store/history";
+import { hydrateFrom, noteChange, useHistoryStore } from "../store/history";
+import type { EntryView } from "../types";
 import { usePairingsStore } from "../store/pairings";
 import { useUiStore } from "../store/ui";
 
@@ -21,6 +22,50 @@ describe("history store", () => {
     add({ id: 1, user_id: "u", preview: "a", plaintext: "a", created_at: 1, last_use: 1, device_id: "d", origin_label: "d", undecryptable: false });
     remove(1);
     expect(useHistoryStore.getState().entries.length).toBe(0);
+  });
+
+  const row = (id: number, user_id = "u"): EntryView => ({
+    id, user_id, preview: `p${id}`, plaintext: `p${id}`, created_at: id,
+    last_use: id, device_id: "d", origin_label: "d", undecryptable: false,
+  });
+
+  /*
+   * Anomaly A of `.scratch/mobile-client/issues/06`: an offline burst flushed,
+   * the relay took every row, and one of them was on screen afterwards. Each
+   * surface subscribed to `entry-added` after its first `list_history` had
+   * answered, so an Entry cached in between was announced to nobody — and a
+   * snapshot older than the announcement must not undo it either.
+   */
+  it("hydrateFrom replays a change noted while the snapshot was in flight", async () => {
+    let release: (rows: EntryView[]) => void = () => {};
+    const held = new Promise<EntryView[]>((resolve) => {
+      release = resolve;
+    });
+    const done = hydrateFrom("u", () => held);
+    noteChange({ kind: "added", user_id: "u", entry: row(3) });
+    release([row(1), row(2)]);
+    await done;
+    expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([3, 1, 2]);
+  });
+
+  it("hydrateFrom replays only the Pairing the snapshot was for", async () => {
+    const done = hydrateFrom("u", async () => [row(1)]);
+    noteChange({ kind: "added", user_id: "other", entry: row(9, "other") });
+    await done;
+    expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([1]);
+  });
+
+  it("hydrateFrom drops a snapshot for a Pairing no longer on screen", async () => {
+    useHistoryStore.getState().hydrate([row(5)]);
+    const applied = await hydrateFrom("u", async () => [row(1)], () => true);
+    expect(applied).toBeUndefined();
+    expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([5]);
+  });
+
+  it("a change noted with no snapshot in flight is not replayed later", async () => {
+    noteChange({ kind: "added", user_id: "u", entry: row(7) });
+    await hydrateFrom("u", async () => [row(1)]);
+    expect(useHistoryStore.getState().entries.map((e) => e.id)).toEqual([1]);
   });
 });
 
