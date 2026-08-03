@@ -7,6 +7,21 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.6.1
+
+**Only the phone changes.** A patch over 0.6.0's Filter, which shipped as a boxed field
+sitting on a bar rather than as the bar itself. Nothing on the desktop moves and the relay
+is not involved, so if 0.6.0 is working for you this is a phone update and nothing else.
+
+- **The field is the whole bar now**, edge to edge, and draws no frame around itself — not
+  even while you are typing in it. The cursor was always the part that said where you were.
+- **The `✕` sits over the Recall buttons**, in the column they make down the right-hand
+  side, instead of a gutter's width inside it.
+- **Back finishes the job.** Clearing a filter with the back gesture used to leave the
+  cursor in the field: a bar reading `FILTER HISTORY` that was still quietly being typed
+  into, and one more press before the app would close. The `✕` still leaves you in the
+  field, because a thumb already there is usually about to type something else.
+
 ## 0.6.0
 
 **Both clients, and your relay with them.** Your history is now ordered by when you last
