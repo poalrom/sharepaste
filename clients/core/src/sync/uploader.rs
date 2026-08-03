@@ -292,8 +292,13 @@ impl Uploader {
     /// the watermark past them skips them for good, because the next `since=`
     /// fetch starts after it. This device wrote; it did not fetch.
     ///
-    /// A failure is logged and swallowed. The act is on the relay, which is the
-    /// part that matters, and the relay's echo carries the same id back.
+    /// A failure here is logged and swallowed: the act is on the relay, which is
+    /// the part that matters. It is **not** repaired by the next backfill, and the
+    /// log says so rather than promising otherwise — the relay-delivered path is
+    /// keyed on `relay_id`, so it matches nothing and inserts a second row for the
+    /// same text, leaving the first stranded un-named at the bottom of the list.
+    /// Reachable only on a database write failure, which is why the answer is a
+    /// warning naming both ids rather than a repair path nothing else needs.
     fn settle(&self, conn: &Connection, local_entry_id: Option<i64>, uploaded: Uploaded) {
         let Some(local_entry_id) = local_entry_id else {
             tracing::warn!(
@@ -319,7 +324,7 @@ impl Uploader {
             Ok(_) => {}
             Err(e) => tracing::warn!(
                 err = %e, local_entry_id, relay_id = uploaded.id,
-                "could not attach the relay's id; the next backfill will"
+                "could not attach the relay's id; its echo will arrive as a second row"
             ),
         }
     }

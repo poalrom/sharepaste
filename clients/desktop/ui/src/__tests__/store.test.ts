@@ -30,6 +30,36 @@ describe("history store", () => {
   });
 
   /*
+   * The store's own cap is a cache of a cache, and it spares un-flushed rows for
+   * the reason `entries_cache::prune` does: an act this device has not delivered
+   * is undelivered clipboard content, and dropping one to keep a number down is
+   * the trade ADR 0014 refuses. Counting every row would silently truncate the
+   * display of an offline burst past a hundred — and the list-end sentinel is
+   * counted the same way, so nothing would even say so.
+   */
+  it("the cap counts the settled rows and spares the un-flushed ones", () => {
+    const { add } = useHistoryStore.getState();
+    for (let i = 1; i <= 100; i += 1) add(row(i));
+    expect(useHistoryStore.getState().entries).toHaveLength(100);
+
+    // One more the relay has ordered: the oldest of the hundred goes.
+    add(row(101));
+    const settled = useHistoryStore.getState().entries;
+    expect(settled).toHaveLength(100);
+    expect(settled.map((e) => e.id)).not.toContain(1);
+
+    // And fifty offline captures on top of a full cache are fifty more rows.
+    for (let i = 200; i < 250; i += 1) {
+      add({ ...row(i), created_at: 0, last_use: 0, pending: true });
+    }
+    const both = useHistoryStore.getState().entries;
+    expect(both).toHaveLength(150);
+    expect(both.filter((e) => e.pending)).toHaveLength(50);
+    expect(both.filter((e) => !e.pending)).toHaveLength(100);
+    expect(both[0]?.id, "the newest act still leads").toBe(249);
+  });
+
+  /*
    * Anomaly A of `.scratch/mobile-client/issues/06`: an offline burst flushed,
    * the relay took every row, and one of them was on screen afterwards. Each
    * surface subscribed to `entry-added` after its first `list_history` had

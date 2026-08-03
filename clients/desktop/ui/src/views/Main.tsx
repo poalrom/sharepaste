@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { cmd } from "../ipc/commands";
+import { cmd, HISTORY_PAGE } from "../ipc/commands";
 import { events } from "../ipc/events";
 import { useNow } from "../lib/useNow";
 import {
@@ -145,7 +145,7 @@ export default function Main() {
       }
       unsub.push(await events.onHistoryChanged(({ user_id }) => {
         if (user_id !== viewedUserId()) return;
-        void hydrateFrom(user_id, () => cmd.listHistory({ user_id, limit: 100 }))
+        void hydrateFrom(user_id, () => cmd.listHistory({ user_id, limit: HISTORY_PAGE }))
           .catch(() => {});
       }));
       unsub.push(await events.onConnectionState(({ user_id, state, last_error }) => {

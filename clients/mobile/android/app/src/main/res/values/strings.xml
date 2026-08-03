@@ -237,7 +237,7 @@
     <string name="recall_failed">Sharepaste could not recall that.</string>
     <string name="delete_failed">Sharepaste could not delete that Entry. It is still on the
         Relay, so it will come back — try again once you have a connection.</string>
-    <!-- Requeueing is local work, so a failure here is not a connection. -->
+    <!-- Putting an act back in the queue is local work, so a failure here is not a connection. -->
     <string name="resend_failed">Sharepaste could not put that Entry back in the queue. It is
         still refused and still on this phone; nothing was lost.</string>
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { cmd } from "../ipc/commands";
+import { cmd, HISTORY_PAGE } from "../ipc/commands";
 import { events } from "../ipc/events";
 import { agePhrase } from "../lib/format";
 import { useNow } from "../lib/useNow";
@@ -129,7 +129,7 @@ export default function Popover() {
       if (activeUserId) {
         void hydrateFrom(
           activeUserId,
-          () => cmd.listHistory({ user_id: activeUserId, limit: 100 }),
+          () => cmd.listHistory({ user_id: activeUserId, limit: HISTORY_PAGE }),
           () => cancelled,
         ).catch(() => {});
         // Contact is stamped by traffic the popover was not open for, so
@@ -155,7 +155,7 @@ export default function Popover() {
         const next = user_id ?? undefined;
         usePairingsStore.getState().setActive(next);
         if (next) {
-          void hydrateFrom(next, () => cmd.listHistory({ user_id: next, limit: 100 }))
+          void hydrateFrom(next, () => cmd.listHistory({ user_id: next, limit: HISTORY_PAGE }))
             .catch(() => {});
           cmd.getContact({ user_id: next })
             .then((c) => c && setLastContact(c.user_id, c.last_contact_at))
@@ -166,7 +166,7 @@ export default function Popover() {
       }));
       unsub.push(await events.onHistoryChanged(({ user_id }) => {
         if (user_id !== usePairingsStore.getState().active) return;
-        void hydrateFrom(user_id, () => cmd.listHistory({ user_id, limit: 100 }))
+        void hydrateFrom(user_id, () => cmd.listHistory({ user_id, limit: HISTORY_PAGE }))
           .catch(() => {});
       }));
       unsub.push(await events.onContact(({ user_id, last_contact_at }) => {

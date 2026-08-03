@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { HISTORY_PAGE } from "../ipc/commands";
 import { mockIpc, type MockIpc } from "./helpers";
 import { capturedAt } from "../lib/format";
 import { useContactStore, useHistoryStore, usePairingsStore, useUiStore } from "../store";
@@ -286,6 +287,42 @@ describe("HistorySection — the reader", () => {
     expect(screen.getByTestId("entry-detail-body")).toHaveTextContent("offered offline");
   });
 
+  /** A refused entry, and the un-flushed row it is defined against: the same, minus the refusal. */
+  const strandedRow = {
+    id: 9, user_id: "u-a", preview: "too large", plaintext: "too large",
+    created_at: 0, last_use: 0, device_id: "d-a", origin_label: "d-a",
+    undecryptable: false, pending: true, refused_reason: null as string | null,
+  };
+
+  /*
+    This pane's rows carry no control column, so it is where the window's way out
+    of a refusal has to be. A refused row that stated its reason and offered
+    nothing to do about it would be the honest half of a lie.
+  */
+  it("offers RESEND in the reader for a refused entry", async () => {
+    historyByUser["u-a"] = [{ ...strandedRow, refused_reason: "payload too large" }];
+    await renderPane();
+
+    fireEvent.click(screen.getByTestId("detail-resend-9"));
+    await waitFor(() =>
+      expect(ipc.invoke).toHaveBeenCalledWith("resend_entry", {
+        args: { user_id: "u-a", entry_id: 9 },
+      }),
+    );
+    // And copying it is still offered: its text is stranded on this device.
+    expect(screen.getByTestId("detail-copy")).not.toBeDisabled();
+  });
+
+  // A pending act is already on its way and a settled one has nothing left to
+  // send, so neither is owed a resend.
+  it("offers no RESEND for an act the relay has merely not reached yet", async () => {
+    historyByUser["u-a"] = [strandedRow];
+    await renderPane();
+
+    expect(screen.queryByTestId("detail-resend-9")).toBeNull();
+    expect(screen.getByTestId("detail-copy")).not.toBeDisabled();
+  });
+
   it("falls back to a prompt when the addressed position holds no entry", async () => {
     historyByUser["u-a"] = [];
     await renderPane();
@@ -306,7 +343,7 @@ describe("HistorySection — the Viewed Pairing", () => {
 
     await waitFor(() =>
       expect(ipc.invoke).toHaveBeenCalledWith("list_history", {
-        args: { user_id: "u-b", limit: CACHE_CAP },
+        args: { user_id: "u-b", limit: HISTORY_PAGE },
       }),
     );
     // The *list* is what re-read; the same text also lands in the reader beside it.

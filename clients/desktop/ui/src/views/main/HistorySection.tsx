@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { cmd } from "../../ipc/commands";
+import { cmd, HISTORY_PAGE } from "../../ipc/commands";
 import { agePhrase } from "../../lib/format";
 import {
   hydrateFrom,
@@ -90,7 +90,7 @@ export default function HistorySection({ now }: { now: number }) {
       try {
         const rows = await hydrateFrom(
           viewed,
-          () => cmd.listHistory({ user_id: viewed, limit: CACHE_CAP }),
+          () => cmd.listHistory({ user_id: viewed, limit: HISTORY_PAGE }),
           () => cancelled,
         );
         if (rows === undefined) return;

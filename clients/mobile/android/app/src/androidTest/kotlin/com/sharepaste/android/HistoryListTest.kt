@@ -994,8 +994,8 @@ class HistoryListTest {
      */
     @Test
     fun the_filter_finds_an_un_flushed_capture_by_its_text() {
-        val unsent = waiting(4, "wg genkey | tee privatekey")
-        show(filtering("genkey", listOf(unsent) + threeEntries))
+        val pending = waiting(4, "wg genkey | tee privatekey")
+        show(filtering("genkey", listOf(pending) + threeEntries))
 
         compose.onNodeWithTag(entryRowTag(4)).assertIsDisplayed()
         compose.onNodeWithTag(entryPreviewTag(4)).assertTextEquals("wg genkey | tee privatekey")

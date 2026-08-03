@@ -37,13 +37,14 @@
 //!    from a dead one — `sse::stamp_contact` stores into a live cell from
 //!    there. [`SessionCtx::set_conn_state`] is the one thing that ever moves
 //!    that cell into the database, which is what keeps a heartbeat off SQLite.
-//! 4. **The pending queue is a capped FIFO that says what it dropped.** The
-//!    uploader drains it head-first so entries reach the relay in the order they
-//!    were captured, and
-//!    [`storage::pending::enqueue`](crate::storage::pending::enqueue) evicts the
-//!    oldest at `MAX_PER_USER` rather than growing without bound — reporting the
-//!    eviction count in `dropped_oldest`, because a clipboard entry silently
-//!    discarded is the one loss nothing else would surface.
+//! 4. **The pending queue is an uncapped FIFO, and nothing leaves it unsent.**
+//!    The uploader drains it head-first so acts reach the relay in the order they
+//!    were made, and no depth evicts anything: an act this device has not
+//!    delivered is undelivered clipboard content, and the queue used to discard
+//!    the oldest of them silently to keep a number under a thousand (ADR 0014).
+//!    Two things take an act out of it — the relay taking it, and somebody
+//!    withdrawing it — and a **Refused** act stays in it, undeliverable, until it
+//!    is resent or deleted (ADR 0015).
 //!
 //! 1 to 3 are testable with no relay running because [`SessionTransport`] is a
 //! trait; 4 splits across [`Uploader`] and storage, and needs no network at all.

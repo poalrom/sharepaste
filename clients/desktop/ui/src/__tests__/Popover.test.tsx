@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { HISTORY_PAGE } from "../ipc/commands";
 import { mockIpc, type MockIpc } from "./helpers";
 import {
   usePairingsStore,
@@ -69,11 +70,11 @@ describe("Popover", () => {
 
     await waitFor(() => {
       expect(ipc.invoke).toHaveBeenCalledWith("list_history", {
-        args: { user_id: "u-active", limit: 100 },
+        args: { user_id: "u-active", limit: HISTORY_PAGE },
       });
     });
     expect(ipc.invoke).not.toHaveBeenCalledWith("list_history", {
-      args: { user_id: "u-oldest", limit: 100 },
+      args: { user_id: "u-oldest", limit: HISTORY_PAGE },
     });
   });
 

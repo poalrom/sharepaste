@@ -1471,7 +1471,7 @@ impl UseRecorder {
                 Ok(Some(relay_id)) => relay_id,
                 Ok(None) => {
                     drop(conn);
-                    self.requeue(user_id, entry_id).await;
+                    self.move_act_to_back(user_id, entry_id).await;
                     return;
                 }
                 Err(e) => {
@@ -1555,7 +1555,7 @@ impl UseRecorder {
     ///
     /// The queue depth does not change, so nothing reports one. What did change is
     /// where the row sits, and `HistoryChanged` is what says so.
-    async fn requeue(&self, user_id: &str, entry_id: i64) {
+    async fn move_act_to_back(&self, user_id: &str, entry_id: i64) {
         let moved = {
             let conn = self.state.conn.lock().await;
             match pending::rowid_for_entry(&conn, user_id, entry_id) {
@@ -1596,11 +1596,7 @@ fn to_entries(
     rows.into_iter()
         .map(|r| {
             let device_label = labels.get(&r.device_id).cloned();
-            let queued = match r.region.refused_reason {
-                Some(reason) => Queued::Refused(reason),
-                None if r.region.pending() => Queued::Pending,
-                None => Queued::Settled,
-            };
+            let queued = r.region.queued();
             Entry::new(
                 r.local_id,
                 r.user_id,

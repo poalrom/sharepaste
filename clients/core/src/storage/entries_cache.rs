@@ -1,4 +1,5 @@
 use crate::errors::AppError;
+use crate::event::Queued;
 use data_encoding::HEXLOWER;
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
@@ -59,6 +60,20 @@ impl Region {
     pub fn pending(&self) -> bool {
         self.rank < RANK_SETTLED
     }
+
+    /// What this row owes the relay, as everything above `storage/` says it.
+    ///
+    /// The three-rank encoding is decided by [`HISTORY`] and decoded here, in the
+    /// same file, so a fourth rank cannot be added to that query and silently
+    /// mis-read somewhere else. Its caller has no business knowing that rank 0 is
+    /// the refused one.
+    pub fn queued(self) -> Queued {
+        match self.refused_reason {
+            Some(reason) => Queued::Refused(reason),
+            None if self.pending() => Queued::Pending,
+            None => Queued::Settled,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -76,7 +91,10 @@ pub(crate) struct NewCachedEntry<'a> {
 pub(crate) const MAX_PER_USER: i64 = 100;
 pub(crate) const MAX_AGE_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
-/// The rank the caps apply to, named so the three queries that mention it agree.
+/// The first rank the caps apply to, and the boundary [`Region::pending`] tests.
+///
+/// The ranks themselves are written into [`HISTORY`], one per arm, because each
+/// arm also states the `ord` that rank is ordered by and the two belong together.
 pub(crate) const RANK_SETTLED: i64 = 2;
 
 /// The most rows one page may ask for.
@@ -275,11 +293,20 @@ pub(crate) fn local_id_for(
 
 /// Bring the rows the relay has ordered back inside both caps.
 ///
-/// **Un-flushed rows are exempt.** Both caps measure from `last_use`, and a row
-/// the relay has not stamped has none — it would age out on the write that
-/// stored it. More to the point, the caps exist to bound a *cache* of what the
-/// relay holds; an act still owed to the relay is undelivered content, and
-/// discarding it to protect a display invariant is the trade ADR 0014 refuses.
+/// **Every row with an act still owed is exempt**, which is rank 2 and rank 2
+/// alone competing for the hundred (ADR 0014). Two shapes qualify: a capture the
+/// relay has not named, and an entry it *has* named that carries a queued **Use**.
+/// The second is the one a `relay_id IS NULL` test would miss, and missing it is
+/// worse than it looks: a three-week-old entry re-copied offline is at the top of
+/// the list with the lowest `last_use` in the cache, so a full cache would evict
+/// exactly the row the person just reached for and strand its act in the queue
+/// with nothing to reconcile onto.
+///
+/// Both caps measure from `last_use`, and a row the relay has not stamped has none
+/// — it would age out on the write that stored it. More to the point, the caps
+/// exist to bound a *cache* of what the relay holds; an act still owed is
+/// undelivered content, and discarding it to protect a display invariant is the
+/// trade ADR 0014 refuses.
 ///
 /// `local_id` is the tiebreak rather than the relay's id, and has to be: it is
 /// the only number every row has. The migration copies an installed cache in
@@ -289,14 +316,25 @@ fn prune(conn: &Connection, user_id: &str, now_ms: i64) -> Result<(), AppError> 
     conn.execute(
         "DELETE FROM entries_cache
           WHERE user_id = ?1
-            AND relay_id IS NOT NULL
+            AND local_id IN (
+              SELECT e.local_id FROM entries_cache e
+               WHERE e.user_id = ?1
+                 AND e.relay_id IS NOT NULL
+                 AND NOT EXISTS (
+                       SELECT 1 FROM pending_uploads p
+                        WHERE p.user_id = e.user_id AND p.local_entry_id = e.local_id)
+            )
             AND (
               last_use < (?2 - ?3)
               OR local_id NOT IN (
-                SELECT local_id FROM entries_cache
-                WHERE user_id = ?1 AND relay_id IS NOT NULL
-                ORDER BY last_use DESC, local_id DESC
-                LIMIT ?4
+                SELECT e.local_id FROM entries_cache e
+                 WHERE e.user_id = ?1
+                   AND e.relay_id IS NOT NULL
+                   AND NOT EXISTS (
+                         SELECT 1 FROM pending_uploads p
+                          WHERE p.user_id = e.user_id AND p.local_entry_id = e.local_id)
+                 ORDER BY e.last_use DESC, e.local_id DESC
+                 LIMIT ?4
               )
             )",
         params![user_id, now_ms, MAX_AGE_MS, MAX_PER_USER],
@@ -652,6 +690,18 @@ mod tests {
         local_id
     }
 
+    /// The relay taking one act, in the order the uploader does it: the act leaves
+    /// the queue and only then is the relay's word attached.
+    ///
+    /// That order is load-bearing here as it is there — the prune inside
+    /// `attach_relay_id` exempts a row with an act still owed, so attaching first
+    /// would leave the row exempt for the write that is meant to bring the cache
+    /// back inside its cap.
+    fn flush(c: &Connection, user: &str, local_id: i64, relay_id: i64, at: i64) {
+        crate::storage::pending::delete_for_entry(c, user, local_id).unwrap();
+        attach_relay_id(c, user, local_id, relay_id, at, at, at).unwrap();
+    }
+
     fn local_ids(rows: &[CachedEntry]) -> Vec<i64> {
         rows.iter().map(|r| r.local_id).collect()
     }
@@ -688,9 +738,7 @@ mod tests {
         // The relay takes them in queue order and stamps each one as it arrives,
         // which is what a flush is.
         for (n, local_id) in [one, two, three].into_iter().enumerate() {
-            let at = now + n as i64;
-            attach_relay_id(&c, "u", local_id, 100 + n as i64, at, at, now).unwrap();
-            crate::storage::pending::delete_for_entry(&c, "u", local_id).unwrap();
+            flush(&c, "u", local_id, 100 + n as i64, now + n as i64);
         }
 
         let flushed = list_recent(&c, "u", None, 50).unwrap();
@@ -747,9 +795,7 @@ mod tests {
         assert_eq!(list_recent(&c, "u", None, MAX_PAGE).unwrap().len(), 150);
 
         for (n, local_id) in ids.iter().enumerate() {
-            let at = now + n as i64;
-            attach_relay_id(&c, "u", *local_id, 1_000 + n as i64, at, at, now).unwrap();
-            crate::storage::pending::delete_for_entry(&c, "u", *local_id).unwrap();
+            flush(&c, "u", *local_id, 1_000 + n as i64, now + n as i64);
         }
 
         let after = list_recent(&c, "u", None, MAX_PAGE).unwrap();
@@ -959,6 +1005,54 @@ mod tests {
         // The age cap is the same rule: nothing to measure, nothing to evict.
         ins(&c, "u", 9_999, None, now + MAX_AGE_MS * 2, now + MAX_AGE_MS * 2);
         assert_eq!(get_full(&c, "u", first).unwrap().as_deref(), Some(text));
+    }
+
+    /*
+     * The exemption a `relay_id IS NULL` test would miss, and the case that shows
+     * why it matters. An entry the relay *has* named but that carries a queued
+     * **Use** is rank 1, at the top of the list — and it holds the *lowest*
+     * `last_use` in the cache, because that is what being three weeks old means.
+     * Counting it against the hundred would evict exactly the row the person just
+     * reached for, and strand its act in the queue with nothing to reconcile onto.
+     */
+    #[test]
+    fn an_entry_with_a_queued_use_is_never_evicted_either() {
+        let c = open_in_memory().unwrap();
+        let now = 100_000_000_000_i64;
+        // Three weeks old, and the oldest thing in the cache.
+        let ancient = ins(&c, "u", 1, Some("wg genkey"), now - 21 * 86_400_000, now);
+        // Re-copied with no relay in reach, which queues a use against it.
+        crate::storage::pending::enqueue_use(&c, "u", ancient, 1, now).unwrap();
+
+        // A full cache of things the relay has ordered since, then one more.
+        for i in 2..=MAX_PER_USER + 1 {
+            ins(&c, "u", i, None, now - MAX_PER_USER + i, now);
+        }
+
+        let rows = list_recent(&c, "u", None, MAX_PAGE).unwrap();
+        assert_eq!(rows[0].local_id, ancient, "the re-copied entry leads the History");
+        assert_eq!(rows[0].region.rank, 1);
+        assert_eq!(
+            get_full(&c, "u", ancient).unwrap().as_deref(),
+            Some("wg genkey"),
+            "and survived every prune the hundred rows after it provoked"
+        );
+        assert_eq!(
+            rows.iter().filter(|r| r.region.rank == RANK_SETTLED).count() as i64,
+            MAX_PER_USER,
+            "while the settled region is still capped at exactly a hundred"
+        );
+
+        // Once the relay takes the use, the row is rank 2 like any other and takes
+        // its chances with the cap — which is the whole point of the exemption
+        // being about what is *owed* rather than about the row.
+        crate::storage::pending::delete_for_entry(&c, "u", ancient).unwrap();
+        set_last_use(&c, "u", 1, now).unwrap();
+        ins(&c, "u", 9_000, None, now, now);
+        assert!(
+            get_full(&c, "u", ancient).unwrap().is_some(),
+            "and the relay's stamp is what keeps it, now that it competes"
+        );
     }
 
     /// The local id is the cache's own, and does not become the relay's by

@@ -45,7 +45,7 @@ const KIND_USE: &str = "use";
 
 /// Queue a **Capture**.
 ///
-/// Answers the queue rowid, which is the handle a requeue and the unit tests
+/// Answers the queue rowid, which is the handle a fresh act and the unit tests
 /// address the act by; production re-reads the head instead and never needs it.
 ///
 /// `plaintext_sha256` is stored so [`find_by_hash`] can recognise a repeat copy
@@ -399,7 +399,7 @@ mod tests {
     }
 
     /// Both kinds name the entry they belong to, and the link survives a
-    /// requeue: tickets that find an act from its row depend on it.
+    /// move to the back: tickets that find an act from its row depend on it.
     #[test]
     fn both_kinds_carry_the_entry_they_belong_to() {
         let c = open_in_memory().unwrap();

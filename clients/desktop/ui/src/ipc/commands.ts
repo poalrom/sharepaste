@@ -1,6 +1,19 @@
 import type { Pairing, EntryView, Settings, Contact, UpdateStatus } from "../types";
 import { tauri } from "./tauri";
 
+/**
+ * How many rows a surface asks the core for in one page.
+ *
+ * Larger than the hundred `entries_cache` keeps, and it has to be: that hundred
+ * bounds the region the relay has ordered, and the un-flushed region is unbounded
+ * on purpose — an act this device has not delivered is undelivered clipboard
+ * content, and evicting one to protect a number is the trade ADR 0014 refuses. A
+ * page of a hundred would hide exactly the oldest offline captures, which are the
+ * ones about to flush first. The core clamps to its own ceiling either way, and
+ * neither surface pages, so one page has to be the whole list.
+ */
+export const HISTORY_PAGE = 1000;
+
 export const cmd = {
   listPairings:        (): Promise<Pairing[]> => tauri.invoke("list_pairings"),
   pairWithInvite:      (args: { server_url: string; token: string; device_label: string }) =>

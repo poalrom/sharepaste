@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { agePhrase, byteSize, capturedAt } from "../../lib/format";
 import type { EntryView } from "../../types";
-import { copyEntry, deleteEntry } from "../EntryRow";
+import { copyEntry, deleteEntry, resendEntry } from "../EntryRow";
 import { IconButton, PanelMessage } from "../fui";
 
 /**
@@ -155,6 +155,26 @@ export default function EntryDetail({ entry, index, ownDeviceId, now }: Props) {
           >
             COPY
           </button>
+          {/*
+            The main window's own way out of a refusal. Its rows carry no control
+            column — deleting from the list is a binding, not a button — so a
+            refused row on this surface would state its reason and offer nothing
+            to do about it. This pane is where the window's per-entry verbs live,
+            so this is where the verb goes. Shown only when there is a refusal to
+            answer, for the reason `↻` is in the popover: a pending act is already
+            on its way and a settled one has nothing left to send.
+          */}
+          {entry.refused_reason !== null && (
+            <button
+              type="button"
+              data-testid={`detail-resend-${entry.id}`}
+              className="fui-action"
+              data-variant="outline"
+              onClick={() => void resendEntry(entry)}
+            >
+              RESEND
+            </button>
+          )}
           {/* Deleting stays live: ciphertext this device cannot read is exactly
               what someone wants gone. */}
           <IconButton

@@ -214,19 +214,22 @@ class SharepasteRepository private constructor(
      * [before] is the `lastUse` and `id` of the last row already shown, and not
      * an id on its own: id stopped being the order when the History started
      * following Last Use, so paging by it alone would skip and repeat rows.
-     * Nothing on this phone pages — the cache holds a hundred Entries and the
-     * screen shows them all — but the boundary carries the shape the core has.
+     * Nothing on this phone pages — the screen shows the whole page — but the
+     * boundary carries the shape the core has.
      *
-     * [limit] defaults to that same hundred because it is the cache's own
-     * `MAX_PER_USER`, and the ceiling `list_recent` clamps to regardless, so
-     * anything smaller would only hide rows the device already holds. The
-     * Filter narrows this one page and never asks the Relay, so what this call
-     * returns is the whole of what it can ever find.
+     * [limit] is larger than the hundred `entries_cache` keeps, and has to be:
+     * that hundred bounds the region the Relay has ordered, and the un-flushed
+     * region is unbounded on purpose — an act this phone has not delivered is
+     * undelivered clipboard content, and evicting one to protect a number is the
+     * trade ADR 0014 refuses. A page of a hundred would hide exactly the oldest
+     * offline Offers, which are the ones about to flush first. The core clamps to
+     * its own ceiling either way. The Filter narrows this one page and never asks
+     * the Relay, so what this call returns is the whole of what it can ever find.
      */
     suspend fun listHistory(
         userId: String,
         before: HistoryCursor? = null,
-        limit: Long = 100,
+        limit: Long = 1_000,
     ): List<Entry> = io { it.listHistory(userId, before, limit) }
 
     suspend fun readEntry(userId: String, entryId: Long): String? = io { it.readEntry(userId, entryId) }
@@ -240,7 +243,7 @@ class SharepasteRepository private constructor(
     /**
      * Put a refused act back in the queue.
      *
-     * Local work only: the core clears the refusal and requeues to the back, and
+     * Local work only: the core clears the refusal and puts the act at the back, and
      * the Relay hears about it on the next flush. Not a **Use** — the Relay
      * never took the act, so there is no record of one to move.
      */

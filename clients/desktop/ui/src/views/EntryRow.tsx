@@ -67,14 +67,18 @@ export async function deleteEntry(entry: EntryView): Promise<void> {
 }
 
 /**
- * Resending a refused pending, as `↻` means it.
+ * **Resend**, as the popover's `↻` and the reader pane's button both mean it.
  *
- * A fresh act and not a retry (ADR 0015): the core requeues it to the back, so
- * nothing is patched here. `entry-refused` set what this row says about itself
- * and `entry-settled` or a second `entry-refused` is what changes it, which is
+ * A fresh act and not a retry (ADR 0015): the core puts it at the back of the
+ * queue, so nothing is patched here. `entry-refused` set what this row says about
+ * itself, and `entry-settled` or a second `entry-refused` is what changes it —
  * one source of truth rather than an optimistic local guess beside it.
+ *
+ * Exported for the same reason `copyEntry` and `deleteEntry` are: the main
+ * window's reader pane offers the same verb, and a second copy of the error
+ * handling is how the two would come to report a failure differently.
  */
-async function resendEntry(entry: EntryView): Promise<void> {
+export async function resendEntry(entry: EntryView): Promise<void> {
   try {
     await cmd.resendEntry({ user_id: entry.user_id, entry_id: entry.id });
   } catch (e) {

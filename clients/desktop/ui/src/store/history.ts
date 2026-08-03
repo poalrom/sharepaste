@@ -3,6 +3,15 @@ import { create } from "zustand";
 import type { EntryView } from "../types";
 import { useUiStore } from "./ui";
 
+/**
+ * How many rows the relay has ordered that this store keeps.
+ *
+ * The same hundred `entries_cache` prunes at, and enforced here for the same
+ * reason it is there: the store is a cache of a cache. Both surfaces name it too,
+ * because both draw a sentinel when it bites.
+ */
+const CACHE_CAP = 100;
+
 export type HistoryState = {
   entries: EntryView[];
   hydrate: (rows: EntryView[]) => void;
@@ -132,9 +141,22 @@ export function useFilteredEntries(): EntryView[] {
   }, [entries, filter]);
 }
 
+/**
+ * Prepend one entry, dropping any older copy of it, and keep the list inside the
+ * cache cap.
+ *
+ * **The cap spares un-flushed rows**, exactly as `entries_cache::prune` does. It
+ * bounds a cache of what the relay has ordered; an act this device has not
+ * delivered is undelivered clipboard content, and dropping one to keep a number
+ * down is the trade ADR 0014 refuses. Counting every row would silently truncate
+ * the display of an offline burst past a hundred — and the list-end sentinel is
+ * counted the same way, so nothing would even say so.
+ */
 function dedupePrepend(existing: EntryView[], next: EntryView): EntryView[] {
   const without = existing.filter((e) => e.id !== next.id);
-  return [next, ...without].slice(0, 100);
+  const rows = [next, ...without];
+  let settled = 0;
+  return rows.filter((e) => e.pending || ++settled <= CACHE_CAP);
 }
 
 /**
