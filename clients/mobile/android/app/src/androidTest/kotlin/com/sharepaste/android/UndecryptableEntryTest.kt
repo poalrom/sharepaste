@@ -18,6 +18,7 @@ import com.sharepaste.android.ui.entryUndecryptableTag
 import com.sharepaste.core.AppException
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -76,13 +77,27 @@ class UndecryptableEntryTest {
         Evidence.log("other device  = put Entry id=$sealedId on the Relay under the real key")
 
         phone.enterForeground()
+        // Not by `sealedId`: that is the other device's own id for the row, and an
+        // id stopped crossing the Relay with the Entry when one became local to the
+        // device that made it (ADR 0016). Not by Preview either — this phone cannot
+        // read one. What identifies it here is that it is the Entry this phone
+        // cannot decrypt, which is also the fact under test.
         val sealedEntry = phone.awaitEntry("the re-keyed Entry must be backfilled") {
-            it.id == sealedId
+            it.undecryptable
         }
-        assertTrue(
-            "the backfilled Entry must be flagged Undecryptable by the facade, not guessed at " +
-                "from its empty Preview",
-            sealedEntry.undecryptable,
+        // The flag is the facade's answer and not this test's inference, so the
+        // Preview being empty has to be a *consequence* of it rather than the
+        // evidence for it: an Entry whose plaintext is genuinely empty would look
+        // the same from here, and only the core can tell the two apart.
+        assertEquals(
+            "the sealed Entry is the one this phone cannot read, and the only one",
+            1,
+            phone.state.entries.count { it.undecryptable },
+        )
+        assertEquals(
+            "and it hands over no Preview, because there is none to hand over",
+            "",
+            sealedEntry.preview,
         )
         Evidence.log(
             "undecryptable = id=${sealedEntry.id} preview=\"${sealedEntry.preview}\" " +

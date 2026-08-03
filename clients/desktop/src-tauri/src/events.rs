@@ -59,9 +59,18 @@ pub(crate) struct EntryDeleted { pub user_id: String, pub entry_id: i64 }
 /// The row is addressed by its own id, which a flush does not change, so a shell
 /// updates it in place. Deliberately not `history-changed`: nothing reorders at a
 /// flush, and a refetch per acked act is the cost this distinction exists to
-/// avoid.
+/// avoid — which is also why the relay's two numbers ride along, rather than the
+/// row keeping its "never stamped" reading until something else refetches.
 #[derive(Serialize, Clone)]
-pub(crate) struct EntrySettled { pub user_id: String, pub entry_id: i64 }
+pub(crate) struct EntrySettled {
+    pub user_id: String,
+    pub entry_id: i64,
+    /// `None` where the relay said nothing about it: a **Use** does not restamp a
+    /// creation, and a queued use of an entry the relay has since dropped stamps
+    /// neither.
+    pub created_at: Option<i64>,
+    pub last_use: Option<i64>,
+}
 
 /// The relay turned an act down for what it is, and said this.
 #[derive(Serialize, Clone)]
@@ -146,8 +155,10 @@ impl EventSink for TauriEventSink {
             CoreEvent::PairShortcode { code, expires_at } => {
                 let _ = self.app.emit(PAIR_SHORTCODE, PairShortcode { code, expires_at });
             }
-            CoreEvent::EntrySettled { user_id, entry_id } => {
-                let _ = self.app.emit(ENTRY_SETTLED, EntrySettled { user_id, entry_id });
+            CoreEvent::EntrySettled { user_id, entry_id, created_at, last_use } => {
+                let _ = self
+                    .app
+                    .emit(ENTRY_SETTLED, EntrySettled { user_id, entry_id, created_at, last_use });
             }
             CoreEvent::EntryRefused { user_id, entry_id, reason } => {
                 let _ = self.app.emit(ENTRY_REFUSED, EntryRefused { user_id, entry_id, reason });

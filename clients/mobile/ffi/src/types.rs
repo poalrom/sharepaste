@@ -476,8 +476,19 @@ pub enum CoreEvent {
     /// The row is addressed by its own id, which a flush does not change, so a
     /// shell updates it in place. Deliberately not `HistoryChanged`: nothing
     /// reorders at a flush, and a refetch per acked act is the cost this
-    /// distinction exists to avoid.
-    EntrySettled { user_id: String, entry_id: i64 },
+    /// distinction exists to avoid — which is also why the relay's numbers ride
+    /// along, rather than the row keeping its "never stamped" reading until
+    /// something else refetches.
+    ///
+    /// `null` means the Relay said nothing about that number: a **Use** does not
+    /// restamp a creation, and a queued use of an Entry the Relay has since
+    /// dropped stamps neither.
+    EntrySettled {
+        user_id: String,
+        entry_id: i64,
+        created_at: Option<i64>,
+        last_use: Option<i64>,
+    },
     /// The relay turned an act down for what it is, and said this.
     EntryRefused { user_id: String, entry_id: i64, reason: String },
     HistoryChanged { user_id: String },
@@ -507,8 +518,8 @@ impl From<CoreCoreEvent> for CoreEvent {
             CoreCoreEvent::EntryDeleted { user_id, entry_id } => {
                 CoreEvent::EntryDeleted { user_id, entry_id }
             }
-            CoreCoreEvent::EntrySettled { user_id, entry_id } => {
-                CoreEvent::EntrySettled { user_id, entry_id }
+            CoreCoreEvent::EntrySettled { user_id, entry_id, created_at, last_use } => {
+                CoreEvent::EntrySettled { user_id, entry_id, created_at, last_use }
             }
             CoreCoreEvent::EntryRefused { user_id, entry_id, reason } => {
                 CoreEvent::EntryRefused { user_id, entry_id, reason }

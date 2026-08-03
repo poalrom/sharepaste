@@ -122,6 +122,24 @@ impl RecordingSink {
             .collect()
     }
 
+    /// Every settlement as `(entry_id, created_at, last_use)`, in order.
+    ///
+    /// Beside [`Self::settled`] rather than replacing it: most callers only care
+    /// that the waiting ended, and the two `Option`s are the difference between a
+    /// row that has the relay's word and one still claiming it has never been
+    /// stamped.
+    pub fn settlements(&self) -> Vec<(i64, Option<i64>, Option<i64>)> {
+        self.events()
+            .into_iter()
+            .filter_map(|e| match e {
+                CoreEvent::EntrySettled { entry_id, created_at, last_use, .. } => {
+                    Some((entry_id, created_at, last_use))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Every refusal reported, as `(entry_id, reason)`, in order.
     pub fn refusals(&self) -> Vec<(i64, String)> {
         self.events()

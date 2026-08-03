@@ -1007,14 +1007,23 @@ impl Sharepaste {
     /// device knows of it, so there is nothing out there to take back — and the
     /// queue is durable across a force-quit, so without this branch there is no
     /// way to stop a mistaken copy reaching the relay when it comes back (ADR
-    /// 0013). It is the one delete that works with nothing in reach.
+    /// 0016). It is the one delete that works with nothing in reach.
+    ///
+    /// A row that is not here is [`AppError::NotFound`] and not a quiet `Ok`: the
+    /// branch above means this operation no longer consults the pairing on the way
+    /// past, so nothing else would notice that there was never anything to delete.
     pub async fn delete_entry(&self, user_id: &str, entry_id: i64) -> Result<(), AppError> {
-        let relay_id = {
+        let reach = {
             let conn = self.state.conn.lock().await;
-            entries_cache::relay_id_for(&conn, user_id, entry_id)?
+            entries_cache::reach_of(&conn, user_id, entry_id)?
         };
-        match relay_id {
-            Some(relay_id) => {
+        let withdrawn = match reach {
+            entries_cache::Reach::Absent => {
+                return Err(AppError::NotFound(format!(
+                    "no entry {entry_id} on this device"
+                )))
+            }
+            entries_cache::Reach::Flushed(relay_id) => {
                 let m = self.registry.load_active_membership(user_id).await?;
                 let server_url = m.server.base().to_string();
                 m.server
@@ -1023,21 +1032,23 @@ impl Sharepaste {
                     .map_err(|e| e.explain_insecure_relay(&server_url))?;
                 let conn = self.state.conn.lock().await;
                 entries_cache::delete_one(&conn, user_id, entry_id)?;
+                false
             }
-            None => {
+            entries_cache::Reach::Unflushed => {
                 let conn = self.state.conn.lock().await;
                 // The row and the act together, and in that order for no reason
                 // that matters: nothing else can observe the gap, because both
                 // writes happen under this one lock.
                 entries_cache::delete_one(&conn, user_id, entry_id)?;
                 pending::delete_for_entry(&conn, user_id, entry_id)?;
+                true
             }
-        }
+        };
         self.events.emit(CoreEvent::EntryDeleted {
             user_id: user_id.to_string(),
             entry_id,
         });
-        if relay_id.is_none() {
+        if withdrawn {
             // The withdrawal changed the queue depth, and the count chrome is
             // the only thing that says so.
             let count = self.pending_depth(user_id).await?;
@@ -1464,14 +1475,19 @@ impl UseRecorder {
     async fn record_over(&self, user_id: &str, entry_id: i64, transport: &dyn SessionTransport) {
         // `entry_id` is this device's own; the relay has never heard of it. A row
         // with no relay id has no relay record to move, so the use it just
-        // received is carried by the queue instead.
+        // received is carried by the queue instead. A row that is not here at all
+        // is nothing to move either way.
         let relay_id = {
             let conn = self.state.conn.lock().await;
-            match entries_cache::relay_id_for(&conn, user_id, entry_id) {
-                Ok(Some(relay_id)) => relay_id,
-                Ok(None) => {
+            match entries_cache::reach_of(&conn, user_id, entry_id) {
+                Ok(entries_cache::Reach::Flushed(relay_id)) => relay_id,
+                Ok(entries_cache::Reach::Unflushed) => {
                     drop(conn);
                     self.move_act_to_back(user_id, entry_id).await;
+                    return;
+                }
+                Ok(entries_cache::Reach::Absent) => {
+                    tracing::warn!(entry_id, "a use arrived for an entry this device does not hold");
                     return;
                 }
                 Err(e) => {
@@ -3156,6 +3172,48 @@ mod tests {
         );
 
         sp.stop_all_sessions();
+    }
+
+    /*
+     * The one operation this effort took the pairing out of, so the one that could
+     * start answering `Ok` to a question about a row that does not exist.
+     *
+     * Withdrawing a capture the relay has never named needs nothing in reach, and
+     * that is the point of it — but "needs no relay" and "asks no questions" are
+     * different, and only the second is a bug. Found on an emulator, where the
+     * facade's own surface test calls every operation on a user with no pairing and
+     * expects each to say so in its own words.
+     */
+    #[test]
+    fn deleting_an_entry_that_is_not_here_says_so_rather_than_succeeding() {
+        let Rig { sp, sink, .. } = rig();
+        let rt = &sp.runtime;
+
+        let err = rt.block_on(sp.delete_entry("u", 9_999)).unwrap_err();
+        assert!(
+            matches!(err, AppError::NotFound(_)),
+            "a row this device does not hold is not a silent success: {err:?}"
+        );
+        assert!(
+            sink.events().is_empty(),
+            "and nothing is announced about a row that was never there"
+        );
+
+        // The withdraw itself still needs no relay, which is what the branch above
+        // exists for: an unknown *user* is as absent as an unknown row.
+        let err = rt.block_on(sp.delete_entry("nobody", 1)).unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)), "{err:?}");
+
+        // And the withdraw still works with nothing in reach, which is the branch
+        // the guard above had to be added without breaking.
+        rt.block_on(sp.offer("u", "a copy made offline")).unwrap();
+        let row = rt.block_on(sp.list_history("u", None, 50)).unwrap().remove(0);
+        assert!(row.pending, "precondition: nothing has flushed it");
+        rt.block_on(sp.delete_entry("u", row.id)).unwrap();
+        assert!(
+            rt.block_on(sp.list_history("u", None, 50)).unwrap().is_empty(),
+            "a row that is here is withdrawn, with no relay consulted"
+        );
     }
 
     /*

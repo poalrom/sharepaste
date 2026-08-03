@@ -24,8 +24,17 @@ export type HistoryState = {
    * stamps a pending act exactly where the device already showed it — and the id
    * does not change either, so the reader's selection and the popover's keyboard
    * cursor stay where they were.
+   *
+   * The relay's numbers arrive with the event and are written here, because a row
+   * is drawn from what the relay last said about it: dropping the tint while
+   * leaving `created_at` at zero would leave the row's time slot empty and the
+   * reader pane still reading `WAITING FOR THE RELAY`, on a row that is settled.
+   *
+   * `null` is "the relay said nothing about this number" and leaves it alone — a
+   * **Use** does not restamp a creation, and a queued use of an entry the relay
+   * has since dropped stamps neither, yet its act still left the queue.
    */
-  settle: (id: number) => void;
+  settle: (id: number, createdAt: number | null, lastUse: number | null) => void;
   /** The relay turned an act down for what it is. Same rules as `settle`. */
   refuse: (id: number, reason: string) => void;
   clear: () => void;
@@ -36,9 +45,14 @@ export const useHistoryStore = create<HistoryState>((set) => ({
   hydrate: (rows) => set({ entries: rows }),
   add: (entry) => set((s) => ({ entries: dedupePrepend(s.entries, entry) })),
   remove: (id) => set((s) => ({ entries: s.entries.filter((e) => e.id !== id) })),
-  settle: (id) =>
+  settle: (id, createdAt, lastUse) =>
     set((s) => ({
-      entries: patch(s.entries, id, { pending: false, refused_reason: null }),
+      entries: patch(s.entries, id, {
+        pending: false,
+        refused_reason: null,
+        ...(createdAt === null ? {} : { created_at: createdAt }),
+        ...(lastUse === null ? {} : { last_use: lastUse }),
+      }),
     })),
   refuse: (id, reason) =>
     set((s) => ({
@@ -54,7 +68,7 @@ export const useHistoryStore = create<HistoryState>((set) => ({
 type Change =
   | { kind: "added"; user_id: string; entry: EntryView }
   | { kind: "deleted"; user_id: string; entry_id: number }
-  | { kind: "settled"; user_id: string; entry_id: number }
+  | { kind: "settled"; user_id: string; entry_id: number; created_at: number | null; last_use: number | null }
   | { kind: "refused"; user_id: string; entry_id: number; reason: string };
 
 /** The replay log of every snapshot currently in flight. */
@@ -116,7 +130,7 @@ export async function hydrateFrom(
     if (change.user_id !== userId) continue;
     if (change.kind === "added") store.add(change.entry);
     else if (change.kind === "deleted") store.remove(change.entry_id);
-    else if (change.kind === "settled") store.settle(change.entry_id);
+    else if (change.kind === "settled") store.settle(change.entry_id, change.created_at, change.last_use);
     else store.refuse(change.entry_id, change.reason);
   }
   return rows;

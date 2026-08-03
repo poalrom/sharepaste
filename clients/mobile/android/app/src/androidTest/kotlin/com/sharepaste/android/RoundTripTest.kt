@@ -181,8 +181,12 @@ class RoundTripTest {
      * devices is the whole point; a phone that reordered only its own list
      * would pass a weaker version of this test and ship the wrong feature.
      *
-     * Nothing about the Entry itself moves — same id, same plaintext — which is
-     * what "nothing is created and nothing is duplicated" means in practice.
+     * Nothing about the Entry itself moves — same row, same plaintext — which is
+     * what "nothing is created and nothing is duplicated" means in practice. Same
+     * *row*, not the same number as the other device: an id is this device's own
+     * from the moment of capture and the Relay's id no longer crosses the facade
+     * (ADR 0016), so the two phones agreeing about the Entry is what is asserted
+     * and an id equality across them would be asserting the opposite.
      */
     @Test
     fun recalling_a_buried_entry_puts_it_at_the_head_on_both_devices() {
@@ -196,7 +200,7 @@ class RoundTripTest {
         phone.await("in contact") { it.session is SessionPhase.InContact }
         val onScreen = phone.awaitEntry("the buried Entry must be cached") { it.preview == buried }
         phone.awaitEntry("and the one captured after it") { it.preview == newer }
-        assertEquals("the phone holds it under the Relay's own id", buriedId, onScreen.id)
+        Evidence.log("ids           = other device $buriedId, this phone ${onScreen.id}, by design not equal")
         assertEquals(
             "precondition: the Entry captured last leads the History until something is used",
             newer,
@@ -222,7 +226,11 @@ class RoundTripTest {
             1,
             after.count { it.preview == buried },
         )
-        assertEquals("and the Entry at the head is the one that was always there", buriedId, after.first().id)
+        assertEquals(
+            "and the Entry at the head is the row that was always there, under the id this phone gave it",
+            onScreen.id,
+            after.first().id,
+        )
     }
 
     /** Poll this phone's own History until [expected] is its head. */

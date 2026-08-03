@@ -123,10 +123,12 @@ export default function Main() {
         if (user_id === viewedUserId()) removeEntry(entry_id);
       }));
       // In place and by id, with no refetch: nothing reorders at a flush and the
-      // id does not change, so the reader's selection stays where it was.
-      unsub.push(await events.onEntrySettled(({ user_id, entry_id }) => {
-        noteChange({ kind: "settled", user_id, entry_id });
-        if (user_id === viewedUserId()) settleEntry(entry_id);
+      // id does not change, so the reader's selection stays where it was. The
+      // relay's stamp rides along, or the row would stop waiting and go on saying
+      // the relay has never stamped it.
+      unsub.push(await events.onEntrySettled(({ user_id, entry_id, created_at, last_use }) => {
+        noteChange({ kind: "settled", user_id, entry_id, created_at, last_use });
+        if (user_id === viewedUserId()) settleEntry(entry_id, created_at, last_use);
       }));
       unsub.push(await events.onEntryRefused(({ user_id, entry_id, reason }) => {
         noteChange({ kind: "refused", user_id, entry_id, reason });

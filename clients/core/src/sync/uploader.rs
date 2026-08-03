@@ -153,7 +153,7 @@ impl Uploader {
                 Ok(sent) => {
                     // Scoped so the database guard is gone before anything
                     // reaches the sink: see [`EventSink`].
-                    let (count, reordered, withdrawn) = {
+                    let (count, reordered, withdrawn, stamp) = {
                         let conn = self.conn.lock().await;
                         // **The withdrawal race, decided here.** The upload above
                         // awaited with this lock released, and a delete inside
@@ -163,8 +163,14 @@ impl Uploader {
                         // deleted, or re-create it.
                         let acked = pending::ack(&conn, item.rowid)? > 0;
                         let mut withdrawn = None;
+                        // What the relay's word about this row now is, where it
+                        // said anything: a capture is stamped for the first time,
+                        // a use moves only the last use, and a vanished use moves
+                        // neither yet still takes the act out of the queue.
+                        let mut stamp = None;
                         let reordered = match sent {
                             Sent::Capture { uploaded } if acked => {
+                                stamp = Some((Some(uploaded.created_at), Some(uploaded.last_use)));
                                 self.settle(&conn, item.local_entry_id, uploaded);
                                 false
                             }
@@ -173,11 +179,13 @@ impl Uploader {
                                 false
                             }
                             Sent::Use { entry_id, used } => {
+                                stamp = Some((None, Some(used.last_use)));
                                 entries_cache::set_last_use(
                                     &conn, &self.user_id, entry_id, used.last_use,
                                 )? > 0
                             }
                             Sent::UseVanished { entry_id } => {
+                                stamp = Some((None, None));
                                 tracing::info!(
                                     entry_id,
                                     "dropped a queued use of an entry the relay no longer has"
@@ -185,7 +193,7 @@ impl Uploader {
                                 false
                             }
                         };
-                        (pending::count(&conn, &self.user_id)?, reordered, withdrawn)
+                        (pending::count(&conn, &self.user_id)?, reordered, withdrawn, stamp)
                     };
                     // Safe to ask for, because the upload that just returned is
                     // proof the relay is reachable. A failure here leaves one
@@ -210,15 +218,26 @@ impl Uploader {
                     // where this device already showed it — so a shell has one row
                     // to update in place and no reason to refetch a hundred.
                     //
+                    // It carries what the relay just decided, because avoiding a
+                    // refetch and withholding the answer are not the same economy:
+                    // told only that the waiting is over, a shell drops the tint and
+                    // goes on saying the relay has never stamped the row — the lie
+                    // this effort removed, in the other direction, and for as long
+                    // as nothing else happens to refetch. `None` is not "unknown"
+                    // but "the relay said nothing about this": a use does not restamp
+                    // a creation, and a vanished use stamps neither.
+                    //
                     // Nothing for a withdrawn act: its row is gone, and
                     // `EntryDeleted` already said so.
-                    if withdrawn.is_none() {
-                        if let Some(entry_id) = item.local_entry_id {
-                            self.events.emit(CoreEvent::EntrySettled {
-                                user_id: self.user_id.clone(),
-                                entry_id,
-                            });
-                        }
+                    if let (Some((created_at, last_use)), Some(entry_id)) =
+                        (stamp, item.local_entry_id)
+                    {
+                        self.events.emit(CoreEvent::EntrySettled {
+                            user_id: self.user_id.clone(),
+                            entry_id,
+                            created_at,
+                            last_use,
+                        });
                     }
                     // A use of an entry another device also holds *did* move it,
                     // and only a refetch can put a hundred rows back in order.
@@ -923,6 +942,60 @@ mod tests {
         let c = conn.lock().await;
         assert_eq!(pending::count(&c, "u").unwrap(), 0, "it must not retry forever");
         assert!(sink.entries().is_empty());
+    }
+
+    /*
+     * What the settlement carries, per kind of act, because a shell draws the row
+     * from it and there is nothing else coming: no refetch follows, so a number
+     * missing here is a number the row goes on being wrong about.
+     *
+     * The three cases differ, and `None` is the relay saying nothing rather than
+     * this device not knowing: a capture is stamped for the first time, a use moves
+     * only the last use, and a use of an entry the relay has dropped moves neither
+     * yet still takes the act out of the queue.
+     */
+    #[tokio::test]
+    async fn a_settlement_carries_what_the_relay_stamped_and_no_more() {
+        let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
+        paired(&conn).await;
+        let local_id = queue_capture(&conn, "captured offline").await;
+        let (up, sink) = uploader(conn.clone(), Arc::new(OkTransport::new()));
+        up.flush_once().await.unwrap();
+        // The relay's own clock, so the value is whatever it said — what matters is
+        // that both numbers are present and are a date a row can be ordered by,
+        // rather than the zero a never-stamped row carries.
+        let settled = sink.settlements();
+        assert_eq!(settled.len(), 1);
+        let (id, created_at, last_use) = settled[0];
+        assert_eq!(id, local_id);
+        assert!(
+            created_at.is_some_and(|c| c > 0) && created_at == last_use,
+            "a capture is stamped for the first time, so both numbers are the relay's: {settled:?}"
+        );
+
+        {
+            let c = conn.lock().await;
+            pending::enqueue_use(&c, "u", local_id, 7, 2).unwrap();
+        }
+        let (up, sink) = uploader(conn.clone(), Arc::new(OkTransport::new()));
+        up.flush_once().await.unwrap();
+        let settled = sink.settlements();
+        assert_eq!(settled.len(), 1);
+        let (id, created_at, last_use) = settled[0];
+        assert_eq!((id, created_at), (local_id, None), "a use does not restamp the creation");
+        assert!(last_use.is_some_and(|u| u > 0), "and it does move the last use: {settled:?}");
+
+        {
+            let c = conn.lock().await;
+            pending::enqueue_use(&c, "u", local_id, 7, 2).unwrap();
+        }
+        let (up, sink) = uploader(conn.clone(), Arc::new(OkTransport::without_the_entry()));
+        up.flush_once().await.unwrap();
+        assert_eq!(
+            sink.settlements(),
+            vec![(local_id, None, None)],
+            "a vanished use stamps nothing, and the row has still stopped waiting"
+        );
     }
 
     #[tokio::test]

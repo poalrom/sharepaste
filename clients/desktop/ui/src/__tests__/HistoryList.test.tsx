@@ -182,10 +182,17 @@ describe("HistoryList — the un-flushed region", () => {
     device_id: "d", origin_label: "d", undecryptable: false, pending: false, refused_reason: null,
   };
 
+  // A relay stamp has to be measured against the clock the row renders with.
+  const NOW = Date.now();
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+
   beforeEach(() => {
     ipc = mockIpc();
     // Addressed row second, so the head reads as an unselected reader sees it:
-    // selection wins over the tint, and its controls would join the row's text.
+    // a selected row's own controls would otherwise join the row's text. The tint
+    // is unaffected either way — the amber wash wins over the selected one, and
+    // selection keeps the cyan edge that is its own mark.
     useUiStore.setState({ filter: "", selectedIndex: 1, mainSection: "history" });
     useHistoryStore.setState({ entries: [unflushed, settled] });
     usePairingsStore.setState({
@@ -206,22 +213,32 @@ describe("HistoryList — the un-flushed region", () => {
     expect(screen.getAllByTestId("entry-row")[0]).toHaveAttribute("data-pending", "true");
     const before = screen.getAllByTestId("entry-row").map((r) => r.textContent);
 
-    act(() => useHistoryStore.getState().settle(3));
+    act(() => useHistoryStore.getState().settle(3, NOW - 30 * MINUTE, NOW - 30 * MINUTE));
 
     expect(screen.getAllByTestId("entry-row")[0]).toHaveAttribute("data-pending", "false");
-    expect(screen.getAllByTestId("entry-row").map((r) => r.textContent)).toEqual(before);
+    expect(screen.getAllByTestId("entry-row").map((r) => r.textContent)).toEqual(before.map(
+      (t) => t === "01offline copy" ? "01offline copy30m" : t,
+    ));
   });
 
   /*
-    `EntrySettled` carries no timestamp, deliberately — a stamp per acked act is
-    the refetch that event exists to avoid — so the row is settled and still has
-    no age of its own. Silence is the honest reading until a snapshot brings the
-    relay's stamp; `relativeAge(0)` would print 655mo on the newest row here.
+    The lie this effort removed, told in the other direction. `EntrySettled`
+    carries the relay's own `created_at` and `last_use`, so the moment the tint
+    retreats the row has an age; a settled row with an empty slot would be saying
+    the relay has never stamped it, on a row the relay has just stamped. Nothing
+    else provokes a refetch, so it would say so for as long as the window stayed
+    open. `relativeAge(0)` prints 655mo, which is why the slot cannot simply
+    render whatever it holds.
   */
-  it("leaves the slot empty until the relay's stamp arrives", () => {
+  it("fills the slot from the relay's stamp the moment the act settles", () => {
     render(<HistoryList />);
-    act(() => useHistoryStore.getState().settle(3));
     expect(screen.getAllByTestId("entry-row")[0]!.textContent).toBe("01offline copy");
+
+    act(() => useHistoryStore.getState().settle(3, NOW - 6 * HOUR, NOW - 6 * HOUR));
+
+    const row = screen.getAllByTestId("entry-row")[0]!;
+    expect(row.textContent).toBe("01offline copy6h");
+    expect(row.textContent).not.toContain("655mo");
   });
 
   // The row carries plaintext from capture, so the predicate has something to

@@ -841,9 +841,21 @@ class SharepasteViewModel(
             // Relay stamps a pending act exactly where this phone already showed
             // it — and the id does not change either, so nothing the reader is
             // looking at moves under them.
+            //
+            // The Relay's own numbers come with the event and are written here: a
+            // row states what the Relay last said about it, so dropping the tint
+            // while leaving `createdAt` at zero would leave a settled row still
+            // reading `WAITING FOR THE RELAY`. A `null` is the Relay saying nothing
+            // about that number rather than nobody knowing it — a **Use** does not
+            // restamp a creation — so it leaves the one it holds alone.
             is CoreEvent.EntrySettled -> _state.update { current ->
                 current.patchEntry(event.userId, event.entryId) {
-                    it.copy(pending = false, refusedReason = null)
+                    it.copy(
+                        pending = false,
+                        refusedReason = null,
+                        createdAt = event.createdAt ?: it.createdAt,
+                        lastUse = event.lastUse ?: it.lastUse,
+                    )
                 }
             }
 

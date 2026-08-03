@@ -258,20 +258,38 @@ pub(crate) fn attach_relay_id(
     Ok(n)
 }
 
-/// The relay's id for one row, if the relay has taken the act that created it.
-pub(crate) fn relay_id_for(
-    conn: &Connection,
-    user_id: &str,
-    local_id: i64,
-) -> Result<Option<i64>, AppError> {
-    let id: Option<Option<i64>> = conn
+/// How far one row has got, which is the whole of what a delete has to decide
+/// from.
+///
+/// Three states and not `Option<i64>`: that collapses "there is no such row" into
+/// "the relay has never named it", and the two want opposite treatment — one is an
+/// error, the other is the withdraw that is this effort's whole point. Flattening
+/// them made `delete_entry` answer `Ok(())` to a row that never existed, on a user
+/// with no pairing at all.
+pub(crate) enum Reach {
+    /// No row with this id belongs to this user.
+    Absent,
+    /// This device holds it and the relay has never seen it: deleting withdraws
+    /// it, and needs nothing in reach.
+    Unflushed,
+    /// The relay has it, under an id of its own.
+    Flushed(i64),
+}
+
+/// How far one row has got. See [`Reach`].
+pub(crate) fn reach_of(conn: &Connection, user_id: &str, local_id: i64) -> Result<Reach, AppError> {
+    let row: Option<Option<i64>> = conn
         .query_row(
             "SELECT relay_id FROM entries_cache WHERE user_id = ?1 AND local_id = ?2",
             params![user_id, local_id],
             |r| r.get(0),
         )
         .optional()?;
-    Ok(id.flatten())
+    Ok(match row {
+        None => Reach::Absent,
+        Some(None) => Reach::Unflushed,
+        Some(Some(relay_id)) => Reach::Flushed(relay_id),
+    })
 }
 
 /// This device's id for a row the relay has named — the reverse resolution, for
@@ -954,7 +972,11 @@ mod tests {
         assert_eq!(rows[0].device_id, "this-phone");
         assert_eq!(get_full(&c, "u", local_id).unwrap().as_deref(), Some("offered offline"));
         assert_eq!(find_by_hash(&c, "u", &hash).unwrap(), Some(local_id));
-        assert_eq!(relay_id_for(&c, "u", local_id).unwrap(), None);
+        assert!(matches!(reach_of(&c, "u", local_id).unwrap(), Reach::Unflushed));
+        assert!(
+            matches!(reach_of(&c, "u", local_id + 999).unwrap(), Reach::Absent),
+            "and a row that is not here is not the same answer as one the relay has not named"
+        );
 
         // The relay takes it: same row, same id, now stamped.
         assert_eq!(attach_relay_id(&c, "u", local_id, 77, 5_000, 5_000, 9_999).unwrap(), 1);
@@ -963,7 +985,7 @@ mod tests {
         assert_eq!(settled[0].local_id, local_id);
         assert_eq!(settled[0].relay_id, Some(77));
         assert_eq!(settled[0].created_at, 5_000);
-        assert_eq!(relay_id_for(&c, "u", local_id).unwrap(), Some(77));
+        assert!(matches!(reach_of(&c, "u", local_id).unwrap(), Reach::Flushed(77)));
         assert_eq!(local_id_for(&c, "u", 77).unwrap(), Some(local_id));
 
         // And a second attempt reports nothing: the row is no longer un-named.

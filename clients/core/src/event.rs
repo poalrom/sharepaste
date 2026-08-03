@@ -165,7 +165,23 @@ pub enum CoreEvent {
     /// pending act exactly where the device already showed it — so a shell has one
     /// row to update and no reason to refetch a hundred. The row is addressed by
     /// its own id, which a flush does not change.
-    EntrySettled { user_id: String, entry_id: i64 },
+    ///
+    /// `created_at` and `last_use` are the relay's, and are carried rather than
+    /// left for the next snapshot: a row is drawn from what the relay last said
+    /// about it, so a shell told only that the waiting is over drops the tint and
+    /// keeps saying the relay has never stamped the row. Two numbers on an event
+    /// already being emitted is not the refetch this event exists to avoid.
+    ///
+    /// `None` means the relay said nothing about that number, not that nobody
+    /// knows it: a **Use** does not restamp a creation, and a queued use of an
+    /// entry the relay has since dropped stamps neither — it only takes the act
+    /// out of the queue, which is still a row that has stopped waiting.
+    EntrySettled {
+        user_id: String,
+        entry_id: i64,
+        created_at: Option<i64>,
+        last_use: Option<i64>,
+    },
     /// The relay turned an act down for what it is, and said this.
     ///
     /// Not `HistoryChanged` for the same reason, and not a `Notice`: a refusal is

@@ -8,7 +8,7 @@ export const events = {
   onConnectionState: (cb: (p: { user_id: string; state: ConnectionState; last_error?: string }) => void) => tauri.listen("connection-state", cb),
   onEntryAdded:      (cb: (p: { user_id: string; entry: EntryView }) => void) => tauri.listen("entry-added", cb),
   onEntryDeleted:    (cb: (p: { user_id: string; entry_id: number }) => void) => tauri.listen("entry-deleted", cb),
-  onEntrySettled:    (cb: (p: { user_id: string; entry_id: number }) => void) => tauri.listen("entry-settled", cb),
+  onEntrySettled:    (cb: (p: { user_id: string; entry_id: number; created_at: number | null; last_use: number | null }) => void) => tauri.listen("entry-settled", cb),
   onEntryRefused:    (cb: (p: { user_id: string; entry_id: number; reason: string }) => void) => tauri.listen("entry-refused", cb),
   onHistoryChanged:  (cb: (p: { user_id: string }) => void) => tauri.listen("history-changed", cb),
   onPendingCount:    (cb: (p: { user_id: string; count: number }) => void) => tauri.listen("pending-count", cb),

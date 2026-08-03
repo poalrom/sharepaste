@@ -97,12 +97,12 @@ export async function resendEntry(entry: EntryView): Promise<void> {
  * new, so its slot is empty — nothing is lost beside it, because such an entry
  * was captured here and so never printed an Origin either.
  *
- * `last_use` and not `pending` is what that turns on, because the two part
- * company at a flush: `EntrySettled` carries no stamp — it exists so a flush
- * costs no refetch per acked act — so a row that settles in place is a settled
- * row with no age to show until the next snapshot brings one. An entry with a
- * queued *use* keeps the stale age, because that age is still the last thing the
- * relay stamped.
+ * `last_use` and not `pending` is what that turns on, because the two are
+ * different facts: the tint is about the queue, the slot is about the relay's
+ * word. They no longer part company at a flush — `EntrySettled` carries the
+ * relay's `created_at` and `last_use`, so a row that settles in place has an age
+ * the moment it stops waiting. An entry with a queued *use* keeps the stale age,
+ * because that age is still the last thing the relay stamped.
  *
  * Refused wins over Undecryptable on a row that is both: it is the one of the
  * two that can be acted on.
