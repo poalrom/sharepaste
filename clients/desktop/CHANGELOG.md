@@ -7,6 +7,24 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.8.1
+
+**Android only.** A patch over 0.8.0's reader, which showed you an entry's whole text and
+then gave you no way to take any of it. Nothing on this machine changes and the relay is not
+involved; if you have not installed 0.8.0 yet, this is that reader as it should have shipped.
+
+- **Take part of an entry, not only all of it.** Press and hold the text under an opened row
+  and it selects, the way text selects everywhere else on the phone, with Copy and Select all
+  in the menu Android puts over it. Recall still puts the whole entry on your clipboard; this
+  is for the one line out of a config, or the host in the middle of a connection string, that
+  until now meant recalling the lot and cutting it back down after you pasted it.
+- **Copying out of a row records nothing.** Nothing moves to the top of your history, no
+  other machine is told you looked, and what you copied is not captured unless you press
+  OFFER yourself — the phone has never watched your clipboard and still does not.
+- **The line on the row, and the app's own writing, stay unselectable.** The row's single
+  line is what you tap to open it, and the sentence a genuinely empty entry opens onto is the
+  app talking rather than anything you copied, so there is nothing there worth taking.
+
 ## 0.8.0
 
 **Android only.** Nothing on this machine changes, and the relay is not involved — so if you

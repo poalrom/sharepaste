@@ -308,7 +308,7 @@ android {
         // `.github/scripts/check-versions.mjs` reads: it refuses a release
         // where this disagrees with `clients/desktop/src-tauri/tauri.conf.json`,
         // which stays authoritative for every client.
-        versionName = "0.8.0"
+        versionName = "0.8.1"
         versionCode = versionCodeOf(versionName!!)
 
         // The transport policy the shipped app hands the core, in one place.
