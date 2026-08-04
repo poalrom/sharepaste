@@ -283,7 +283,7 @@ export default function SettingsSection() {
             <div className="font-display text-sm font-medium tracking-phrase text-text-body">Clear history</div>
             <div className="text-data text-text-muted">
               {activePairing
-                ? `Deletes every stored entry for ${activePairing.username ?? activePairing.user_id} @ ${activePairing.relay_host}, on the relay and on every paired device.`
+                ? `Deletes every stored entry for ${activePairing.username ?? activePairing.user_id}@${activePairing.relay_host}, on the relay and on every paired device.`
                 : "No active pairing."}
             </div>
           </div>

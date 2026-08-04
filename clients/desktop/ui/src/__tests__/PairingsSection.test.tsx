@@ -148,7 +148,7 @@ describe("PairingsSection", () => {
    * `alice` on a lab instance (ADR 0004) — and this is the one action that
    * cannot be undone, so the strip names what the heading cannot.
    */
-  it("names user_id @ host in the forget confirmation, not the shared heading", async () => {
+  it("names user_id@host in the forget confirmation, not the shared heading", async () => {
     rows = [
       { ...PAIRINGS[0]!, user_id: "u-prod", username: "alice", server_url: "https://relay.one", relay_host: "relay.one" },
       { ...PAIRINGS[1]!, user_id: "u-lab", username: "alice", server_url: "https://relay.lab", relay_host: "relay.lab" },
@@ -157,7 +157,7 @@ describe("PairingsSection", () => {
     fireEvent.click(screen.getByTestId("pair-forget-u-lab"));
 
     const strip = screen.getByTestId("confirm-strip-u-lab");
-    expect(strip).toHaveTextContent("u-lab @ relay.lab");
+    expect(strip).toHaveTextContent("u-lab@relay.lab");
     expect(strip).not.toHaveTextContent("alice");
   });
 

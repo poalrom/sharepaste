@@ -345,7 +345,7 @@ export default function HistorySection({ now }: { now: number }) {
           >
             {pairings.map((p) => (
               <option key={p.user_id} value={p.user_id}>
-                {`${p.username ?? p.user_id} @ ${p.relay_host}`}
+                {`${p.username ?? p.user_id}@${p.relay_host}`}
               </option>
             ))}
           </select>
