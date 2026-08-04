@@ -130,6 +130,26 @@
     <string name="entry_recall">RECALL</string>
     <string name="entry_delete">DELETE</string>
     <!--
+      Reading an Entry: the phone's half of the reader ADR 0003 gave the main
+      window, where the popover and a row can only ever show one line of it.
+
+      Spoken and never drawn — the row draws the same `\u25b8` / `\u25b4` the
+      pinned band above the list draws, and a glyph is not a fact TalkBack can
+      read. Sentence case for that reason, like the Filter's two spoken lines.
+
+      "Read" and not "open" or "show": reading an Entry is its own act in this
+      product, distinct from a Recall, and it touches neither the clipboard nor
+      the Relay (CONTEXT.md).
+    -->
+    <string name="entry_read">Read this Entry in full</string>
+    <string name="entry_read_close">Close this Entry\'s text</string>
+    <!--
+      An Entry whose text is genuinely the empty string, which is decryptable and
+      real. Said out loud because a reading panel that drew nothing would read as
+      a reader that had failed rather than as a fact about the Entry.
+    -->
+    <string name="entry_read_empty">EMPTY \u00b7 THIS ENTRY HOLDS NO TEXT AT ALL</string>
+    <!--
       Shown only for an Entry captured on another Device. %1$s is its Origin,
       which is a name a person chose and is never re-cased.
     -->

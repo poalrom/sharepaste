@@ -32,6 +32,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,8 +46,10 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -489,9 +492,10 @@ private fun EmptyHistory() {
  *
  *  * The **Preview** is rendered as it arrives. [Entry.preview] is the Preview
  *    on every path the core produces an Entry on — one line, control characters
- *    already spaces, trimmed and capped — so this row neither re-derives it nor
- *    reads [Entry.plaintext], which is the raw text and would render an indented
- *    Entry as a blank line.
+ *    already spaces, trimmed and capped — so the row's own line neither
+ *    re-derives it nor reads [Entry.plaintext], which is the raw text and would
+ *    render an indented Entry as a blank line. The raw text has exactly one
+ *    place on this screen, and it is [ReadingPanel] under an opened row.
  *  * **Undecryptable** comes from [Entry.undecryptable] and from nowhere else.
  *    Not from an empty Preview: an Entry whose plaintext is genuinely empty is
  *    indistinguishable from ciphertext this device has no key for to anything
@@ -536,8 +540,8 @@ private fun LazyListScope.entryRows(
 }
 
 /**
- * One readable Entry: a single tap target, and a Delete that has to be dragged
- * for.
+ * One readable Entry: a tap that opens its text, one control, and a Delete that
+ * has to be dragged for.
  *
  * **The row used to carry two word-buttons.** On a full screen that is twenty
  * targets, with the destructive one a thumb's width from the safe one and
@@ -549,6 +553,21 @@ private fun LazyListScope.entryRows(
  * The swipe panel carries [entryDeleteTag] because it *is* this row's delete —
  * exactly one node per row wears that tag, here or on the button an
  * [UndecryptableRow] draws instead.
+ *
+ * **A tap on the row reads the Entry** — see [ReadingPanel]. The 68dp band is
+ * the target and the `▸` in it is only the affordance, because a second
+ * clickable inside a row that already holds one control and hides another is a
+ * target a thumb misses by 4dp. The band and not the whole item: the panel it
+ * opens is text somebody is reading, and text that closed itself when touched
+ * could not be read at all.
+ *
+ * The open/closed choice is `rememberSaveable` rather than a field on [UiState],
+ * which is [ForegroundOnlyNote]'s rule and for its reason — reading changes
+ * nothing about the phone, so the state holder has no business owning a
+ * disclosure triangle. `LazyColumn` keys its saveable state by the item key, so
+ * a row scrolled past and back is still open, and so is one that survived a
+ * rotation. Rows are independent: nothing collapses one because another opened,
+ * because somebody comparing two Entries is exactly who opens two.
  */
 @Composable
 private fun EntryRow(
@@ -560,6 +579,11 @@ private fun EntryRow(
     onResend: (Entry) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Per row, and `rememberSaveable` rather than `remember` for the two reasons
+    // above: a rotation, and a lazy list that discards what it scrolls past.
+    var open by rememberSaveable { mutableStateOf(false) }
+    // Hoisted out of the semantics block below, which is not a composable scope.
+    val readLabel = stringResource(if (open) R.string.entry_read_close else R.string.entry_read)
     val swipe = rememberSwipeToDismissBoxState()
     // The list is the source of truth about which Entries exist. The swipe asks
     // for the delete and then springs back; the row leaves when the facade says
@@ -619,66 +643,197 @@ private fun EntryRow(
                     },
                 ),
         ) {
-            Row(
-                modifier = Modifier
+            // **The band is the tap target as a layer behind its content, not as
+            // its parent.** `Modifier.clickable` merges the semantics of
+            // everything beneath it, and this row's Preview and Origin each have
+            // to stay a node of their own: merged, a row is one undifferentiated
+            // utterance to a screen reader, and the *absence* of an Origin on a
+            // row this phone captured itself stops being assertable at all,
+            // because a merged-away node and a node that was never composed look
+            // identical from outside.
+            //
+            // A sibling underneath costs one layer and changes nothing in the
+            // tree. The content above it holds no pointer input of its own, so
+            // every tap that is not on the Recall control falls straight through
+            // to this — the same fall-through [DeleteBehindTheRow] is careful
+            // about, used on purpose here.
+            Box(
+                Modifier
                     .fillMaxWidth()
                     .height(Fui.RowHeight)
-                    .padding(end = Fui.RowInset),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    .semantics { isTraversalGroup = true },
             ) {
-                // The emitter's own rule, on the one row `RECALL FIRST` will
-                // hand over. Every other row is flush with the gutter.
-                if (first) {
-                    Box(Modifier.width(2.dp).fillMaxHeight().background(Fui.Cyan400))
-                }
-                Column(
-                    modifier = Modifier.weight(1f).padding(start = if (first) 12.dp else Fui.Gutter),
-                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .clickable(role = Role.Button) { open = !open }
+                        .semantics {
+                            // Named rather than left to an `onClickLabel`, which
+                            // is how [GlyphButton] names a control whose name is
+                            // its verb. The `▸` below says the same thing in one
+                            // character, and says it to nobody TalkBack is
+                            // reading to.
+                            contentDescription = readLabel
+                            // Reached last, where the `▸` is drawn. It is
+                            // declared first because it has to be *under* the
+                            // content for the Recall control to keep its own
+                            // taps, and drawing order is not reading order.
+                            traversalIndex = 1f
+                        }
+                        .testTag(entryReadTag(entry.id)),
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(end = Fui.RowInset),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(
-                        // The facade's Preview, verbatim — see `entryRows`.
-                        text = entry.preview,
-                        style = Fui.Data,
-                        color = if (first) Fui.TextPrimary else Fui.TextBody,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.testTag(entryPreviewTag(entry.id)),
-                    )
-                    if (entry.deviceId != ownDeviceId) {
+                    // The emitter's own rule, on the one row `RECALL FIRST` will
+                    // hand over. Every other row is flush with the gutter.
+                    if (first) {
+                        Box(Modifier.width(2.dp).fillMaxHeight().background(Fui.Cyan400))
+                    }
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = if (first) 12.dp else Fui.Gutter),
+                        verticalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
                         Text(
-                            // Resolved by the core: the Device Label, or a slice
-                            // of the Device id when the mirror has none.
-                            text = stringResource(R.string.entry_origin, entry.originLabel),
-                            style = Fui.Micro,
-                            color = Fui.TextMuted,
+                            // The facade's Preview, verbatim — see `entryRows`.
+                            text = entry.preview,
+                            style = Fui.Data,
+                            color = if (first) Fui.TextPrimary else Fui.TextBody,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.testTag(entryOriginTag(entry.id)),
+                            modifier = Modifier.testTag(entryPreviewTag(entry.id)),
+                        )
+                        if (entry.deviceId != ownDeviceId) {
+                            Text(
+                                // Resolved by the core: the Device Label, or a
+                                // slice of the Device id when the mirror has none.
+                                text = stringResource(R.string.entry_origin, entry.originLabel),
+                                style = Fui.Micro,
+                                color = Fui.TextMuted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.testTag(entryOriginTag(entry.id)),
+                            )
+                        }
+                    }
+                    // The affordance, not the target, and the same two glyphs the
+                    // pinned band above the list already draws — both of them in
+                    // the platform's own fonts on the minSdk floor, which is the
+                    // rule [Fui.Glyph] states and the reason a third triangle was
+                    // not chosen. Cleared from the semantics tree because the
+                    // layer underneath is already named for the same act, and a
+                    // triangle read out beside it would name it twice.
+                    Text(
+                        text = if (open) "▴" else "▸",
+                        style = Fui.Micro,
+                        color = Fui.TextMuted,
+                        modifier = Modifier.clearAndSetSemantics {},
+                    )
+                    if (first) {
+                        // Named, filled and wider, because this is the row the
+                        // verb bar acts on and a person should be able to see
+                        // which one that is before they press it.
+                        FuiButton(
+                            text = stringResource(R.string.entry_recall),
+                            onClick = { onRecall(entry) },
+                            solid = true,
+                            modifier = Modifier.width(96.dp).testTag(entryRecallTag(entry.id)),
+                        )
+                    } else {
+                        GlyphButton(
+                            glyph = "↓",
+                            onClick = { onRecall(entry) },
+                            contentDescription = stringResource(R.string.entry_recall),
+                            modifier = Modifier.testTag(entryRecallTag(entry.id)),
                         )
                     }
                 }
-                if (first) {
-                    // Named, filled and wider, because this is the row the verb
-                    // bar acts on and a person should be able to see which one
-                    // that is before they press it.
-                    FuiButton(
-                        text = stringResource(R.string.entry_recall),
-                        onClick = { onRecall(entry) },
-                        solid = true,
-                        modifier = Modifier.width(96.dp).testTag(entryRecallTag(entry.id)),
-                    )
-                } else {
-                    GlyphButton(
-                        glyph = "↓",
-                        onClick = { onRecall(entry) },
-                        contentDescription = stringResource(R.string.entry_recall),
-                        modifier = Modifier.testTag(entryRecallTag(entry.id)),
-                    )
-                }
             }
             entry.refusedReason?.let { RefusalLine(entry, it, onResend) }
+            if (open) ReadingPanel(entry)
             Hairline(color = Fui.CyanA08)
+        }
+    }
+}
+
+/**
+ * The Entry, whole, under the row that names it.
+ *
+ * The one place on this phone that renders [Entry.plaintext] rather than
+ * [Entry.preview], and the phone's half of ADR 0003: a Preview is one
+ * whitespace-flattened line of at most 80 characters, so three `ss://` URLs that
+ * diverge at character 60 are one row three times over until something shows the
+ * rest. The desktop answers that with a pane beside its list; a phone has no
+ * room beside anything, so the reader is the row, opened out.
+ *
+ * **It asks nothing and records nothing.** Reading an Entry is not a **Use**
+ * (CONTEXT.md), so nothing here reaches the facade, no Last Use moves, and no
+ * other device learns that this one looked. The text is already in the snapshot
+ * — the Filter matches this very field — so the reader is a rendering decision
+ * and not a data one, which is the argument ADR 0003 made about the wire and
+ * which holds here for nothing.
+ *
+ * Unmasked, deliberately, and for the desktop pane's reason: the row above
+ * prints the same first line and `RECALL` puts the real thing on the clipboard,
+ * so masking here would be theatre. It adds nothing to ADR 0009's accepted
+ * exposures either — this draws inside an app somebody has opened and over
+ * nothing at all, where the Recall Receipt draws over whatever was on screen.
+ *
+ * **No render cap, and that is measured rather than assumed.** The desktop's
+ * pane cuts its layout at 64 KiB because nothing there knew how large an Entry
+ * could be; capture refuses text over `MAX_BYTES`
+ * (`clients/core/src/capture/filter.rs`) and the Relay refuses ciphertext over
+ * `maxEntryBytes` (`server/src/server/routes/entries.ts`), both of them 64 KiB,
+ * so a cut of our own could only ever fire on an Entry this product cannot
+ * produce. The panel is one lazy item as tall as its text and the list scrolls
+ * it, which is also why it has no scroller of its own: a second vertical scroll
+ * inside the first is a gesture nobody can aim.
+ *
+ * [Fui.Recess] rather than the fill the row's Column hands down. A band cut into
+ * the screen is what this is, and it puts the text on the darkest surface in the
+ * palette. A pending row keeps its amber on the band that carries the state; the
+ * same 16% wash behind a screenful of text would be the queue shouting over a
+ * row somebody is trying to read.
+ *
+ * Exactly one node per open row wears [entryTextTag]: the text, or the sentence
+ * saying there is none. An Entry whose plaintext is the empty string is
+ * decryptable and perfectly real, and a panel that opened onto nothing would
+ * look like a reader that had failed. `null` cannot arrive here — that is the
+ * one fact that means Undecryptable, and such a row draws [UndecryptableRow]
+ * instead.
+ */
+@Composable
+private fun ReadingPanel(entry: Entry) {
+    val text = entry.plaintext.orEmpty()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Fui.Recess)
+            .padding(horizontal = Fui.Gutter, vertical = 12.dp),
+    ) {
+        if (text.isEmpty()) {
+            Text(
+                text = stringResource(R.string.entry_read_empty),
+                style = Fui.Micro,
+                color = Fui.TextMuted,
+                modifier = Modifier.testTag(entryTextTag(entry.id)),
+            )
+        } else {
+            Text(
+                // Verbatim, and this is the only place that is: the newlines, the
+                // indentation and the trailing space are part of what was copied,
+                // and the row above already carries the flattened line.
+                text = text,
+                style = Fui.Data,
+                color = Fui.TextBody,
+                modifier = Modifier.testTag(entryTextTag(entry.id)),
+            )
         }
     }
 }
@@ -1029,6 +1184,23 @@ fun entryPreviewTag(id: Long) = "entry-preview-$id"
 fun entryOriginTag(id: Long) = "entry-origin-$id"
 fun entryUndecryptableTag(id: Long) = "entry-undecryptable-$id"
 fun entryRecallTag(id: Long) = "entry-recall-$id"
+
+/**
+ * The 68dp band that reads the Entry, which is this row's one tap target.
+ *
+ * Distinct from [entryRowTag], which is the whole item and grows a panel of text
+ * under it: a test tapping the item's centre to close a long Entry would be
+ * tapping the text it had just opened.
+ */
+fun entryReadTag(id: Long) = "entry-read-$id"
+
+/**
+ * The Entry, whole, on an open row. Absent on a closed one.
+ *
+ * Exactly one node per open row: the plaintext verbatim, or the sentence saying
+ * the Entry holds no text at all.
+ */
+fun entryTextTag(id: Long) = "entry-text-$id"
 
 /**
  * This row's Delete, wherever it is.

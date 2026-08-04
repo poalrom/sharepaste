@@ -44,10 +44,12 @@ import com.sharepaste.android.ui.UiState
 import com.sharepaste.android.ui.entryDeleteTag
 import com.sharepaste.android.ui.entryOriginTag
 import com.sharepaste.android.ui.entryPreviewTag
+import com.sharepaste.android.ui.entryReadTag
 import com.sharepaste.android.ui.entryRecallTag
 import com.sharepaste.android.ui.entryRefusedTag
 import com.sharepaste.android.ui.entryResendTag
 import com.sharepaste.android.ui.entryRowTag
+import com.sharepaste.android.ui.entryTextTag
 import com.sharepaste.android.ui.entryUndecryptableTag
 import com.sharepaste.android.ui.filtered
 import com.sharepaste.android.ui.offerRefusalMessage
@@ -89,6 +91,9 @@ import org.junit.runner.RunWith
  * And **the Filter**, which is the one control on this screen that changes what
  * the list is rather than what it says: the rows it leaves, the count beside
  * the field, and the two different things an empty list can mean.
+ *
+ * And **the reader**, which is the one thing a row does that reaches nothing at
+ * all: a tap opens the Entry whole under it, and reading an Entry is not a Use.
  *
  * No facade behind any of it. A screen takes a [UiState] and an `AppActions`, so
  * every word is assertable without a Relay, a Pairing, or a device in a
@@ -653,6 +658,144 @@ class HistoryListTest {
         compose.waitUntil(5_000) { deleted.isNotEmpty() }
         assertEquals("the swipe must ask for exactly this Entry", listOf(4L), deleted)
         Evidence.log("delete swipe  = a completed drag asks for Entry 4 with no tap at all")
+    }
+
+    // -- reading an Entry -----------------------------------------------------
+
+    /**
+     * A tap on the row opens the Entry whole, under it, and a second tap closes
+     * it again.
+     *
+     * A row shows one flattened line of at most 80 characters, which is the
+     * Preview and is all a phone's width affords. Three `ss://` URLs that
+     * diverge at character 60 are then one row three times over until something
+     * shows the rest (ADR 0003) — the desktop reads in a pane beside its list,
+     * and a phone has no beside, so the reader is the row opened out.
+     *
+     * **The Preview line does not change when the panel opens.** It stays the
+     * facade's own flattened line: the raw text is what the panel is for, and a
+     * row that swapped one for the other would put an indented Entry's leading
+     * whitespace back on the list, which is the blank-row bug pinned above.
+     *
+     * **And reading reaches nothing.** Reading an Entry is not a Use
+     * (CONTEXT.md), so no verb fires and no Last Use moves. Asserted rather than
+     * left to a reading of the screen: a reader that quietly bumped what it
+     * opened would reorder the History on every paired device for somebody who
+     * only looked.
+     */
+    @Test
+    fun a_tap_on_a_row_opens_the_whole_entry_under_it_and_a_second_tap_closes_it() {
+        show(
+            UiState(
+                session = SessionPhase.InContact("u"),
+                entries = listOf(
+                    entry(id = 1, preview = normalisedPreview, plaintext = indentedPlaintext),
+                ),
+            ),
+        )
+
+        // Closed, and the panel is not composed at all rather than composed at
+        // no height — so this is a reading of the screen and not of a flag.
+        compose.onNodeWithTag(entryTextTag(1)).assertDoesNotExist()
+
+        compose.onNodeWithTag(entryReadTag(1)).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag(entryTextTag(1)).assertIsDisplayed()
+        compose.onNodeWithTag(entryTextTag(1)).assertTextEquals(indentedPlaintext)
+        compose.onNodeWithTag(entryPreviewTag(1)).assertTextEquals(normalisedPreview)
+
+        assertTrue(
+            "reading an Entry is not a Use: it must recall, delete and resend nothing",
+            recalled.isEmpty() && deleted.isEmpty() && resent.isEmpty(),
+        )
+
+        compose.onNodeWithTag(entryReadTag(1)).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag(entryTextTag(1)).assertDoesNotExist()
+        Evidence.log("read          = raw text under the row, the flattened line still on it")
+    }
+
+    /**
+     * There is nothing to read on a row this phone holds no key for, and it does
+     * not pretend otherwise.
+     *
+     * An Undecryptable Entry carries no plaintext at all — that missing
+     * plaintext *is* the flag — so the row says so inline and offers no target
+     * that could open onto it. A reader that opened an empty panel here would
+     * say "this Entry holds no text" about ciphertext, which is a different fact
+     * and the wrong one.
+     */
+    @Test
+    fun an_undecryptable_row_offers_nothing_to_read() {
+        show(
+            UiState(
+                session = SessionPhase.InContact("u"),
+                entries = listOf(entry(id = 7, preview = "", plaintext = null, undecryptable = true)),
+            ),
+        )
+
+        compose.onNodeWithTag(entryReadTag(7)).assertDoesNotExist()
+        compose.onNodeWithTag(entryTextTag(7)).assertDoesNotExist()
+        compose.onNodeWithTag(entryUndecryptableTag(7)).assertIsDisplayed()
+        Evidence.log("sealed        = no read target and no panel; the row says why inline")
+    }
+
+    /**
+     * An Entry whose text is genuinely the empty string says so when it is
+     * opened, rather than opening onto nothing.
+     *
+     * It is decryptable and perfectly real, and a panel that drew zero
+     * characters would read as a reader that had failed. The two states a blank
+     * panel would conflate are the two this list refuses to conflate anywhere
+     * else: an empty plaintext, and a missing key.
+     */
+    @Test
+    fun an_entry_that_holds_no_text_says_so_when_it_is_opened() {
+        show(
+            UiState(
+                session = SessionPhase.InContact("u"),
+                entries = listOf(entry(id = 8, preview = "", plaintext = "", undecryptable = false)),
+            ),
+        )
+
+        compose.onNodeWithTag(entryReadTag(8)).performClick()
+        compose.waitForIdle()
+
+        val empty = resources.getString(R.string.entry_read_empty)
+        compose.onNodeWithTag(entryTextTag(8)).assertTextEquals(empty)
+        compose.onNodeWithTag(entryUndecryptableTag(8)).assertDoesNotExist()
+        Evidence.log("empty         = \"$empty\", and not the sealed row's sentence")
+    }
+
+    /**
+     * A row that is open stays open when the History reorders under it.
+     *
+     * Rows are keyed by `entry.id` and `LazyColumn` keys its saveable state the
+     * same way, so being open belongs to the Entry rather than to the slot it is
+     * in. That is the whole reason it is state at all: a Use on another device
+     * reorders this list under a reader's thumb, and a panel that closed because
+     * its row moved would take away the text they were halfway through for a
+     * reason they never saw.
+     */
+    @Test
+    fun an_open_row_survives_the_history_reordering_under_it() {
+        val entries = listOf(
+            entry(id = 3, preview = "wg genkey | tee privatekey"),
+            entry(id = 2, preview = normalisedPreview, plaintext = indentedPlaintext),
+            entry(id = 1, preview = "the oldest one"),
+        )
+        show(UiState(session = SessionPhase.InContact("u"), entries = entries))
+
+        compose.onNodeWithTag(entryReadTag(2)).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag(entryTextTag(2)).assertTextEquals(indentedPlaintext)
+
+        // Entry 1 was used somewhere else, so it leads the History now: the same
+        // three Entries in a new order, with nobody touching the screen.
+        show(UiState(session = SessionPhase.InContact("u"), entries = entries.sortedBy { it.id }))
+
+        compose.onNodeWithTag(entryTextTag(2)).assertTextEquals(indentedPlaintext)
+        Evidence.log("reorder       = the row somebody was reading is still open")
     }
 
     /**

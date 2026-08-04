@@ -1,7 +1,7 @@
 # Android redesign — record
 
-**Superseded in part, 2026-08-02.** This record is unchanged and still describes what that
-effort built. Six of its statements have since been overtaken, and one has come right again:
+**Superseded in part, 2026-08-04.** This record is unchanged and still describes what that
+effort built. Seven of its statements have since been overtaken, and one has come right again:
 
 - **Decision 5** (`RECALL LATEST` *"must never hand over something stale"*), the verb in the
   layout diagram, and the emitter row's caption — the verb is `RECALL FIRST` and takes the
@@ -12,6 +12,10 @@ effort built. Six of its statements have since been overtaken, and one has come 
   to.
 - **The `ALREADY HERE` evidence line** — a repeat copy is a **Use**, not a refusal.
   [ADR 0012](adr/0012-a-repeat-copy-is-a-use.md).
+- **"One target at rest"**, and the row's *"One 48dp Recall target"* — a tap on the row opens
+  the Entry's whole text under it, so the band is a target as well. It reads and does nothing
+  else: reading an Entry is not a **Use**, so it reaches neither the clipboard nor the Relay,
+  and Delete is still armed only while the swipe holds it open.
 - **Unchanged after all:** *"scrolled to index 0 on a new Entry"*. The code had drifted to
   scrolling on any new head; keying it back on `EntryAdded` is what this line always said.
 
