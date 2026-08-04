@@ -7,6 +7,28 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.8.0
+
+**Android only.** Nothing on this machine changes, and the relay is not involved — so if you
+do not use the phone there is no reason to install this. The phone can *read* an entry now
+rather than only pick one.
+
+- **Tap a row to read the whole thing.** A row has room for one line, so anything longer
+  than the phone is wide was something you could recall but never read: three `ss://` URLs
+  that differ at character 60 looked identical, and the only way to tell which was which
+  was to put one on your clipboard and paste it somewhere to look. Tapping a row now opens
+  that entry's whole text underneath it — every line, indented as you copied it — and
+  tapping the row again closes it. The line on the row does not change, so a long history
+  still scans as one screenful.
+- **Reading is not using.** Opening an entry puts nothing on your clipboard, does not move
+  the entry to the top of your history, and tells your other machines nothing. Recall is
+  still the only thing that does any of that, which means you can go through a history
+  looking for something without rearranging it.
+- **A row you cannot read says which kind of nothing it is.** An entry that reached this
+  phone encrypted with a key it does not have offers nothing to open, as before. An entry
+  whose text really is empty now says so when you open it, rather than opening onto a blank
+  panel that looks like something failed.
+
 ## 0.7.1
 
 **Only the desktop changes. Your relay needs nothing.** A patch over 0.7.0, and all of it
