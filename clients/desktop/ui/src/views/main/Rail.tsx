@@ -50,7 +50,10 @@ export default function Rail({
           </button>
         ))}
       </div>
-      <div className="border-t border-hairline px-1.5 py-2.5 text-center font-mono text-chrome tracking-phrase text-text-dim">
+      <div
+        data-testid="rail-version"
+        className="border-t border-hairline px-1.5 py-2.5 text-center font-mono text-chrome tracking-phrase text-text-dim"
+      >
         v{version}
       </div>
     </nav>

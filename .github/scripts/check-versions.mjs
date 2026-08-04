@@ -67,11 +67,18 @@ function gradleVersionName(kts) {
  * **Deliberately not here**, so that the omissions read as decisions:
  *
  * - `clients/desktop/ui/package.json` (0.1.0, and has been since the 0.2.0
- *   release). Nothing reads it. Vite bundles the frontend into `dist/` and no
- *   version string from that manifest reaches an artifact, a wire header or a
- *   screen. Adding it would mean every release edits a fifth file whose number
- *   means nothing, and a gate that fails for cosmetic reasons is a gate people
- *   learn to re-run rather than read. Left drifted on purpose.
+ *   release). Nothing reads it: `vite.config.ts` injects `__APP_VERSION__`
+ *   from `tauri.conf.json`, the authority below, so the rail cannot disagree
+ *   with the artifact it was built into. Adding this manifest would mean every
+ *   release edits a fifth file whose number means nothing, and a gate that
+ *   fails for cosmetic reasons is a gate people learn to re-run rather than
+ *   read. Left drifted on purpose.
+ *
+ *   Until 0.7.0 that first sentence was false — vite read *this* file and the
+ *   rail printed v0.1.0 on every build from 0.2.0 on. The fix pointed vite at
+ *   the authority rather than adding a line here, because a number on screen
+ *   should come from the manifest that ships, not from a second one a gate
+ *   keeps in step.
  * - `clients/desktop/acl-tests/Cargo.toml` (0.1.0). A test-only crate with its
  *   own lockfile that is never built into anything shipped.
  * - `server/package.json`. The Relay is a different deliverable on its own

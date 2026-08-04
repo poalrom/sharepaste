@@ -6,6 +6,7 @@ import { usePairingsStore } from "../store/pairings";
 import { useHistoryStore } from "../store/history";
 import { useContactStore, useStatusStore } from "../store";
 import Main from "../views/Main";
+import tauri from "../../../src-tauri/tauri.conf.json" with { type: "json" };
 
 let ipc: MockIpc;
 
@@ -86,6 +87,17 @@ describe("Main shell", () => {
   it("has no rail item for the pairing route value", async () => {
     await renderMain();
     expect(screen.queryByTestId("rail-pairing")).toBeNull();
+  });
+
+  /*
+   * The rail is the only place the app states which build it is. It read
+   * `ui/package.json` until 0.7.0 and so said v0.1.0 for six releases; this
+   * pins it to the manifest the release gate makes every other version agree
+   * with, so the next drift fails here rather than on a user's screen.
+   */
+  it("prints the shipped version on the rail", async () => {
+    await renderMain();
+    expect(screen.getByTestId("rail-version")).toHaveTextContent(`v${tauri.version}`);
   });
 
   /*
