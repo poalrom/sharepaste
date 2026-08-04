@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -801,6 +802,53 @@ private fun EntryRow(
  * same 16% wash behind a screenful of text would be the queue shouting over a
  * row somebody is trying to read.
  *
+ * **The text can be selected, and only this text can.** A long press starts the
+ * platform's own selection and its menu — Copy, Select all — because a person who
+ * can see a whole Entry but can only take all of it has been shown the thing
+ * rather than handed it: the host out of a connection string, one line out of a
+ * config, a code out of a message somebody pasted here whole. `RECALL` is still
+ * how the Entry is taken entire, and this is how part of one is taken; the two do
+ * not overlap and neither replaces the other. The desktop's pane has done it from
+ * the day it shipped, because nothing in `styles.css` turns selection off in a
+ * webview — so this is the phone's half of ADR 0003 catching up to the other
+ * half, not a new idea about reading.
+ *
+ * The [SelectionContainer] is around this one text and not around the list, which
+ * would be the cheaper edit and the wrong one twice over: a selection that ran
+ * from one row into the next would compose a string out of two Entries that was
+ * never on anybody's clipboard, and `LazyColumn` discards what scrolls past, so a
+ * selection dragged off the top of the screen would end wherever the recycler
+ * happened to stop rather than where a finger did. One Entry is the unit somebody
+ * reads. The Preview on the row above stays unselectable for the same reason it
+ * is a tap target: it is a flattened line this app composed, not the text that
+ * was copied, and a long press competing with the tap that opens the row would
+ * put two gestures on one 68dp band.
+ *
+ * The sentence in the empty branch below is outside the container on purpose.
+ * Those are the app's words *about* an Entry rather than the Entry, and a menu
+ * offering to copy them offers to put a UI string on somebody's clipboard.
+ *
+ * **Copying is still not a Use.** Nothing here reaches the facade, and no phone
+ * runs a clipboard watcher (ADR 0007), so text taken out of this panel lands on
+ * the system clipboard and stops there. It becomes a Capture — or a **Use** of
+ * this very Entry, if what was taken was all of it (ADR 0012) — only when the
+ * person then presses `OFFER`, which is their act and not a consequence of having
+ * read. The clipboard exposure is the one ADR 0009 already owns for a Recall: the
+ * keyboard's own clipboard history keeps what it is handed, and this hands it the
+ * same kind of thing on the same unlocked phone.
+ *
+ * The highlight and the handles are the emitter colour with nothing said here to
+ * make them so: Material resolves both from `colorScheme.primary`, which
+ * [SharepasteTheme] points at [Fui.Cyan400]. No new token, and no second reading
+ * of "selected" in a client where a cyan wash already marks the row an act will
+ * land on.
+ *
+ * **The long press arms nothing else.** Delete is a horizontal drag, which the
+ * selection gesture does not begin to answer until a long press has already
+ * happened, so a swipe that starts on this text still reaches
+ * [DeleteBehindTheRow]. The tap that closes the row is on the band above and this
+ * panel sits outside it (see [EntryRow]), so the two cannot be the same touch.
+ *
  * Exactly one node per open row wears [entryTextTag]: the text, or the sentence
  * saying there is none. An Entry whose plaintext is the empty string is
  * decryptable and perfectly real, and a panel that opened onto nothing would
@@ -825,15 +873,20 @@ private fun ReadingPanel(entry: Entry) {
                 modifier = Modifier.testTag(entryTextTag(entry.id)),
             )
         } else {
-            Text(
-                // Verbatim, and this is the only place that is: the newlines, the
-                // indentation and the trailing space are part of what was copied,
-                // and the row above already carries the flattened line.
-                text = text,
-                style = Fui.Data,
-                color = Fui.TextBody,
-                modifier = Modifier.testTag(entryTextTag(entry.id)),
-            )
+            SelectionContainer {
+                Text(
+                    // Verbatim, and this is the only place that is: the newlines,
+                    // the indentation and the trailing space are part of what was
+                    // copied, and the row above already carries the flattened
+                    // line. It is also what a selection out of here hands over,
+                    // which is the whole point of taking it from this node and
+                    // not from the Preview.
+                    text = text,
+                    style = Fui.Data,
+                    color = Fui.TextBody,
+                    modifier = Modifier.testTag(entryTextTag(entry.id)),
+                )
+            }
         }
     }
 }

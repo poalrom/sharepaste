@@ -14,6 +14,7 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -58,6 +59,8 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -796,6 +799,145 @@ class HistoryListTest {
 
         compose.onNodeWithTag(entryTextTag(2)).assertTextEquals(indentedPlaintext)
         Evidence.log("reorder       = the row somebody was reading is still open")
+    }
+
+    /**
+     * A long press on an open Entry's text selects it.
+     *
+     * `RECALL` takes the Entry whole and was the only way to take any of it at
+     * all, so a person who can see the host in the middle of a connection string
+     * had been shown it rather than handed it. The desktop's pane has been
+     * selectable since it shipped, because a webview is; this is the phone's half
+     * of ADR 0003 doing the same.
+     *
+     * **Read off the screen and not off a flag**, because there is no flag to
+     * read: the platform draws the highlight, and the menu it offers over it is a
+     * window of the system's own that is in no semantics tree. So the assertion is
+     * that the press *painted* something over the text — the emitter-coloured wash
+     * [SharepasteTheme] resolves for a selection — and the menu itself was
+     * verified by hand on a device, because it is the platform's and not ours.
+     *
+     * The press lands mid-word by construction: the panel renders whitespace
+     * verbatim, and a long press on a blank line selects nothing anywhere in
+     * Android. That is the platform's rule and not this screen's, so the fixture
+     * puts text where the finger goes rather than the test asserting around it.
+     *
+     * **And selecting is still not a Use.** No phone runs a clipboard watcher
+     * (ADR 0007), so nothing here may reach a verb: text taken out of this panel
+     * lands on the clipboard, and only an `OFFER` after that is an act on the
+     * Entry.
+     */
+    @Test
+    fun the_text_of_an_open_entry_can_be_selected() {
+        // Three lines with words across the middle of the middle one, which is
+        // where `longClick` presses.
+        val conf = "server {\n  listen 443;\n}"
+        show(
+            UiState(
+                session = SessionPhase.InContact("u"),
+                entries = listOf(entry(id = 1, preview = "server {", plaintext = conf)),
+            ),
+        )
+        compose.onNodeWithTag(entryReadTag(1)).performClick()
+        compose.waitForIdle()
+
+        val unselected = compose.onNodeWithTag(entryTextTag(1)).captureToImage().toPixelMap()
+        compose.onNodeWithTag(entryTextTag(1)).performTouchInput { longClick() }
+        compose.waitForIdle()
+        val selected = compose.onNodeWithTag(entryTextTag(1)).captureToImage().toPixelMap()
+
+        val painted = repainted(unselected, selected)
+        val area = unselected.width * unselected.height
+        assertTrue(
+            "a long press must paint a selection over the text, and painted $painted of $area pixels",
+            painted > area / 100,
+        )
+
+        // Still open, still the same text: selecting is not closing.
+        compose.onNodeWithTag(entryTextTag(1)).assertTextEquals(conf)
+        assertTrue(
+            "selecting in the reader is not a Use: it must recall, delete and resend nothing",
+            recalled.isEmpty() && deleted.isEmpty() && resent.isEmpty(),
+        )
+        Evidence.log("select        = $painted of $area pixels washed by the selection, and no verb fired")
+    }
+
+    /**
+     * The sentence about an Entry holding no text is the app's own words, and
+     * they are not on offer.
+     *
+     * A selection over them offers to put a UI string on somebody's clipboard,
+     * which is the one thing in this panel that is not somebody's content. The
+     * container is around the Entry's text and not around the panel, and this is
+     * that difference read back: the same press, and not a pixel moves.
+     */
+    @Test
+    fun the_app_s_own_words_about_an_empty_entry_cannot_be_selected() {
+        show(
+            UiState(
+                session = SessionPhase.InContact("u"),
+                entries = listOf(entry(id = 8, preview = "", plaintext = "", undecryptable = false)),
+            ),
+        )
+        compose.onNodeWithTag(entryReadTag(8)).performClick()
+        compose.waitForIdle()
+
+        val before = compose.onNodeWithTag(entryTextTag(8)).captureToImage().toPixelMap()
+        compose.onNodeWithTag(entryTextTag(8)).performTouchInput { longClick() }
+        compose.waitForIdle()
+        val after = compose.onNodeWithTag(entryTextTag(8)).captureToImage().toPixelMap()
+
+        assertEquals("the app's own sentence must not select", 0, repainted(before, after))
+        Evidence.log("empty press   = a long press over the app's own sentence paints nothing")
+    }
+
+    /**
+     * How many pixels the two captures disagree on.
+     *
+     * A selection is a colour and nothing else — it carries no semantics and no
+     * node of its own — so the screen before and the screen after are the only
+     * things there are to compare. The bounds are taken from the smaller capture
+     * because a selection must not resize the text it is drawn over, and a test
+     * that crashed instead of failing would say that badly.
+     */
+    private fun repainted(before: PixelMap, after: PixelMap): Int {
+        var painted = 0
+        for (x in 0 until minOf(before.width, after.width)) {
+            for (y in 0 until minOf(before.height, after.height)) {
+                if (before[x, y] != after[x, y]) painted += 1
+            }
+        }
+        return painted
+    }
+
+    /**
+     * A swipe that starts on the text of an open row still deletes the Entry.
+     *
+     * The gesture the reader introduces is a long press, and Delete's is a
+     * horizontal drag on a row that now has a screenful of selectable text in
+     * the middle of it — `swipeLeft` starts at this node's centre, which is
+     * inside the panel. If selection answered a plain drag, the guard the swipe
+     * *is* would be unreachable on exactly the rows a person spends time on.
+     */
+    @Test
+    fun a_swipe_across_an_open_row_still_reaches_the_delete() {
+        show(
+            UiState(
+                session = SessionPhase.InContact("u"),
+                entries = listOf(
+                    entry(id = 4, preview = normalisedPreview, plaintext = indentedPlaintext),
+                ),
+            ),
+        )
+        compose.onNodeWithTag(entryReadTag(4)).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag(entryTextTag(4)).assertIsDisplayed()
+
+        compose.onNodeWithTag(entryRowTag(4)).performTouchInput { swipeLeft() }
+        compose.waitUntil(5_000) { deleted.isNotEmpty() }
+
+        assertEquals("the swipe must still ask for exactly this Entry", listOf(4L), deleted)
+        Evidence.log("open swipe    = a drag over the reader's own text still asks to delete 4")
     }
 
     /**
