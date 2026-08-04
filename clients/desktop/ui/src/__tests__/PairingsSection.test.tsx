@@ -77,6 +77,10 @@ describe("PairingsSection", () => {
     await renderPairings();
     expect(screen.getByText("alice")).toBeInTheDocument();
     expect(screen.getByText("bob")).toBeInTheDocument();
+    // Beneath the heading, the whole address — the heading names the User, and
+    // only this says which relay they are that user on.
+    expect(screen.getByText("alice@relay.one")).toBeInTheDocument();
+    expect(screen.getByText("bob@relay.two")).toBeInTheDocument();
     // An element reading exactly "Laptop" is a heading, and that is the bug.
     expect(screen.queryByText("Laptop")).toBeNull();
     expect(screen.getByText(/^THIS DEVICE: Laptop$/)).toBeInTheDocument();
@@ -86,6 +90,8 @@ describe("PairingsSection", () => {
     rows = [{ ...PAIRINGS[0]!, username: null }];
     await renderPairings();
     expect(screen.getByText("u-active")).toBeInTheDocument();
+    // The address falls back with it; a bare `@relay.one` would name nobody.
+    expect(screen.getByText("u-active@relay.one")).toBeInTheDocument();
   });
 
   /*
@@ -146,9 +152,11 @@ describe("PairingsSection", () => {
   /*
    * Two pairings can share a heading — `alice` on the production relay and
    * `alice` on a lab instance (ADR 0004) — and this is the one action that
-   * cannot be undone, so the strip names what the heading cannot.
+   * cannot be undone, so the strip names the relay, which the heading cannot.
+   * The username is enough on the left of the `@`: the relay's own
+   * `users.username` is UNIQUE, so a username and a host name one pairing.
    */
-  it("names user_id@host in the forget confirmation, not the shared heading", async () => {
+  it("names username@host in the forget confirmation, naming the relay the heading omits", async () => {
     rows = [
       { ...PAIRINGS[0]!, user_id: "u-prod", username: "alice", server_url: "https://relay.one", relay_host: "relay.one" },
       { ...PAIRINGS[1]!, user_id: "u-lab", username: "alice", server_url: "https://relay.lab", relay_host: "relay.lab" },
@@ -157,8 +165,9 @@ describe("PairingsSection", () => {
     fireEvent.click(screen.getByTestId("pair-forget-u-lab"));
 
     const strip = screen.getByTestId("confirm-strip-u-lab");
-    expect(strip).toHaveTextContent("u-lab@relay.lab");
-    expect(strip).not.toHaveTextContent("alice");
+    expect(strip).toHaveTextContent("alice@relay.lab");
+    // The whole point of the host: the other `alice` must not be what this reads as.
+    expect(strip).not.toHaveTextContent("relay.one");
   });
 
   it("CANCEL collapses the confirmation without invoking anything", async () => {

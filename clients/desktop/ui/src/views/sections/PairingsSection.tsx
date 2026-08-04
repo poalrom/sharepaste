@@ -125,11 +125,19 @@ export default function PairingsSection() {
                           </span>
                         )}
                       </div>
+                      {/*
+                        The heading is the User alone; this is the whole
+                        address, which is what a Pairing actually is. The
+                        username rather than the `user_id`: the relay's own
+                        `users.username` is UNIQUE, so `alice@relay.lab` picks
+                        out one pairing exactly as well as an opaque id does,
+                        and it is the form the footer and Settings already use.
+                      */}
                       <span
                         className="truncate font-mono text-chrome tracking-phrase text-text-muted"
                         title={p.server_url}
                       >
-                        {p.user_id}@{p.relay_host}
+                        {p.username ?? p.user_id}@{p.relay_host}
                       </span>
                       <span className="truncate font-mono text-chrome tracking-phrase text-text-dim">
                         THIS DEVICE: {p.label}
@@ -210,12 +218,15 @@ export default function PairingsSection() {
                     <span className="shrink-0 border border-alert-400 px-1.5 py-0.5 font-mono text-chrome tracking-word">
                       ALERT
                     </span>
-                    {/* Names the full user-and-relay, not the heading: two
-                        pairings can share a username and this is the one action
-                        that cannot be undone. */}
+                    {/* Names the relay too, which the heading cannot: two
+                        pairings can share a username — `alice` on production
+                        and `alice` on a lab instance (ADR 0004) — and this is
+                        the one action that cannot be undone. The host is what
+                        separates them; the relay's `users.username` is UNIQUE,
+                        so the pair names one pairing and no other. */}
                     <span className="my-1 flex-1 text-data normal-case tracking-phrase">
-                      Erase the local key and cached history for {p.user_id}@{p.relay_host}? The relay
-                      itself is untouched.
+                      Erase the local key and cached history for{" "}
+                      {`${p.username ?? p.user_id}@${p.relay_host}`}? The relay itself is untouched.
                     </span>
                     <button
                       type="button"
