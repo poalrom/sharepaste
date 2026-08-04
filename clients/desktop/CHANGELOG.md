@@ -7,6 +7,30 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.7.1
+
+**Only the desktop changes. Your relay needs nothing.** A patch over 0.7.0, and all of it
+is what the app was calling things: the build it says it is, and the way it writes the
+name of a person and a relay. Nothing on the phone moves, no relay contract is touched,
+and there is no order to update anything in.
+
+- **The version in the corner is the build you are running.** The main window's rail read
+  `v0.1.0` on every build from 0.2.0 through 0.7.0, because it took the number from a
+  manifest nobody bumps — while Settings, one pane over, asked the app itself and told you
+  the truth. The rail now reads the same manifest the release is cut from, so the two panes
+  cannot disagree again.
+- **An address is written the way an address is written.** Four places spelled you and your
+  relay as `alice @ relay.example`, with spaces around the `@` that no address has: the
+  clear-everything sentence in Settings, the pairing picker above History, and both the
+  identity line and the forget confirmation on a pairing card. The footer had it right all
+  along, so the same app spelled the same thing two ways on two panes at once.
+- **A pairing card names the person, not an id.** Those same two lines on the card called
+  you by the opaque id the relay filed you under — `u-lab@relay.lab` on one pane while the
+  footer, Settings and the History picker all said `alice@relay.lab`. Both now say your
+  username, and it still tells two same-named pairings apart, because the relay beside it
+  is what always did that. The id appears only for a pairing whose username has not
+  reached this machine yet.
+
 ## 0.7.0
 
 **Both clients. Your relay needs nothing.** Copying something while your relay is out of
