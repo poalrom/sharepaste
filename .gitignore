@@ -39,3 +39,4 @@ tmp-*.sqlite*
 # not ignore a nested worktree on its own — it reports the directory as untracked
 # — so without this rule every `git status` in the parent grows a phantom entry.
 .worktrees/
+.agents/
