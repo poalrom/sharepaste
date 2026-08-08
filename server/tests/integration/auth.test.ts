@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { provisionDevice, provisionLegacyDevice, withApp } from "../helpers.js";
+import { DeviceCredentials } from "../../src/server/device-credentials.js";
 
 describe("bearer authentication", () => {
   it("rejects without a token", () =>
@@ -45,7 +46,8 @@ describe("bearer authentication", () => {
   it("authenticates a device via the sha256 index", () =>
     withApp(async ({ app, repo }) => {
       const a = await provisionDevice(repo);
-      expect(repo.memberships.findByDeviceId(a.user_id, a.device_id)?.token_sha256).not.toBeNull();
+      // Nothing awaits the index, so the argon2 scan has no row to walk.
+      expect(DeviceCredentials.awaitingIndex(repo)).toBe(0);
 
       const res = await app.inject({
         method: "GET",
@@ -58,7 +60,7 @@ describe("bearer authentication", () => {
   it("authenticates a legacy argon2-only device and backfills the index", () =>
     withApp(async ({ app, repo }) => {
       const a = await provisionLegacyDevice(repo);
-      expect(repo.memberships.findByDeviceId(a.user_id, a.device_id)?.token_sha256).toBeNull();
+      expect(DeviceCredentials.awaitingIndex(repo)).toBe(1);
 
       const res = await app.inject({
         method: "GET",
@@ -66,7 +68,7 @@ describe("bearer authentication", () => {
         headers: { authorization: `Bearer ${a.device_token}` },
       });
       expect(res.statusCode).toBe(200);
-      expect(repo.memberships.findByDeviceId(a.user_id, a.device_id)?.token_sha256).not.toBeNull();
+      expect(DeviceCredentials.awaitingIndex(repo)).toBe(0);
     }));
 
   it("rejects a token passed as a query parameter", () =>

@@ -1,11 +1,21 @@
 import { useEffect, useRef } from "react";
-import { useActivePairing, useFilteredEntries, useHistoryStore, useUiStore } from "../store";
+import {
+  atHistoryCap,
+  HISTORY_CAP,
+  useActivePairing,
+  useFilteredEntries,
+  useHistoryStore,
+  useUiStore,
+} from "../store";
 import { useNow } from "../lib/useNow";
-import EntryRow, { copyEntry, deleteEntry } from "./EntryRow";
+import EntryRow, { copyEntry, deleteEntry, type RowMetrics } from "./EntryRow";
 import { PanelMessage } from "./fui";
 
-/** The prune cap enforced in `store/history.ts`; the sentinel explains it in situ. */
-const CACHE_CAP = 100;
+/**
+ * This list's own two measurements: ten rows and a sliver in 360px of popover
+ * (ADR 0002), which is what makes it the tighter of the two.
+ */
+const ROW_METRICS: RowMetrics = { gap: "gap-2", index: "w-4" };
 
 export default function HistoryList() {
   const entries = useHistoryStore((s) => s.entries);
@@ -85,20 +95,25 @@ export default function HistoryList() {
           ownDeviceId={ownDeviceId}
           now={now}
           onPoint={() => setSelectedIndex(i)}
+          // A pick, in one motion: copy it and get the window out of the way
+          // (ADR 0002). The popover has nothing beside the list to read from,
+          // so the row carries both the verbs and the Preview's own tooltip.
+          onActivate={() => void copyEntry(e, { keepOpen: false })}
+          controls
+          previewTooltip
+          metrics={ROW_METRICS}
           ref={i === selectedIndex ? selectedRef : undefined}
         />
       ))}
       {/*
-        Counted over the settled rows alone. The sentinel is a statement about
-        *retention* — the hundred rows the relay has ordered — and the caps no
-        longer bound the un-flushed region at all: an act this device has not
-        delivered is undelivered clipboard content, and evicting one to protect a
-        display invariant is the trade ADR 0014 refuses. Counting every row would
-        fire this at a page of offline captures, about a cap that has not bitten.
+        Only at the cap, and only unfiltered: a person with nine entries must
+        never be shown a limit that has not bitten them, and a filtered list is
+        short for a reason of the reader's own making. Which rows the cap counts
+        is `atHistoryCap`'s and stated there.
       */}
-      {!filter.trim() && entries.filter((e) => !e.pending).length >= CACHE_CAP && (
+      {!filter.trim() && atHistoryCap(entries) && (
         <li className="px-3 py-2 text-center text-chrome tracking-phrase text-text-dim">
-          — OLDEST OF {CACHE_CAP} CACHED —
+          — OLDEST OF {HISTORY_CAP} CACHED —
         </li>
       )}
     </ul>

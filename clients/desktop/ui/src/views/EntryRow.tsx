@@ -5,6 +5,22 @@ import { relativeAge } from "../lib/format";
 import { useHistoryStore, useUiStore } from "../store";
 import { IconButton } from "./fui";
 
+/**
+ * The two measurements a row does not get to choose.
+ *
+ * A picker's row sits in 360px of popover and a reader's row in 980px of
+ * window, so the two breathe differently — the same argument ADR 0013 makes
+ * about the two hint strips, which were never one component for exactly this
+ * reason. Each list states its own, because the row is never told which window
+ * it is in.
+ */
+export type RowMetrics = {
+  /** Space between the row's slots. */
+  gap: string;
+  /** Width of the zero-padded index column. */
+  index: string;
+};
+
 export type EntryRowProps = {
   entry: EntryView;
   /** 1-based position in the visible list, rendered zero-padded. */
@@ -16,6 +32,30 @@ export type EntryRowProps = {
   now: number;
   /** Pointing at a row addresses it, so the controls are always one motion away. */
   onPoint: () => void;
+  /**
+   * What a click on the row means, which is the one thing the two lists most
+   * disagree about. A picker is opened to take something out of it, so a click
+   * copies and gets the window out of the way (ADR 0002); a reader is a
+   * document you walk, so a click only addresses the row and the pane beside it
+   * is what copies (ADR 0003).
+   */
+  onActivate: () => void;
+  /**
+   * Whether the addressed row carries the controls column.
+   *
+   * The picker's row is the only place its reader can act from. The Main
+   * Window's pane already offers the same three verbs beside the list, and a
+   * second ✕ for one Entry is two places to look for the same act.
+   */
+  controls: boolean;
+  /**
+   * Whether the Preview carries its own tooltip — the untruncated counterpart
+   * of a line that reads as one truncated line, as the Origin beside it always
+   * has. Only a list with nothing else on screen holding the text has to supply
+   * one: the Main Window's pane *is* that counterpart (ADR 0003).
+   */
+  previewTooltip: boolean;
+  metrics: RowMetrics;
 };
 
 /**
@@ -107,10 +147,11 @@ export async function resendEntry(entry: EntryView): Promise<void> {
  * Refused wins over Undecryptable on a row that is both: it is the one of the
  * two that can be acted on.
  *
- * Exported because the popover's row and the main window's own `<li>` both make
- * this decision, and two copies of it are how they would start disagreeing.
+ * Private, now that one row serves both lists. It was exported while each of
+ * them made this decision for itself, which is how the two would have come to
+ * disagree about it.
  */
-export type TimeSlot =
+type TimeSlot =
   /** A refusal, or a key this device does not hold: the slot's only alert-red. */
   | { tone: "alert"; text: string }
   /** The age the relay stamped, which the Origin joins when it is elsewhere. */
@@ -118,7 +159,7 @@ export type TimeSlot =
   /** The relay has never stamped this entry, so it has nothing to say. */
   | { tone: "silent" };
 
-export function timeSlot(entry: EntryView, now: number): TimeSlot {
+function timeSlot(entry: EntryView, now: number): TimeSlot {
   if (entry.refused_reason !== null) return { tone: "alert", text: entry.refused_reason };
   if (entry.undecryptable) return { tone: "alert", text: "KEY MISMATCH" };
   if (entry.last_use === 0) return { tone: "silent" };
@@ -126,8 +167,7 @@ export function timeSlot(entry: EntryView, now: number): TimeSlot {
 }
 
 /**
- * The slot's alert-red treatment, shared by both lists for the same reason
- * [`timeSlot`] is.
+ * The slot's alert-red treatment, on the one row both lists render.
  *
  * Bounded and truncated, because a refusal reason is the relay's prose rather
  * than one of this shell's own words. 40% of the row leaves every refusal ADR
@@ -135,11 +175,22 @@ export function timeSlot(entry: EntryView, now: number): TimeSlot {
  * one off the Preview, which is what says *which* entry was turned down. The
  * tooltip is the untruncated counterpart, as it is for the Origin beside it.
  */
-export const ALERT_SLOT =
+const ALERT_SLOT =
   "max-w-[40%] shrink-0 truncate text-chrome uppercase tracking-phrase text-alert-400";
 
 const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
-  { entry, index, selected, ownDeviceId, now, onPoint },
+  {
+    entry,
+    index,
+    selected,
+    ownDeviceId,
+    now,
+    onPoint,
+    onActivate,
+    controls,
+    previewTooltip,
+    metrics,
+  },
   ref,
 ) {
   const { undecryptable } = entry;
@@ -153,15 +204,15 @@ const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
       data-testid="entry-row"
       data-selected={selected}
       data-pending={entry.pending}
-      className="fui-row flex cursor-default items-center gap-2 px-3"
+      className={`fui-row flex cursor-default items-center px-3 ${metrics.gap}`}
       // Movement, not enter: keyboard nav scrolls rows under a resting pointer,
       // and mouseenter would fire on that and snatch the selection back.
       onMouseMove={onPoint}
-      onClick={() => void copyEntry(entry, { keepOpen: false })}
+      onClick={onActivate}
     >
       {/* Dim measures 4.35:1 on the selected background, just under (plan §1). */}
       <span
-        className={`w-4 shrink-0 font-mono text-chrome tabular-nums ${selected ? "text-text-emitter" : "text-text-dim"}`}
+        className={`${metrics.index} shrink-0 font-mono text-chrome tabular-nums ${selected ? "text-text-emitter" : "text-text-dim"}`}
       >
         {String(index).padStart(2, "0")}
       </span>
@@ -173,7 +224,7 @@ const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
       ) : (
         <span
           className="min-w-0 flex-1 truncate font-mono text-data text-text-body"
-          title={entry.preview}
+          title={previewTooltip ? entry.preview : undefined}
         >
           {entry.preview}
         </span>
@@ -205,12 +256,12 @@ const EntryRow = forwardRef<HTMLLIElement, EntryRowProps>(function EntryRow(
       )}
 
       {/*
-        Only the addressed row carries controls. Reserving the column on every
-        row would leave a 44px hole to the right of every timestamp, and paying
-        for it in opacity left two invisible-but-clickable buttons on each
-        unaddressed row.
+        Only the addressed row of a list that asked for the column carries
+        controls. Reserving it on every row would leave a 44px hole to the right
+        of every timestamp, and paying for it in opacity left two
+        invisible-but-clickable buttons on each unaddressed row.
       */}
-      {selected && (
+      {controls && selected && (
         <span className="flex shrink-0 items-center gap-1">
           {!undecryptable && (
             <IconButton

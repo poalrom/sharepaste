@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import sensible from "@fastify/sensible";
 import type { Repository } from "../db/repository.js";
 import type { SseHub } from "./sse-hub.js";
+import type { EntryRules } from "./refusal.js";
 import { registerClaimInviteRoute } from "./routes/claim-invite.js";
 import { registerDeviceRoutes } from "./routes/devices.js";
 import { registerEntryRoutes } from "./routes/entries.js";
@@ -14,13 +15,13 @@ export interface AppDeps {
   pairingTtlMs: number;
   maxEntries: number;
   maxEntryAgeMs: number;
-  maxEntryBytes: number;
+  entryRules: EntryRules;
   maxPairingFailures: number;
   logger: boolean | object;
 }
 
 export const buildApp = async (deps: AppDeps): Promise<FastifyInstance> => {
-  const app = Fastify({ logger: deps.logger, bodyLimit: 1024 * 1024 });
+  const app = Fastify({ logger: deps.logger, bodyLimit: deps.entryRules.bodyLimit });
   await app.register(sensible);
   app.decorate("deps", deps);
 

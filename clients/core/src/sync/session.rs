@@ -46,21 +46,21 @@
 //!    withdrawing it — and a **Refused** act stays in it, undeliverable, until it
 //!    is resent or deleted (ADR 0015).
 //!
-//! 1 to 3 are testable with no relay running because [`SessionTransport`] is a
-//! trait; 4 splits across [`Uploader`] and storage, and needs no network at all.
+//! 1 to 3 are testable with no relay running because [`Relay`] is a trait; 4
+//! splits across [`Uploader`] and storage, and needs no network at all.
 
 use crate::crypto::UserKey;
 use crate::errors::AppError;
 use crate::event::{CoreEvent, Entry, Queued};
-use crate::http::dto::{EntryRow, MeResp};
-use crate::http::ServerClient;
+use crate::http::dto::EntryRow;
 use crate::platform::EventSink;
+use crate::relay::Relay;
 use crate::storage::devices::DeviceRecord;
-use crate::storage::{accounts, devices, entries_cache, pending};
+use crate::storage::history::{self, Change};
+use crate::storage::{accounts, devices};
 use crate::sync::state::should_persist_contact;
-use crate::sync::uploader::{UploadTransport, Uploaded, Uploader, UploaderExit, Used};
+use crate::sync::uploader::{Uploader, UploaderExit};
 use crate::sync::{decryptor, sse, BackoffPlan, ConnectionState};
-use async_trait::async_trait;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -82,107 +82,6 @@ const MIRROR_REFRESH_DEBOUNCE: Duration = Duration::from_secs(60);
 /// the batch rather than on the catch-up: a device that missed more keeps
 /// fetching on the next iteration, from the watermark this one advanced to.
 const BACKFILL_LIMIT: u32 = 500;
-
-/// Everything a session needs from the relay.
-///
-/// The same reason `UploadTransport` exists, applied to the rest of the loop:
-/// with the HTTP client behind a trait, invariants 1 to 3 in this module's
-/// header are testable with no relay running, which is the only way they get a
-/// test at all. There is exactly one production implementation,
-/// [`ServerSession`].
-#[async_trait]
-pub trait SessionTransport: Send + Sync {
-    async fn list_entries(&self, since_seq: i64, limit: u32) -> Result<Vec<EntryRow>, AppError>;
-    async fn me(&self) -> Result<MeResp, AppError>;
-    /// Stream server events until cancelled or the connection drops.
-    ///
-    /// `contact` is stamped from *inside* the implementation, below whatever
-    /// parses the frames — see [`sse::run`].
-    async fn stream(
-        &self,
-        sink: mpsc::Sender<sse::ServerEvent>,
-        cancel: CancellationToken,
-        contact: Arc<AtomicI64>,
-    ) -> Result<(), AppError>;
-    async fn upload(&self, ciphertext_b64: &str) -> Result<Uploaded, AppError>;
-    /// Record a **Use**: the entry becomes the head of the History everywhere.
-    async fn use_entry(&self, entry_id: i64) -> Result<Used, AppError>;
-    /// Take one entry off the relay.
-    ///
-    /// On the session's transport for the withdrawal race alone: a delete issued
-    /// while an upload was in flight leaves the relay holding an act nobody
-    /// wants, and the uploader is the only thing that knows the relay took it.
-    async fn delete_entry(&self, entry_id: i64) -> Result<(), AppError>;
-}
-
-/// The one production [`SessionTransport`]: a session over the pairing's
-/// authenticated connection.
-pub struct ServerSession(pub ServerClient);
-
-#[async_trait]
-impl SessionTransport for ServerSession {
-    async fn list_entries(&self, since_seq: i64, limit: u32) -> Result<Vec<EntryRow>, AppError> {
-        self.0.list_entries(since_seq, limit).await
-    }
-
-    async fn me(&self) -> Result<MeResp, AppError> {
-        self.0.me().await
-    }
-
-    async fn stream(
-        &self,
-        sink: mpsc::Sender<sse::ServerEvent>,
-        cancel: CancellationToken,
-        contact: Arc<AtomicI64>,
-    ) -> Result<(), AppError> {
-        sse::run(self.0.clone(), sink, cancel, contact).await
-    }
-
-    async fn upload(&self, ciphertext_b64: &str) -> Result<Uploaded, AppError> {
-        self.0
-            .post_entry(ciphertext_b64)
-            .await
-            .map(|r| Uploaded {
-                id: r.id,
-                created_at: r.created_at,
-                seq: r.seq,
-                last_use: r.last_use,
-            })
-    }
-
-    async fn use_entry(&self, entry_id: i64) -> Result<Used, AppError> {
-        self.0
-            .use_entry(entry_id)
-            .await
-            .map(|r| Used { seq: r.seq, last_use: r.last_use })
-    }
-
-    async fn delete_entry(&self, entry_id: i64) -> Result<(), AppError> {
-        self.0.delete_entry(entry_id).await
-    }
-}
-
-/// Lets the uploader keep its own narrow transport trait while a session hands
-/// it the one it already has.
-///
-/// Trait upcasting would do this for free, but it landed after the rust-version
-/// this crate pins.
-struct UploadVia(Arc<dyn SessionTransport>);
-
-#[async_trait]
-impl UploadTransport for UploadVia {
-    async fn upload(&self, ciphertext_b64: &str) -> Result<Uploaded, AppError> {
-        self.0.upload(ciphertext_b64).await
-    }
-
-    async fn use_entry(&self, entry_id: i64) -> Result<Used, AppError> {
-        self.0.use_entry(entry_id).await
-    }
-
-    async fn delete_entry(&self, entry_id: i64) -> Result<(), AppError> {
-        self.0.delete_entry(entry_id).await
-    }
-}
 
 /// Whether this session's relay serves `GET /me` at all — the one
 /// implementation of invariant 2.
@@ -455,11 +354,11 @@ fn flush_contact(
 /// Best-effort by design: a relay older than this client has no `/me`, and a
 /// session that cannot label its Origins is still a working session — rows
 /// fall back to a device-id slice and the footer to the opaque user id.
-async fn mirror_me(ctx: &SessionCtx, transport: &dyn SessionTransport) {
+async fn mirror_me(ctx: &SessionCtx, relay: &dyn Relay) {
     if !ctx.mirror_route.present() {
         return;
     }
-    let me = match transport.me().await {
+    let me = match relay.me().await {
         Ok(me) => me,
         // 404 is the relay saying it has no such route, which no amount of
         // retrying changes. Said once, then latched off for this session.
@@ -500,7 +399,7 @@ async fn mirror_me(ctx: &SessionCtx, transport: &dyn SessionTransport) {
 /// broken read cannot turn into a request loop.
 async fn refresh_mirror_if_unknown(
     ctx: &SessionCtx,
-    transport: &dyn SessionTransport,
+    relay: &dyn Relay,
     device_id: &str,
 ) {
     let known = {
@@ -508,19 +407,19 @@ async fn refresh_mirror_if_unknown(
         devices::is_mirrored(&conn, &ctx.user_id, device_id).unwrap_or(true)
     };
     if !known && ctx.claim_mirror_refresh() {
-        mirror_me(ctx, transport).await;
+        mirror_me(ctx, relay).await;
     }
 }
 
 /// Start the sync session for `ctx.user_id`, cancelling whichever one it
 /// already had.
 ///
-/// Split from `Sharepaste::start_session` at the transport: choosing the
+/// Split from `Sharepaste::start_session` at the Relay: choosing the
 /// pairing and unlocking its key is the facade's business, everything from here
 /// down is the protocol's, and the seam is what makes the protocol testable.
 pub(crate) fn spawn_session(
     ctx: SessionCtx,
-    transport: Arc<dyn SessionTransport>,
+    relay: Arc<dyn Relay>,
     user_key: UserKey,
 ) {
     let cancel = CancellationToken::new();
@@ -542,13 +441,13 @@ pub(crate) fn spawn_session(
     let spawn = ctx.state.spawn.clone();
     spawn.spawn(run_sse_loop(
         ctx.clone(),
-        transport.clone(),
+        relay.clone(),
         user_key,
         cancel.clone(),
         upload_trigger.clone(),
     ));
     // Pending-queue uploader on its own task.
-    spawn.spawn(run_uploader(ctx, transport, cancel, upload_trigger));
+    spawn.spawn(run_uploader(ctx, relay, cancel, upload_trigger));
 }
 
 /// How long [`drain_pending`] will wait for the queue before giving up on it.
@@ -559,7 +458,7 @@ pub(crate) fn spawn_session(
 /// and the fallback is a correct answer, just this device's own.
 const DRAIN_BOUND: Duration = Duration::from_secs(5);
 
-/// Empty this pairing's queue over one transport, bounded, and report whether it
+/// Empty this pairing's queue over one Relay, bounded, and report whether it
 /// emptied.
 ///
 /// The reason it exists: `recall_latest` cannot compare a local act with a remote
@@ -575,18 +474,18 @@ pub(crate) async fn drain_pending(
     state: &SessionState,
     events: Arc<dyn EventSink>,
     user_id: &str,
-    transport: Arc<dyn SessionTransport>,
+    relay: Arc<dyn Relay>,
 ) -> Result<(), AppError> {
     {
         let conn = state.conn.lock().await;
-        if pending::count(&conn, user_id)? == 0 {
+        if history::depth(&conn, user_id)? == 0 {
             return Ok(());
         }
     }
     let up = Uploader {
         user_id: user_id.to_string(),
         conn: state.conn.clone(),
-        transport: Arc::new(UploadVia(transport)),
+        relay,
         // Never notified: this uploader is driven once, by hand.
         trigger: Arc::new(Notify::new()),
         events,
@@ -618,7 +517,7 @@ pub(crate) async fn backfill(
     events: &dyn EventSink,
     user_id: &str,
     user_key: &UserKey,
-    transport: &dyn SessionTransport,
+    relay: &dyn Relay,
 ) -> Result<(), AppError> {
     let last_seen = {
         let conn = state.conn.lock().await;
@@ -628,7 +527,7 @@ pub(crate) async fn backfill(
             .map(|a| a.last_seen_seq)
             .unwrap_or(0)
     };
-    let rows = transport.list_entries(last_seen, BACKFILL_LIMIT).await?;
+    let rows = relay.list_entries(last_seen, BACKFILL_LIMIT).await?;
     // Scoped so the database guard is gone before anything reaches the sink:
     // see `EventSink`.
     let advanced = {
@@ -657,9 +556,7 @@ pub(crate) async fn backfill(
         }
         advanced
     };
-    if advanced {
-        events.emit(CoreEvent::HistoryChanged { user_id: user_id.to_string() });
-    }
+    history::announce(events, user_id, &Change::reorder(advanced));
     Ok(())
 }
 
@@ -671,7 +568,7 @@ pub(crate) async fn backfill(
 /// resets it and marks the pairing online.
 async fn run_sse_loop(
     ctx: SessionCtx,
-    transport: Arc<dyn SessionTransport>,
+    relay: Arc<dyn Relay>,
     user_key: UserKey,
     cancel: CancellationToken,
     upload_trigger: Arc<Notify>,
@@ -694,7 +591,7 @@ async fn run_sse_loop(
             ctx.events.as_ref(),
             &ctx.user_id,
             &user_key,
-            transport.as_ref(),
+            relay.as_ref(),
         )
         .await
         {
@@ -722,18 +619,18 @@ async fn run_sse_loop(
             }
         }
 
-        mirror_me(&ctx, transport.as_ref()).await;
+        mirror_me(&ctx, relay.as_ref()).await;
         ctx.set_conn_state(ConnectionState::Online, None);
         backoff.reset();
         // Server reachable again — push any queued entries.
         upload_trigger.notify_one();
 
         let (tx, mut rx) = mpsc::channel::<sse::ServerEvent>(64);
-        let transport_for_sse = transport.clone();
+        let relay_for_sse = relay.clone();
         let cancel_for_sse = cancel.clone();
         let contact_for_sse = contact.clone();
         let sse_handle = ctx.state.spawn.spawn(async move {
-            transport_for_sse
+            relay_for_sse
                 .stream(tx, cancel_for_sse, contact_for_sse)
                 .await
         });
@@ -744,13 +641,13 @@ async fn run_sse_loop(
                 ev = rx.recv() => match ev {
                     None => break 'recv,
                     Some(sse::ServerEvent::Entry { id, ciphertext, created_at, device_id, seq, last_use }) => {
-                        refresh_mirror_if_unknown(&ctx, transport.as_ref(), &device_id).await;
+                        refresh_mirror_if_unknown(&ctx, relay.as_ref(), &device_id).await;
                         let row = EntryRow {
                             id, ciphertext, created_at, device_id: device_id.clone(), seq, last_use,
                         };
                         // Scoped so the database guard is gone before anything
                         // reaches the sink: see `EventSink`.
-                        let (added, reordered) = {
+                        let (added, change) = {
                             let conn = ctx.state.conn.lock().await;
                             match decryptor::ingest(&conn, &user_key, &ctx.user_id, &row, crate::now_ms()) {
                                 Ok(out) => {
@@ -794,11 +691,11 @@ async fn run_sse_loop(
                                             Queued::Settled,
                                         )
                                     });
-                                    (added, out.stored.moved)
+                                    (added, out.stored.change)
                                 }
                                 Err(e) => {
                                     tracing::warn!(err = %e, "ingest failed");
-                                    (None, false)
+                                    (None, Change::reorder(false))
                                 }
                             }
                         };
@@ -807,11 +704,7 @@ async fn run_sse_loop(
                                 user_id: ctx.user_id.clone(), entry,
                             });
                         }
-                        if reordered {
-                            ctx.events.emit(CoreEvent::HistoryChanged {
-                                user_id: ctx.user_id.clone(),
-                            });
-                        }
+                        history::announce(&*ctx.events, &ctx.user_id, &change);
                     }
                     Some(sse::ServerEvent::Delete { id }) => {
                         // The frame names the relay's id; the shells know the
@@ -819,12 +712,9 @@ async fn run_sse_loop(
                         // row is gone.
                         let local_id = {
                             let conn = ctx.state.conn.lock().await;
-                            let local_id =
-                                entries_cache::local_id_for(&conn, &ctx.user_id, id).ok().flatten();
-                            if let Some(local_id) = local_id {
-                                let _ = entries_cache::delete_one(&conn, &ctx.user_id, local_id);
-                            }
-                            local_id
+                            history::forget_relay_entry(&conn, &ctx.user_id, id)
+                                .ok()
+                                .flatten()
                         };
                         if let Some(entry_id) = local_id {
                             ctx.events.emit(CoreEvent::EntryDeleted {
@@ -860,14 +750,14 @@ async fn run_sse_loop(
 /// already exist, and never decrypts anything.
 async fn run_uploader(
     ctx: SessionCtx,
-    transport: Arc<dyn SessionTransport>,
+    relay: Arc<dyn Relay>,
     cancel: CancellationToken,
     upload_trigger: Arc<Notify>,
 ) {
     let up = Uploader {
         user_id: ctx.user_id.clone(),
         conn: ctx.state.conn.clone(),
-        transport: Arc::new(UploadVia(transport)),
+        relay,
         trigger: upload_trigger.clone(),
         events: ctx.events.clone(),
     };
@@ -884,6 +774,7 @@ async fn run_uploader(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::dto::MeResp;
     use crate::storage::open_in_memory;
     use crate::testing::{unstorable_row, RecordingSink, ScriptedRelay, Wire};
     use rusqlite::Connection;
@@ -1116,7 +1007,7 @@ mod tests {
         assert_eq!(last_seen(&ctx).await, 99, "and the watermark follows the new sequence");
 
         let conn = ctx.state.conn.lock().await;
-        let head = entries_cache::list_recent(&conn, "u", None, 1).unwrap();
+        let head = history::page(&conn, "u", None, 1).unwrap();
         assert_eq!(head[0].last_use, captured.last_use + 60_000);
         assert_eq!(head[0].created_at, captured.created_at, "a use leaves identity alone");
     }

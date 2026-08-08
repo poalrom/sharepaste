@@ -1,5 +1,5 @@
 use crate::crypto::{random_user_key, UserKey};
-use crate::http::ServerClient;
+use crate::relay::Relay;
 use crate::keychain::{token_account, user_key_account, Keychain};
 use crate::storage::accounts::{upsert as upsert_account, Account};
 use crate::errors::AppError;
@@ -14,16 +14,16 @@ pub struct ClaimedPairing {
 }
 
 pub async fn claim_invite(
-    server: &ServerClient,
+    relay: &dyn Relay,
     token: &str,
     device_label: &str,
 ) -> Result<ClaimedPairing, AppError> {
-    let resp = server.claim_invite(token, device_label).await?;
+    let resp = relay.claim_invite(token, device_label).await?;
     Ok(ClaimedPairing {
         user_id: resp.user_id,
         device_id: resp.device_id,
         device_token: resp.device_token,
-        server_url: server.base().to_string(),
+        server_url: relay.base_url(),
         user_key: random_user_key(),
     })
 }

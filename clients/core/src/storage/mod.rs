@@ -1,8 +1,7 @@
 pub mod accounts;
 pub mod devices;
-pub mod entries_cache;
+pub mod history;
 pub mod migrations;
-pub mod pending;
 pub mod settings;
 
 use crate::errors::AppError;

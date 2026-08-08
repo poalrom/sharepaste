@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { mockIpc, type MockIpc } from "./helpers";
-import { usePairingsStore, useHistoryStore, useUiStore } from "../store";
+import { HISTORY_CAP, usePairingsStore, useHistoryStore, useUiStore } from "../store";
 import type { EntryView } from "../types";
 import HistoryList from "../views/HistoryList";
 
@@ -258,7 +258,7 @@ describe("HistoryList — the un-flushed region", () => {
     the sentinel exists so a person with nine entries never sees.
   */
   it("names the cache cap over the settled rows alone", () => {
-    const settledRows = Array.from({ length: 100 }, (_, i) => ({
+    const settledRows = Array.from({ length: HISTORY_CAP }, (_, i) => ({
       ...settled,
       id: 1_000 + i,
       preview: `kept ${i}`,
@@ -277,6 +277,6 @@ describe("HistoryList — the un-flushed region", () => {
     // The same hundred, settled, is the cap actually biting.
     useHistoryStore.setState({ entries: settledRows });
     render(<HistoryList />);
-    expect(screen.getByText(/OLDEST OF 100 CACHED/)).toBeInTheDocument();
+    expect(screen.getByText(`— OLDEST OF ${HISTORY_CAP} CACHED —`)).toBeInTheDocument();
   });
 });

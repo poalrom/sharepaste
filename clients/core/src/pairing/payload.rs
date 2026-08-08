@@ -1,8 +1,7 @@
 use crate::crypto::{decrypt, encrypt, UserKey};
-use crate::http::ServerClient;
 use crate::pairing::shortcode::{encode, ShortcodePayload};
+use crate::relay::Relay;
 use crate::errors::AppError;
-use async_trait::async_trait;
 use data_encoding::{BASE64, HEXLOWER};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -25,7 +24,7 @@ pub struct PairStarted {
 
 /// What one `/pair/poll` came back with.
 ///
-/// The relay's status strings are mapped to this once, in the [`PairTransport`]
+/// The relay's status strings are mapped to this once, in the [`Relay`]
 /// implementation, so the poll loop never matches on wire text. An
 /// unrecognised status reads as [`PairClaim::Waiting`]: a relay that grows a new
 /// intermediate state must not look like an expiry to an older client.
@@ -36,60 +35,21 @@ pub enum PairClaim {
     Expired,
 }
 
-/// The inviter's half of the pairing handshake, behind a trait.
+/// Reveal a short code for a second device to type.
 ///
-/// The same reason [`SessionTransport`](crate::sync::session::SessionTransport)
-/// exists: `Sharepaste::pair_start` must upload the payload *before* it reveals
-/// the code, and that ordering is only provable with no relay running. There is
-/// exactly one production implementation, [`ServerClient`].
-#[async_trait]
-pub trait PairTransport: Send + Sync {
-    /// `POST /pair/start`, returning the pair id the relay minted.
-    async fn start(&self, secret_hash: &str) -> Result<String, AppError>;
-    /// `PUT /pair/payload` — the payload encrypted to the pairing secret.
-    async fn put_payload(&self, pair_id: &str, encrypted_payload: &str) -> Result<(), AppError>;
-    /// `GET /pair/poll` — long-poll until the claimer takes the code.
-    async fn poll(&self, pair_id: &str, timeout_ms: u32) -> Result<PairClaim, AppError>;
-    /// Where this relay lives. It travels inside the shortcode, because that is
-    /// the only thing the claiming device is given.
-    fn base_url(&self) -> String;
-}
-
-#[async_trait]
-impl PairTransport for ServerClient {
-    async fn start(&self, secret_hash: &str) -> Result<String, AppError> {
-        Ok(self.pair_start(secret_hash).await?.pair_id)
-    }
-
-    async fn put_payload(&self, pair_id: &str, encrypted_payload: &str) -> Result<(), AppError> {
-        self.pair_payload_put(pair_id, encrypted_payload).await
-    }
-
-    async fn poll(&self, pair_id: &str, timeout_ms: u32) -> Result<PairClaim, AppError> {
-        let resp = self.pair_poll(pair_id, timeout_ms).await?;
-        Ok(match resp.status.as_str() {
-            "consumed" => PairClaim::Consumed { device_label: resp.device_label },
-            "expired" => PairClaim::Expired,
-            _ => PairClaim::Waiting,
-        })
-    }
-
-    fn base_url(&self) -> String {
-        self.base().to_string()
-    }
-}
-
-pub async fn start_pair(server: &dyn PairTransport) -> Result<PairStarted, AppError> {
+/// The secret is minted here and never leaves except inside the code: what the
+/// relay is told is a hash of it, which is what makes the proof a proof.
+pub async fn start_pair(relay: &dyn Relay) -> Result<PairStarted, AppError> {
     let mut secret = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut secret);
     let secret_hex = HEXLOWER.encode(&secret);
     let secret_hash = sha256_hex(secret_hex.as_bytes());
 
-    let minted = server.start(&secret_hash).await?;
+    let minted = relay.pair_start(&secret_hash).await?;
     let pair_id = Uuid::parse_str(&minted)
         .map_err(|e| AppError::BadInput(format!("server returned malformed pair_id: {e}")))?;
     let payload = ShortcodePayload {
-        server_url: server.base_url(),
+        server_url: relay.base_url(),
         pair_id,
         pairing_secret: secret,
     };
@@ -102,7 +62,7 @@ pub async fn start_pair(server: &dyn PairTransport) -> Result<PairStarted, AppEr
 }
 
 pub async fn upload_pair_payload(
-    server: &dyn PairTransport,
+    relay: &dyn Relay,
     pair_id: Uuid,
     pairing_secret: &[u8; 32],
     user_id: &str,
@@ -118,17 +78,17 @@ pub async fn upload_pair_payload(
     let key: UserKey = Zeroizing::new(*pairing_secret);
     let wire = encrypt(&key, &pair_id.to_string(), &plaintext)?;
     let b64 = base64_encode(&wire);
-    server.put_payload(&pair_id.to_string(), &b64).await
+    relay.pair_payload_put(&pair_id.to_string(), &b64).await
 }
 
 pub async fn fetch_and_decrypt_pair_payload(
-    server: &ServerClient,
+    relay: &dyn Relay,
     pair_id: Uuid,
     pairing_secret: &[u8; 32],
 ) -> Result<PairPayload, AppError> {
     let secret_hex = HEXLOWER.encode(pairing_secret);
-    let resp = server.pair_payload_get(&pair_id.to_string(), &secret_hex).await?;
-    let wire = base64_decode(&resp.encrypted_payload)?;
+    let encrypted_payload = relay.pair_payload(&pair_id.to_string(), &secret_hex).await?;
+    let wire = base64_decode(&encrypted_payload)?;
     let key: UserKey = Zeroizing::new(*pairing_secret);
     let plaintext = decrypt(&key, &pair_id.to_string(), &wire)?;
     serde_json::from_slice(&plaintext).map_err(|e| AppError::Crypto(e.to_string()))

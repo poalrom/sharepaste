@@ -1,6 +1,6 @@
-use crate::http::{ServerClient, TransportPolicy};
 use crate::keychain::{token_account, user_key_account, Keychain};
 use crate::pairing::invite::hex::decode_user_key;
+use crate::relay::{Relay, RelayDial};
 use crate::storage::accounts::{self, Account};
 use crate::crypto::UserKey;
 use crate::errors::AppError;
@@ -8,33 +8,47 @@ use parking_lot::RwLock;
 use rusqlite::Connection;
 use std::sync::Arc;
 
-#[derive(Debug)]
+/// One Pairing, unlocked: the Relay it syncs to, as this device, and the key
+/// its entries are sealed with.
 pub struct ActiveMembership {
-    pub server: ServerClient,
+    pub relay: Arc<dyn Relay>,
     pub user_key: UserKey,
+}
+
+/// Names the relay and nothing else.
+///
+/// A derived `Debug` would print the user key, and a struct that formats itself
+/// is one `tracing::debug!` away from putting a User's whole History in a log
+/// file — the same reason `ShortCode` has none.
+impl std::fmt::Debug for ActiveMembership {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActiveMembership")
+            .field("relay", &self.relay.base_url())
+            .finish_non_exhaustive()
+    }
 }
 
 pub struct PairingRegistry {
     pub(crate) conn: Arc<tokio::sync::Mutex<Connection>>,
     pub(crate) keychain: Arc<dyn Keychain>,
     pub(crate) active: RwLock<Option<String>>,
-    /// The shell's transport policy, applied to the client every session
-    /// request goes through.
+    /// How a stored Pairing becomes a live Relay — the shell's own dial, shared
+    /// with the facade.
     ///
     /// This is the half of the choke point nobody exercises by hand: a pairing
     /// stored while the shell permitted cleartext, resumed by a shell that does
     /// not, must fail here with [`AppError::InsecureRelay`] rather than limping
     /// on over plain HTTP or dying as an unexplained transport error.
-    transport: TransportPolicy,
+    relay: RelayDial,
 }
 
 impl PairingRegistry {
     pub fn new(
         conn: Arc<tokio::sync::Mutex<Connection>>,
         keychain: Arc<dyn Keychain>,
-        transport: TransportPolicy,
+        relay: RelayDial,
     ) -> Self {
-        Self { conn, keychain, active: RwLock::new(None), transport }
+        Self { conn, keychain, active: RwLock::new(None), relay }
     }
 
     pub async fn list(&self) -> Result<Vec<Account>, AppError> {
@@ -95,15 +109,15 @@ impl PairingRegistry {
             .get(&user_key_account(user_id))?
             .ok_or_else(|| AppError::Keychain(format!("missing user_key for {user_id}")))?;
         let user_key = decode_user_key(&key_hex)?;
-        let server = ServerClient::new(&acct.server_url, self.transport)?.with_token(token);
-        Ok(ActiveMembership { server, user_key })
+        let relay = self.relay.at(&acct.server_url, Some(&token))?;
+        Ok(ActiveMembership { relay, user_key })
     }
 
     pub async fn forget(&self, user_id: &str) -> Result<Option<String>, AppError> {
         self.keychain.delete(&user_key_account(user_id))?;
         self.keychain.delete(&token_account(user_id))?;
         let conn = self.conn.lock().await;
-        crate::storage::entries_cache::delete_all(&conn, user_id)?;
+        crate::storage::history::forget_entries(&conn, user_id)?;
         crate::storage::devices::delete_all(&conn, user_id)?;
         accounts::delete(&conn, user_id)?;
         let was_active = self.active.read().as_deref() == Some(user_id);
@@ -122,13 +136,18 @@ impl PairingRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::TransportPolicy;
     use crate::keychain::InMemoryKeychain;
     use crate::storage::open_in_memory;
     use std::sync::Arc;
 
-    fn registry_with(transport: TransportPolicy) -> PairingRegistry {
+    fn registry_with(policy: TransportPolicy) -> PairingRegistry {
         let conn = Arc::new(tokio::sync::Mutex::new(open_in_memory().unwrap()));
-        PairingRegistry::new(conn, Arc::new(InMemoryKeychain::default()), transport)
+        PairingRegistry::new(
+            conn,
+            Arc::new(InMemoryKeychain::default()),
+            RelayDial::over_http(policy),
+        )
     }
 
     fn registry() -> PairingRegistry {
@@ -169,7 +188,7 @@ mod tests {
         let r = registry_with(TransportPolicy::RequireHttps);
         pairing_at(&r, "https://relay.example").await;
         let m = r.load_active_membership("u").await.unwrap();
-        assert_eq!(m.server.base(), "https://relay.example");
+        assert_eq!(m.relay.base_url(), "https://relay.example");
     }
 
     /// The desktop's reading of the same rows, unchanged.

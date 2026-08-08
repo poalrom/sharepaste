@@ -1,13 +1,10 @@
 import { useEffect, useState } from "react";
-import { cmd, HISTORY_PAGE } from "../ipc/commands";
-import { events } from "../ipc/events";
+import { attachHistory } from "../attachHistory";
+import { cmd } from "../ipc/commands";
 import { agePhrase } from "../lib/format";
 import { useNow } from "../lib/useNow";
 import {
-  hydrateFrom,
-  noteChange,
   usePairingsStore,
-  useHistoryStore,
   useStatusStore,
   useContactStore,
   useUiStore,
@@ -26,14 +23,6 @@ const TOAST_MS = 2200;
 export default function Popover() {
   const pairings = usePairingsStore((s) => s.pairings);
   const active = usePairingsStore((s) => s.active);
-  const hydratePairings = usePairingsStore((s) => s.hydrate);
-  const hydrateHistory = useHistoryStore((s) => s.hydrate);
-  const addEntry = useHistoryStore((s) => s.add);
-  const removeEntry = useHistoryStore((s) => s.remove);
-  const settleEntry = useHistoryStore((s) => s.settle);
-  const refuseEntry = useHistoryStore((s) => s.refuse);
-  const setStatus = useStatusStore((s) => s.set);
-  const setLastContact = useContactStore((s) => s.setLastContact);
   const status = useStatusStore((s) => (active ? s.byUser[active] : undefined));
   const lastContactAt = useContactStore((s) => (active ? s.lastContactByUser[active] ?? null : null));
   const toast = useUiStore((s) => s.toast);
@@ -91,100 +80,16 @@ export default function Popover() {
     return () => window.clearTimeout(timer);
   }, [toastSeq]);
 
-  useEffect(() => {
-    let unsub: Array<() => void> = [];
-    let cancelled = false;
-    (async () => {
-      // The entry subscriptions come first, before anything is awaited. An
-      // Entry cached between a `list_history` and this line is announced to
-      // nobody and absent from that snapshot, and nothing later provokes a
-      // refetch — see `noteChange`, which is the other half of the same fix.
-      unsub.push(await events.onEntryAdded(({ user_id, entry }) => {
-        noteChange({ kind: "added", user_id, entry });
-        if (user_id === usePairingsStore.getState().active) addEntry(entry);
-      }));
-      unsub.push(await events.onEntryDeleted(({ user_id, entry_id }) => {
-        noteChange({ kind: "deleted", user_id, entry_id });
-        if (user_id === usePairingsStore.getState().active) removeEntry(entry_id);
-      }));
-      // In place and by id, with no refetch: nothing reorders at a flush and the
-      // id does not change, so the keyboard cursor stays where it was. The relay's
-      // stamp rides along, or the row would stop waiting and go on saying the
-      // relay has never stamped it.
-      unsub.push(await events.onEntrySettled(({ user_id, entry_id, created_at, last_use }) => {
-        noteChange({ kind: "settled", user_id, entry_id, created_at, last_use });
-        if (user_id === usePairingsStore.getState().active) {
-          settleEntry(entry_id, created_at, last_use);
-        }
-      }));
-      unsub.push(await events.onEntryRefused(({ user_id, entry_id, reason }) => {
-        noteChange({ kind: "refused", user_id, entry_id, reason });
-        if (user_id === usePairingsStore.getState().active) refuseEntry(entry_id, reason);
-      }));
-      const accs = await cmd.listPairings();
-      if (cancelled) return;
-      hydratePairings(accs);
-      // `list_accounts` already knows each session's state; without seeding it
-      // here the store reads Disconnected until the next transition happens to
-      // fire, and a popover opened onto a healthy session shows the degraded
-      // strip indefinitely.
-      for (const a of accs) setStatus(a.user_id, { state: a.status, pending: a.pending });
-      const activeUserId = usePairingsStore.getState().active;
-      if (activeUserId) {
-        void hydrateFrom(
-          activeUserId,
-          () => cmd.listHistory({ user_id: activeUserId, limit: HISTORY_PAGE }),
-          () => cancelled,
-        ).catch(() => {});
-        // Contact is stamped by traffic the popover was not open for, so
-        // without this the strip reads NEVER until the next event fires. A
-        // backend older than this command answers undefined, not a rejection.
-        cmd.getContact({ user_id: activeUserId })
-          .then((c) => c && setLastContact(c.user_id, c.last_contact_at))
-          .catch(() => {});
-      }
-      unsub.push(await events.onConnectionState(({ user_id, state, last_error }) => {
-        setStatus(user_id, last_error !== undefined ? { state, last_error } : { state });
-      }));
-      unsub.push(await events.onPendingCount(({ user_id, count }) => {
-        setStatus(user_id, { pending: count });
-      }));
-      unsub.push(await events.onPairingAdded(() => {
-        cmd.listPairings().then(hydratePairings);
-      }));
-      unsub.push(await events.onPairingRemoved(({ user_id }) => {
-        usePairingsStore.getState().remove(user_id);
-      }));
-      unsub.push(await events.onActivePairingChanged(({ user_id }) => {
-        const next = user_id ?? undefined;
-        usePairingsStore.getState().setActive(next);
-        if (next) {
-          void hydrateFrom(next, () => cmd.listHistory({ user_id: next, limit: HISTORY_PAGE }))
-            .catch(() => {});
-          cmd.getContact({ user_id: next })
-            .then((c) => c && setLastContact(c.user_id, c.last_contact_at))
-            .catch(() => {});
-        } else {
-          hydrateHistory([]);
-        }
-      }));
-      unsub.push(await events.onHistoryChanged(({ user_id }) => {
-        if (user_id !== usePairingsStore.getState().active) return;
-        void hydrateFrom(user_id, () => cmd.listHistory({ user_id, limit: HISTORY_PAGE }))
-          .catch(() => {});
-      }));
-      unsub.push(await events.onContact(({ user_id, last_contact_at }) => {
-        setLastContact(user_id, last_contact_at);
-      }));
-    })();
-    return () => {
-      cancelled = true;
-      unsub.forEach((u) => u());
-    };
-  }, [
-    addEntry, hydratePairings, hydrateHistory, refuseEntry, removeEntry, setLastContact,
-    settleEntry, setStatus,
-  ]);
+  // The popover's scope is the Active Pairing itself, so this attach is also
+  // what shows it: there is no second pane here that would take the snapshot.
+  useEffect(
+    () =>
+      attachHistory({
+        userId: () => usePairingsStore.getState().active,
+        showsHistory: true,
+      }),
+    [],
+  );
 
   const conn = CONNECTION[status?.state ?? "Disconnected"];
   const degraded = active !== undefined && conn.degraded ? conn : undefined;

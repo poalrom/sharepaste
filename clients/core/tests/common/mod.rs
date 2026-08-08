@@ -12,12 +12,22 @@ pub struct TestServer {
     pub url: String,
 }
 
-/// Returns `None` — after printing a skip notice — when no server answers
-/// `/healthz`. These tests need a live stack, so a missing one is a skip, not
-/// a failure: plain `cargo test` must stay green on a clean machine.
+/// Returns `Some(TestServer)` when a relay answers `/healthz`. What a failed
+/// probe means turns on whether the contributor *promised* a relay, which is
+/// what `SHAREPASTE_TEST_SERVER` being set says — not the URL it holds, since
+/// the default below would give it one either way:
+///
+/// * unset — nothing was promised, so a missing relay is a skip, not a
+///   failure: print a notice and return `None`. Plain `cargo test` must stay
+///   green on a clean machine.
+/// * set — a relay was promised, so a missing one is a broken promise. Panics
+///   naming the URL and the probe error, and never returns `None`. Without
+///   this half every `flow*.rs` test no-ops and reports as passing.
 pub fn start() -> Option<TestServer> {
-    let url = std::env::var("SHAREPASTE_TEST_SERVER")
-        .unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
+    let (url, promised) = match std::env::var("SHAREPASTE_TEST_SERVER") {
+        Ok(url) => (url, true),
+        Err(_) => (DEFAULT_SERVER_URL.to_string(), false),
+    };
 
     // Run the health check on a dedicated thread so we don't construct a
     // tokio runtime inside the outer #[tokio::test] async context.
@@ -39,6 +49,10 @@ pub fn start() -> Option<TestServer> {
 
     match handle.join().expect("healthz thread panicked") {
         Ok(()) => Some(TestServer { url }),
+        Err(why) if promised => panic!(
+            "no server at {url} ({why}); SHAREPASTE_TEST_SERVER promised one, \
+             so a missing relay is a failure and not a skip"
+        ),
         Err(why) => {
             // Written straight to the process stderr rather than via
             // `eprintln!`, which libtest captures and then discards for a

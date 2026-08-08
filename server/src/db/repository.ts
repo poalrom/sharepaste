@@ -13,24 +13,12 @@ export interface InviteRow {
   claimed_at: number | null;
 }
 
-export interface MembershipRow {
-  user_id: string;
-  device_id: string;
-  device_token_hash: string;
-  /**
-   * sha256 of the device token, indexed for O(1) authentication.
-   *
-   * Null only for memberships created before the sha256 index existed; those
-   * fall back to the argon2 scan in `verifyBearer`, which backfills this column
-   * on first successful use.
-   */
-  token_sha256: string | null;
-  device_label: string | null;
-  created_at: number;
-  revoked_at: number | null;
-}
-
-export interface PairingRow {
+/**
+ * The relay's row for a Pair Slot. Internal to `server/pair-slot.ts`, which is
+ * the only reader: nothing else handles the nine fields or decides what a
+ * combination of them means.
+ */
+export interface PairSlotRow {
   id: string;
   user_id: string;
   secret_hash: string;
@@ -96,64 +84,19 @@ export class Repository {
     },
   };
 
-  readonly memberships = {
-    create: (row: MembershipRow): void => {
-      this.db
-        .prepare(
-          `INSERT INTO memberships
-           (user_id, device_id, device_token_hash, token_sha256, device_label, created_at, revoked_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          row.user_id,
-          row.device_id,
-          row.device_token_hash,
-          row.token_sha256,
-          row.device_label,
-          row.created_at,
-          row.revoked_at
-        );
-    },
-    /** Authentication fast path: one indexed lookup, no key derivation. */
-    findActiveByTokenSha256: (token_sha256: string): MembershipRow | undefined =>
-      this.db
-        .prepare(
-          "SELECT * FROM memberships WHERE token_sha256 = ? AND revoked_at IS NULL"
-        )
-        .get(token_sha256) as MembershipRow | undefined,
-    setTokenSha256: (user_id: string, device_id: string, token_sha256: string): void => {
-      this.db
-        .prepare(
-          "UPDATE memberships SET token_sha256 = ? WHERE user_id = ? AND device_id = ?"
-        )
-        .run(token_sha256, user_id, device_id);
-    },
-    findByDeviceId: (user_id: string, device_id: string): MembershipRow | undefined =>
-      this.db
-        .prepare("SELECT * FROM memberships WHERE user_id = ? AND device_id = ?")
-        .get(user_id, device_id) as MembershipRow | undefined,
-    /** Legacy authentication path: rows still awaiting a `token_sha256` backfill. */
-    listUnindexed: (): MembershipRow[] =>
-      this.db
-        .prepare("SELECT * FROM memberships WHERE revoked_at IS NULL AND token_sha256 IS NULL")
-        .all() as MembershipRow[],
-    /** Every membership of a user, revoked included: old entries still need their Origin resolved. */
-    listByUser: (user_id: string): MembershipRow[] =>
-      this.db
-        .prepare("SELECT * FROM memberships WHERE user_id = ? ORDER BY created_at ASC")
-        .all(user_id) as MembershipRow[],
-    listAll: (): MembershipRow[] =>
-      this.db.prepare("SELECT * FROM memberships").all() as MembershipRow[],
-    revoke: (user_id: string, device_id: string, at: number): number =>
-      this.db
-        .prepare(
-          "UPDATE memberships SET revoked_at = ? WHERE user_id = ? AND device_id = ? AND revoked_at IS NULL"
-        )
-        .run(at, user_id, device_id).changes,
-  };
+  // There is no `memberships` namespace, and no row type for that table either:
+  // `server/device-credentials.ts` owns it whole — the mint, the bearer verify,
+  // the redacted Device listing and the operator one. Keeping the two credential
+  // columns to a single file is what makes `/me`'s redaction hold by
+  // construction, so a shortcut back through here would undo it.
 
-  readonly pairings = {
-    create: (row: PairingRow): void => {
+  /**
+   * The SQLite table keeps the name `pairings` on purpose: renaming it is a
+   * migration against every installed self-hosted database, and the old name
+   * never leaves these SQL strings. See ADR 0017.
+   */
+  readonly pairSlots = {
+    create: (row: PairSlotRow): void => {
       this.db
         .prepare(
           `INSERT INTO pairings
@@ -172,8 +115,8 @@ export class Repository {
           row.expires_at
         );
     },
-    find: (id: string): PairingRow | undefined =>
-      this.db.prepare("SELECT * FROM pairings WHERE id = ?").get(id) as PairingRow | undefined,
+    find: (id: string): PairSlotRow | undefined =>
+      this.db.prepare("SELECT * FROM pairings WHERE id = ?").get(id) as PairSlotRow | undefined,
     /** Returns the slot's failed-attempt count after the increment. */
     incrementFailed: (id: string): number => {
       this.db

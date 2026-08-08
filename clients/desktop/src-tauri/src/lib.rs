@@ -12,7 +12,9 @@ use crate::events::TauriEventSink;
 use crate::popover::{build_popover_window, toggle_popover};
 use crate::state::{AppState, SystemClipboard};
 use sharepaste_core::facade::{Sharepaste, SharepasteConfig};
+use sharepaste_core::http::TransportPolicy;
 use sharepaste_core::keychain::SystemKeychain;
+use sharepaste_core::relay::RelayDial;
 use std::sync::Arc;
 use tauri::menu::{ContextMenu, MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
@@ -39,12 +41,13 @@ pub fn launch() {
                 keychain: Arc::new(SystemKeychain::default()),
                 clipboard: Arc::new(SystemClipboard),
                 events: Arc::new(TauriEventSink::new(app.handle().clone())),
-                // Not an oversight and not a thing to tidy to `true`: a desktop
-                // already paired to a cleartext relay has to keep working, so
-                // the scheme rule belongs to whichever shell can afford it. The
-                // mobile shells pass `true`; flipping this one would strand an
-                // existing installation with no way to recover its pairing.
-                require_https: false,
+                // `AllowCleartext` is not an oversight and not a thing to tidy
+                // to `RequireHttps`: a desktop already paired to a cleartext
+                // relay has to keep working, so the scheme rule belongs to
+                // whichever shell can afford it. The mobile shells require
+                // HTTPS; flipping this one would strand an existing
+                // installation with no way to recover its pairing.
+                relay: RelayDial::over_http(TransportPolicy::AllowCleartext),
             })?;
             let app_state = Arc::new(AppState::new(core));
             app.manage(app_state.clone());

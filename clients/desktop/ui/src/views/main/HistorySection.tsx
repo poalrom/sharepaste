@@ -1,20 +1,26 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { cmd, HISTORY_PAGE } from "../../ipc/commands";
+import { showHistory } from "../../attachHistory";
+import { cmd } from "../../ipc/commands";
 import { agePhrase } from "../../lib/format";
 import {
-  hydrateFrom,
+  atHistoryCap,
+  HISTORY_CAP,
   useContactStore,
   useFilteredEntries,
   useHistoryStore,
   usePairingsStore,
   useUiStore,
 } from "../../store";
-import { ALERT_SLOT, copyEntry, deleteEntry, timeSlot } from "../EntryRow";
+import EntryRow, { copyEntry, deleteEntry, type RowMetrics } from "../EntryRow";
 import { PanelMessage, Strip } from "../fui";
 import EntryDetail from "./EntryDetail";
 
-/** The cap `entries_cache` prunes at; the sentinel names it where it bites. */
-const CACHE_CAP = 100;
+/**
+ * This list's own two measurements: 980px of pane, so it can afford the roomier
+ * of the two. The same reason ADR 0013 gives for the two hint strips never
+ * having been one component, applied to the row they sit above.
+ */
+const ROW_METRICS: RowMetrics = { gap: "gap-2.5", index: "w-[18px]" };
 
 /**
  * Each platform's keys, named the way that platform's own keycaps are — the
@@ -52,7 +58,6 @@ const HINTS = [
  */
 export default function HistorySection({ now }: { now: number }) {
   const entries = useHistoryStore((s) => s.entries);
-  const hydrate = useHistoryStore((s) => s.hydrate);
   const filtered = useFilteredEntries();
   const filter = useUiStore((s) => s.filter);
   const setFilter = useUiStore((s) => s.setFilter);
@@ -62,7 +67,6 @@ export default function HistorySection({ now }: { now: number }) {
   const setViewedUserId = useUiStore((s) => s.setViewedUserId);
   const pairings = usePairingsStore((s) => s.pairings);
   const activeUserId = usePairingsStore((s) => s.active);
-  const setLastContact = useContactStore((s) => s.setLastContact);
 
   // Undefined only while pairings are still loading, or when this device holds
   // none at all; an unset Viewed Pairing means "follow the Active one".
@@ -79,48 +83,25 @@ export default function HistorySection({ now }: { now: number }) {
   }, [selectedIndex, filtered.length]);
 
   useEffect(() => {
-    if (viewed === undefined) {
-      hydrate([]);
-      return;
-    }
     // `store/history.ts` keys nothing per user, so a slow response for the
     // pairing we just left would land on top of the one now on screen.
     let cancelled = false;
-    void (async () => {
-      try {
-        const rows = await hydrateFrom(
-          viewed,
-          () => cmd.listHistory({ user_id: viewed, limit: HISTORY_PAGE }),
-          () => cancelled,
-        );
-        if (rows === undefined) return;
-        // The popover's handoff, consumed once: it named an entry, not a
-        // position, and only the hydrated list can turn one into the other.
-        const { seedEntryId, setSeedEntryId } = useUiStore.getState();
-        if (seedEntryId === undefined) return;
-        const at = rows.findIndex((e) => e.id === seedEntryId);
-        if (at >= 0) setSelectedIndex(at);
-        // Cleared either way: a stale id selects nothing, and left set it would
-        // fire again on the next pairing the reader switches to.
-        setSeedEntryId(undefined);
-      } catch (e) {
-        console.error("list history failed", e);
-      }
-    })();
-    void (async () => {
-      try {
-        const contact = await cmd.getContact({ user_id: viewed });
-        if (!cancelled && contact) setLastContact(contact.user_id, contact.last_contact_at);
-      } catch (e) {
-        // The band falls back to NEVER, which is the honest reading of "no
-        // contact record this device can produce".
-        console.error("get contact failed", e);
-      }
-    })();
+    void showHistory(viewed, () => cancelled).then((rows) => {
+      if (rows === undefined) return;
+      // The popover's handoff, consumed once: it named an entry, not a
+      // position, and only the hydrated list can turn one into the other.
+      const { seedEntryId, setSeedEntryId } = useUiStore.getState();
+      if (seedEntryId === undefined) return;
+      const at = rows.findIndex((e) => e.id === seedEntryId);
+      if (at >= 0) setSelectedIndex(at);
+      // Cleared either way: a stale id selects nothing, and left set it would
+      // fire again on the next pairing the reader switches to.
+      setSeedEntryId(undefined);
+    });
     return () => {
       cancelled = true;
     };
-  }, [viewed, hydrate, setSelectedIndex, setLastContact]);
+  }, [viewed, setSelectedIndex]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -170,16 +151,6 @@ export default function HistorySection({ now }: { now: number }) {
     return () => document.removeEventListener("keydown", handler);
   }, [filtered, selectedIndex, setSelectedIndex, setFilter]);
 
-  /*
-    The sentinel below is a statement about retention, so only the rows the
-    relay has ordered count toward the cap it names. Nothing bounds the
-    un-flushed region — evicting an act this device has not delivered to protect
-    a display invariant is the trade ADR 0014 refuses — so a page of un-flushed
-    captures is a page of rows the cap never touched, and counting them would
-    announce a limit that has not bitten.
-  */
-  const settled = entries.filter((e) => !e.pending).length;
-
   // Exactly one of: the rows, or the reason there are none.
   let list: ReactNode;
   if (pairings.length === 0) {
@@ -212,84 +183,42 @@ export default function HistorySection({ now }: { now: number }) {
       <ul>
         {filtered.map((entry, i) => {
           const selected = i === selectedIndex;
-          // An undecryptable row still counts, so the index stays continuous.
-          const { undecryptable } = entry;
-          const elsewhere = entry.device_id !== pairing?.device_id;
-          const slot = timeSlot(entry, now);
           return (
-            <li
+            <EntryRow
               key={entry.id}
               ref={selected ? selectedRef : undefined}
-              data-testid="main-entry-row"
-              data-selected={selected}
-              data-pending={entry.pending}
-              className="fui-row flex cursor-default items-center gap-2.5 px-3"
-              // Movement, not enter: keyboard nav scrolls rows under a resting
-              // pointer, and mouseenter would fire on that and snatch the
-              // selection back.
-              onMouseMove={() => setSelectedIndex(i)}
+              entry={entry}
+              // An undecryptable row still counts, so the index stays continuous.
+              index={i + 1}
+              selected={selected}
+              // This device is the *Viewed* Pairing's device: a machine holds a
+              // separate device id under each pairing it has.
+              ownDeviceId={pairing?.device_id}
+              now={now}
+              onPoint={() => setSelectedIndex(i)}
               // Addressing a row is all a click does here. The pane beside it
-              // is what reads, and its COPY is what copies.
-              onClick={() => setSelectedIndex(i)}
-            >
-              <span
-                className={`w-[18px] shrink-0 font-mono text-chrome tabular-nums ${selected ? "text-text-emitter" : "text-text-dim"}`}
-              >
-                {String(i + 1).padStart(2, "0")}
-              </span>
-
-              {undecryptable ? (
-                <span className="min-w-0 flex-1 truncate text-label tracking-word text-alert-400">
-                  UNDECRYPTABLE
-                </span>
-              ) : (
-                <span className="min-w-0 flex-1 truncate font-mono text-data text-text-body">
-                  {entry.preview}
-                </span>
-              )}
-
-              {slot.tone === "alert" && (
-                <span className={ALERT_SLOT} title={slot.text}>
-                  {slot.text}
-                </span>
-              )}
-              {slot.tone === "relay" && (
-                <span className="shrink-0 text-chrome tracking-phrase text-text-muted">
-                  {elsewhere && (
-                    <>
-                      {/*
-                        The tooltip is the untruncated counterpart of what is
-                        shown, not a second fallback: a label reads in full, an
-                        unlabelled legacy membership reads its full device id
-                        behind the 4-char slice. Routing it through
-                        `origin_label` would hide the id.
-                      */}
-                      <span
-                        className="uppercase"
-                        title={entry.device_label?.trim() || entry.device_id}
-                      >
-                        {entry.origin_label.slice(0, 12)}
-                      </span>
-                      {" · "}
-                    </>
-                  )}
-                  {slot.age}
-                </span>
-              )}
-            </li>
+              // is what reads, and its COPY is what copies (ADR 0003) — which
+              // is also why the row needs neither the controls column nor a
+              // tooltip of its own on the Preview.
+              onActivate={() => setSelectedIndex(i)}
+              controls={false}
+              previewTooltip={false}
+              metrics={ROW_METRICS}
+            />
           );
         })}
         {/*
           Only at the cap, and only unfiltered: a user with nine entries must
           never be shown a limit that has not bitten them, and a filtered list
-          is short for a reason of the reader's own making.
+          is short for a reason of the reader's own making. Which rows the cap
+          counts is `atHistoryCap`'s and stated there.
         */}
-        {!filter.trim() && settled >= CACHE_CAP && (
+        {!filter.trim() && atHistoryCap(entries) && (
           <li
             data-testid="list-end"
             className="px-3 py-2 text-center text-chrome tracking-phrase text-text-dim"
           >
-            — OLDEST OF {CACHE_CAP} KEPT —
+            — OLDEST OF {HISTORY_CAP} KEPT —
           </li>
         )}
       </ul>

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { addDevice, cipherB64, provisionDevice, withApp } from "../helpers.js";
+import { entryRules } from "../../src/server/refusal.js";
 import { SseHub, type SseEvent } from "../../src/server/sse-hub.js";
 
 describe("POST /entries", () => {
@@ -21,35 +22,6 @@ describe("POST /entries", () => {
       expect(repo.entries.countForUser(a.user_id)).toBe(1);
     }));
 
-  it("rejects oversized ciphertext", () =>
-    withApp(
-      async ({ app, repo }) => {
-        const a = await provisionDevice(repo);
-        const res = await app.inject({
-          method: "POST",
-          url: "/entries",
-          headers: { authorization: `Bearer ${a.device_token}` },
-          payload: { ciphertext: cipherB64("x".repeat(64)) },
-        });
-        expect(res.statusCode).toBe(413);
-        expect(repo.entries.countForUser(a.user_id)).toBe(0);
-      },
-      { maxEntryBytes: 16 }
-    ));
-
-  it("rejects malformed base64", () =>
-    withApp(async ({ app, repo }) => {
-      const a = await provisionDevice(repo);
-      const res = await app.inject({
-        method: "POST",
-        url: "/entries",
-        headers: { authorization: `Bearer ${a.device_token}` },
-        payload: { ciphertext: "!!!!" },
-      });
-      expect(res.statusCode).toBe(400);
-      expect(repo.entries.countForUser(a.user_id)).toBe(0);
-    }));
-
   it("rejects without auth", () =>
     withApp(async ({ app }) => {
       const res = await app.inject({
@@ -59,6 +31,157 @@ describe("POST /entries", () => {
       });
       expect(res.statusCode).toBe(401);
     }));
+});
+
+/**
+ * Every status a refusable request earns, end to end. The client maps 413 and 400..=499 to
+ * BadInput (`clients/core/src/http/client.rs:78-87`) and BadInput to Refused
+ * (`sync/uploader.rs:259-264`), so each status below is this Relay's
+ * Refused-versus-unreachable verdict on one act (ADR 0015). The rows cover all four
+ * validators: the request body limit, the wire schema, the size rule and the id.
+ */
+describe("refusable requests", () => {
+  const CAP = 16;
+  const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
+  const json = (token: string) => ({ ...bearer(token), "content-type": "application/json" });
+
+  interface Request {
+    method: "POST" | "DELETE";
+    url: string;
+    headers?: Record<string, string>;
+    payload?: object | string;
+  }
+
+  const ROWS: { what: string; status: number; request: (token: string) => Request }[] = [
+    {
+      what: "a ciphertext over the cap",
+      status: 413,
+      request: (t) => ({
+        method: "POST",
+        url: "/entries",
+        headers: bearer(t),
+        payload: { ciphertext: cipherB64("x".repeat(CAP + 1)) },
+      }),
+    },
+    {
+      what: "a ciphertext that is not base64",
+      status: 400,
+      request: (t) => ({
+        method: "POST",
+        url: "/entries",
+        headers: bearer(t),
+        payload: { ciphertext: "!!!!" },
+      }),
+    },
+    {
+      what: "an empty ciphertext",
+      status: 400,
+      request: (t) => ({
+        method: "POST",
+        url: "/entries",
+        headers: bearer(t),
+        payload: { ciphertext: "" },
+      }),
+    },
+    {
+      what: "a partial base64 group",
+      status: 400,
+      request: (t) => ({
+        method: "POST",
+        url: "/entries",
+        headers: bearer(t),
+        payload: { ciphertext: "AAA" },
+      }),
+    },
+    {
+      what: "no ciphertext at all",
+      status: 400,
+      request: (t) => ({ method: "POST", url: "/entries", headers: bearer(t), payload: {} }),
+    },
+    {
+      what: "a body that is not an object",
+      status: 400,
+      request: (t) => ({
+        method: "POST",
+        url: "/entries",
+        headers: { ...bearer(t), "content-type": "text/plain" },
+        payload: "hello",
+      }),
+    },
+    {
+      what: "a body that is not JSON",
+      status: 400,
+      request: (t) => ({ method: "POST", url: "/entries", headers: json(t), payload: "{" }),
+    },
+    {
+      what: "a body past the request limit",
+      status: 413,
+      request: (t) => ({
+        method: "POST",
+        url: "/entries",
+        headers: json(t),
+        payload: JSON.stringify({ ciphertext: "A".repeat(2 * 1024 * 1024) }),
+      }),
+    },
+    {
+      what: "an id that is not a number",
+      status: 400,
+      request: (t) => ({ method: "POST", url: "/entries/abc/use", headers: bearer(t) }),
+    },
+    {
+      what: "an id of zero",
+      status: 400,
+      request: (t) => ({ method: "POST", url: "/entries/0/use", headers: bearer(t) }),
+    },
+    {
+      what: "a malformed id on delete",
+      status: 400,
+      request: (t) => ({ method: "DELETE", url: "/entries/abc", headers: bearer(t) }),
+    },
+    // The size rule sits behind the bearer check while the wire schema sits in front of
+    // it, so an unauthenticated device is told which of the two it tripped. Neither answer
+    // moves because a refusal is now decided in one place.
+    {
+      what: "an oversized ciphertext with no bearer token",
+      status: 401,
+      request: () => ({
+        method: "POST",
+        url: "/entries",
+        payload: { ciphertext: cipherB64("x".repeat(CAP + 1)) },
+      }),
+    },
+    {
+      what: "a non-base64 ciphertext with no bearer token",
+      status: 400,
+      request: () => ({ method: "POST", url: "/entries", payload: { ciphertext: "!!!!" } }),
+    },
+  ];
+
+  for (const row of ROWS) {
+    it(`answers ${row.status} for ${row.what}`, () =>
+      withApp(
+        async ({ app, repo }) => {
+          const a = await provisionDevice(repo);
+          const res = await app.inject(row.request(a.device_token));
+          expect(res.statusCode).toBe(row.status);
+          expect(repo.entries.countForUser(a.user_id)).toBe(0);
+        },
+        { entryRules: entryRules({ maxEntryBytes: CAP }) }
+      ));
+  }
+
+  it("never answers 5xx for a shape problem, so a refusal is never mistaken for unreachable", () =>
+    withApp(
+      async ({ app, repo }) => {
+        const a = await provisionDevice(repo);
+        for (const row of ROWS) {
+          const res = await app.inject(row.request(a.device_token));
+          expect(res.statusCode, row.what).toBeGreaterThanOrEqual(400);
+          expect(res.statusCode, row.what).toBeLessThan(500);
+        }
+      },
+      { entryRules: entryRules({ maxEntryBytes: CAP }) }
+    ));
 });
 
 describe("GET /entries", () => {

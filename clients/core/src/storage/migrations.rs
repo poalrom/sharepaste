@@ -254,7 +254,7 @@ fn backfill_plaintext_hashes(conn: &Connection) -> Result<(), AppError> {
             update.execute(rusqlite::params![
                 user_id,
                 id,
-                super::entries_cache::plaintext_sha256(&plaintext)
+                super::history::plaintext_sha256(&plaintext)
             ])?;
         }
     }
@@ -445,7 +445,7 @@ mod tests {
         assert_eq!(rows[1].1, 2000);
         assert_eq!(
             rows[0].2.as_deref(),
-            Some(super::super::entries_cache::plaintext_sha256("hello").as_str()),
+            Some(super::super::history::plaintext_sha256("hello").as_str()),
             "a plaintext already cached is hashed on upgrade, not on its next capture"
         );
         assert_eq!(rows[1].2, None, "an Undecryptable entry has nothing to hash");

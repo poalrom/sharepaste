@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { HISTORY_PAGE } from "../ipc/commands";
 import { mockIpc, type MockIpc } from "./helpers";
 import { capturedAt } from "../lib/format";
-import { useContactStore, useHistoryStore, usePairingsStore, useUiStore } from "../store";
+import { HISTORY_CAP, useContactStore, useHistoryStore, usePairingsStore, useUiStore } from "../store";
 import type { Contact, EntryView, Pairing } from "../types";
 import HistorySection from "../views/main/HistorySection";
 
@@ -13,8 +13,6 @@ const HOUR = 60 * MINUTE;
 
 /** The cap `EntryDetail` stops laying out at; nothing in the product bounds an entry. */
 const RENDER_CAP = 65_536;
-/** The cap `entries_cache` prunes at, which the list-end sentinel names. */
-const CACHE_CAP = 100;
 
 const pairingA: Pairing = {
   user_id: "u-a",
@@ -129,7 +127,7 @@ const commandsSent = (): string[] => ipc.invoke.mock.calls.map(([command]) => co
 
 /** Which visible row is addressed, by 0-based position; -1 when none is. */
 const selectedRowIndex = (): number =>
-  screen.getAllByTestId("main-entry-row").findIndex((row) => row.dataset.selected === "true");
+  screen.getAllByTestId("entry-row").findIndex((row) => row.dataset.selected === "true");
 
 /**
  * The filter takes focus on mount and keeps it. That is the pane's resting
@@ -196,7 +194,7 @@ describe("HistorySection — the reader", () => {
   it("renders the full plaintext beside a row that shows one collapsed line", async () => {
     await renderPane();
 
-    const row = screen.getAllByTestId("main-entry-row")[0]!;
+    const row = screen.getAllByTestId("entry-row")[0]!;
     expect(row.textContent).toContain(MULTILINE_PREVIEW);
     expect(row.textContent).not.toContain("\n");
 
@@ -220,7 +218,7 @@ describe("HistorySection — the reader", () => {
       target: { value: THIRD_LINE_WORD },
     });
 
-    const rows = screen.getAllByTestId("main-entry-row");
+    const rows = screen.getAllByTestId("entry-row");
     expect(rows).toHaveLength(1);
     expect(rows[0]!.textContent).toContain(LONG_PREVIEW);
     // And the reader beside it still holds the whole entry, third line included.
@@ -249,9 +247,9 @@ describe("HistorySection — the reader", () => {
   */
   it("states when a reordered entry was used beside when it was captured", async () => {
     await renderPane();
-    fireEvent.click(screen.getAllByTestId("main-entry-row")[1]!);
+    fireEvent.click(screen.getAllByTestId("entry-row")[1]!);
 
-    expect(screen.getAllByTestId("main-entry-row")[1]!).toHaveTextContent("30m");
+    expect(screen.getAllByTestId("entry-row")[1]!).toHaveTextContent("30m");
     const meta = screen.getByText(/CAPTURED/);
     expect(meta).toHaveTextContent(`CAPTURED ${capturedAt(NOW - 6 * HOUR, NOW)}`);
     expect(meta).toHaveTextContent("6h ago");
@@ -348,7 +346,7 @@ describe("HistorySection — the Viewed Pairing", () => {
     );
     // The *list* is what re-read; the same text also lands in the reader beside it.
     await waitFor(() =>
-      expect(screen.getAllByTestId("main-entry-row")[0]!).toHaveTextContent("from the laptop"),
+      expect(screen.getAllByTestId("entry-row")[0]!).toHaveTextContent("from the laptop"),
     );
     expect(commandsSent()).not.toContain("set_active_pairing");
     expect(usePairingsStore.getState().active).toBe("u-a");
@@ -467,7 +465,7 @@ describe("HistorySection — keyboard, fired from inside the filter", () => {
         args: { user_id: "u-a", entry_id: 11 },
       }),
     );
-    await waitFor(() => expect(screen.getAllByTestId("main-entry-row")).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByTestId("entry-row")).toHaveLength(2));
   });
 
   // The same binding under the keycaps a Mac actually prints.
@@ -499,7 +497,7 @@ describe("HistorySection — keyboard, fired from inside the filter", () => {
 
     expect(filterInput()).toHaveValue("");
     expect(commandsSent()).not.toContain("delete_entry");
-    expect(screen.getAllByTestId("main-entry-row")).toHaveLength(3);
+    expect(screen.getAllByTestId("entry-row")).toHaveLength(3);
   });
 
   it("clears the query on Ctrl+Backspace too", async () => {
@@ -522,16 +520,16 @@ describe("HistorySection — keyboard, fired from inside the filter", () => {
     await act(async () => {});
 
     expect(commandsSent()).not.toContain("delete_entry");
-    expect(screen.getAllByTestId("main-entry-row")).toHaveLength(3);
+    expect(screen.getAllByTestId("entry-row")).toHaveLength(3);
   });
 });
 
 describe("HistorySection — the list-end sentinel", () => {
   it("names the cache cap once the list is standing at it", async () => {
-    historyByUser["u-a"] = bulkEntries(CACHE_CAP);
+    historyByUser["u-a"] = bulkEntries(HISTORY_CAP);
     await renderPane();
 
-    expect(screen.getByTestId("list-end")).toHaveTextContent(`OLDEST OF ${CACHE_CAP} KEPT`);
+    expect(screen.getByTestId("list-end")).toHaveTextContent(`OLDEST OF ${HISTORY_CAP} KEPT`);
   });
 
   // A user who has never hit the cap must never be told there is one.
@@ -545,13 +543,13 @@ describe("HistorySection — the list-end sentinel", () => {
   // A filtered list is short for a reason of the reader's own making, so the
   // cap is not what is hiding the rows.
   it("stays silent once a filter is what shortened the list", async () => {
-    historyByUser["u-a"] = bulkEntries(CACHE_CAP);
+    historyByUser["u-a"] = bulkEntries(HISTORY_CAP);
     await renderPane();
     expect(screen.getByTestId("list-end")).toBeInTheDocument();
 
     fireEvent.change(filterInput(), { target: { value: "entry-1" } });
 
-    expect(screen.getAllByTestId("main-entry-row")).toHaveLength(11);
+    expect(screen.getAllByTestId("entry-row")).toHaveLength(11);
     expect(screen.queryByTestId("list-end")).toBeNull();
   });
 
@@ -563,7 +561,7 @@ describe("HistorySection — the list-end sentinel", () => {
     would be the same lie told to a reader with nine entries.
   */
   it("stays silent for a page of un-flushed captures", async () => {
-    historyByUser["u-a"] = bulkEntries(CACHE_CAP).map((e) => ({
+    historyByUser["u-a"] = bulkEntries(HISTORY_CAP).map((e) => ({
       ...e,
       created_at: 0,
       last_use: 0,
@@ -571,19 +569,19 @@ describe("HistorySection — the list-end sentinel", () => {
     }));
     await renderPane();
 
-    expect(screen.getAllByTestId("main-entry-row")).toHaveLength(CACHE_CAP);
+    expect(screen.getAllByTestId("entry-row")).toHaveLength(HISTORY_CAP);
     expect(screen.queryByTestId("list-end")).toBeNull();
   });
 
   // The discriminating case: more rows on screen than the cap, because the queue
   // is above them, while the region the cap governs is still short of it.
   it("stays silent while the queue is what pushed the list past the cap", async () => {
-    historyByUser["u-a"] = bulkEntries(CACHE_CAP + 5).map((e, i) =>
+    historyByUser["u-a"] = bulkEntries(HISTORY_CAP + 5).map((e, i) =>
       i < 6 ? { ...e, created_at: 0, last_use: 0, pending: true } : e,
     );
     await renderPane();
 
-    expect(screen.getAllByTestId("main-entry-row")).toHaveLength(CACHE_CAP + 5);
+    expect(screen.getAllByTestId("entry-row")).toHaveLength(HISTORY_CAP + 5);
     expect(screen.queryByTestId("list-end")).toBeNull();
   });
 });
@@ -592,14 +590,14 @@ describe("HistorySection — origin", () => {
   it("names the origin device for an entry captured elsewhere", async () => {
     await renderPane();
 
-    const rows = screen.getAllByTestId("main-entry-row");
+    const rows = screen.getAllByTestId("entry-row");
     expect(rows[1]!).toHaveTextContent("IPHONE-15");
   });
 
   it("omits the origin for an entry captured on this device", async () => {
     await renderPane();
 
-    const rows = screen.getAllByTestId("main-entry-row");
+    const rows = screen.getAllByTestId("entry-row");
     // The fixture labels this device too, so an implementation that printed
     // Origin unconditionally would say MBP-14 here.
     expect(rows[0]!).not.toHaveTextContent("MBP-14");
@@ -615,7 +613,7 @@ describe("HistorySection — origin", () => {
     useUiStore.setState({ viewedUserId: "u-b" });
     await renderPane();
 
-    const rows = screen.getAllByTestId("main-entry-row");
+    const rows = screen.getAllByTestId("entry-row");
     expect(rows[0]!).toHaveTextContent("MBP-14");
     expect(rows[1]!).not.toHaveTextContent("PIXEL-9");
   });
@@ -643,7 +641,7 @@ describe("HistorySection — undecryptable entries", () => {
   it("marks the row KEY MISMATCH rather than rendering it blank", async () => {
     await renderPane();
 
-    expect(screen.getAllByTestId("main-entry-row")[0]!).toHaveTextContent("KEY MISMATCH");
+    expect(screen.getAllByTestId("entry-row")[0]!).toHaveTextContent("KEY MISMATCH");
   });
 
   /*
@@ -689,7 +687,7 @@ describe("HistorySection — the popover's handoff", () => {
 
     fireEvent.change(screen.getByTestId("viewed-pairing"), { target: { value: "u-b" } });
     await waitFor(() =>
-      expect(screen.getAllByTestId("main-entry-row")[0]!).toHaveTextContent("from the laptop"),
+      expect(screen.getAllByTestId("entry-row")[0]!).toHaveTextContent("from the laptop"),
     );
 
     expect(selectedRowIndex()).toBe(0);
@@ -740,7 +738,7 @@ describe("HistorySection — the oversize guard", () => {
     fireEvent.click(screen.getByTestId("show-all"));
     expect(screen.getByTestId("entry-detail-body").textContent).toContain("-TAIL");
 
-    const rows = screen.getAllByTestId("main-entry-row");
+    const rows = screen.getAllByTestId("entry-row");
     fireEvent.click(rows[1]!);
     expect(screen.getByTestId("entry-detail-body").textContent).toBe("bravo");
 
@@ -776,7 +774,7 @@ describe("HistorySection — empty states", () => {
     await renderPane();
 
     expect(screen.getByText("HISTORY EMPTY")).toBeInTheDocument();
-    expect(screen.queryByTestId("main-entry-row")).toBeNull();
+    expect(screen.queryByTestId("entry-row")).toBeNull();
   });
 
   it("distinguishes a filter that matches nothing, and offers a way out", async () => {
@@ -791,7 +789,7 @@ describe("HistorySection — empty states", () => {
 
     fireEvent.click(screen.getByText("CLEAR FILTER"));
 
-    expect(screen.getAllByTestId("main-entry-row")).toHaveLength(3);
+    expect(screen.getAllByTestId("entry-row")).toHaveLength(3);
     expect(filterInput()).toHaveValue("");
   });
 });
@@ -822,7 +820,7 @@ describe("HistorySection — the un-flushed region", () => {
   it("tints the un-flushed capture, and only it, with an empty time slot", async () => {
     await renderPane();
 
-    const rows = screen.getAllByTestId("main-entry-row");
+    const rows = screen.getAllByTestId("entry-row");
     expect(rows[0]).toHaveAttribute("data-pending", "true");
     expect(rows[0]!.textContent).toBe("01offline copy");
     expect(rows[1]).toHaveAttribute("data-pending", "false");
@@ -850,7 +848,7 @@ describe("HistorySection — the un-flushed region", () => {
 
     fireEvent.change(filterInput(), { target: { value: "offline" } });
 
-    const rows = screen.getAllByTestId("main-entry-row");
+    const rows = screen.getAllByTestId("entry-row");
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("offline copy");
   });
@@ -865,7 +863,7 @@ describe("HistorySection — the un-flushed region", () => {
     historyByUser["u-a"] = [{ ...entriesA[1]!, pending: true }, entriesA[0]!];
     await renderPane();
 
-    const row = screen.getAllByTestId("main-entry-row")[0]!;
+    const row = screen.getAllByTestId("entry-row")[0]!;
     expect(row).toHaveAttribute("data-pending", "true");
     expect(row).toHaveTextContent("30m");
   });
@@ -884,7 +882,7 @@ describe("HistorySection — a refused act", () => {
     await renderPane();
 
     expect(screen.getByText("payload too large")).toHaveClass("text-alert-400");
-    expect(screen.getAllByTestId("main-entry-row")[0]).toHaveAttribute("data-pending", "true");
+    expect(screen.getAllByTestId("entry-row")[0]).toHaveAttribute("data-pending", "true");
   });
 
   // Orthogonal facts, one slot. Refused wins because it is the one of the two a
@@ -893,7 +891,7 @@ describe("HistorySection — a refused act", () => {
     historyByUser["u-a"] = [{ ...refused, preview: "", plaintext: null, undecryptable: true }];
     await renderPane();
 
-    const row = screen.getAllByTestId("main-entry-row")[0]!;
+    const row = screen.getAllByTestId("entry-row")[0]!;
     expect(row).toHaveTextContent("payload too large");
     expect(row).not.toHaveTextContent("KEY MISMATCH");
     // The Preview column is unchanged by any of this.

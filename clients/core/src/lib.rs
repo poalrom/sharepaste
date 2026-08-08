@@ -17,6 +17,7 @@ pub mod http;
 pub mod keychain;
 pub mod pairing;
 pub mod platform;
+pub mod relay;
 pub mod render;
 pub mod storage;
 pub mod sync;

@@ -4,6 +4,7 @@ import { runUserCreate, runUserList, runUserDelete } from "../../src/cli/user.js
 import { runDeviceList, runDeviceRevoke } from "../../src/cli/device.js";
 import { runEntryPurge } from "../../src/cli/entry.js";
 import { sha256Hex } from "../../src/crypto.js";
+import { DeviceCredentials } from "../../src/server/device-credentials.js";
 
 let temp: TempDb;
 let dbPath: string;
@@ -57,8 +58,32 @@ describe("CLI device list / revoke", () => {
     const list = runDeviceList({ dbPath });
     expect(list.map((m) => m.device_id).sort()).toEqual([d1.device_id, d2.device_id].sort());
     runDeviceRevoke({ dbPath, deviceId: d1.device_id });
-    const m = temp.repo.memberships.findByDeviceId(user_id, d1.device_id);
-    expect(m?.revoked_at).not.toBeNull();
+    const revoked = DeviceCredentials.list(temp.repo, user_id).find(
+      (d) => d.device_id === d1.device_id
+    );
+    expect(revoked?.revoked_at).not.toBeNull();
+  });
+
+  /**
+   * `device list` prints whole membership rows and has since it existed, so its
+   * shape is output a person can see and not a refactor's to change. The route
+   * listing is redacted; this one deliberately is not.
+   */
+  it("prints the whole membership row, credential columns included", async () => {
+    const { user_id } = runUserCreate({ dbPath, username: "alice", ttlSeconds: 60 });
+    await addDevice(temp.repo, user_id);
+
+    expect(runDeviceList({ dbPath }).map((m) => Object.keys(m).sort())).toEqual([
+      [
+        "created_at",
+        "device_id",
+        "device_label",
+        "device_token_hash",
+        "revoked_at",
+        "token_sha256",
+        "user_id",
+      ],
+    ]);
   });
 });
 

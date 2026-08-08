@@ -2,6 +2,7 @@ import { openDb } from "../db/index.js";
 import { migrate } from "../db/migrate.js";
 import { Repository } from "../db/repository.js";
 import { buildApp, type AppDeps } from "../server/app.js";
+import { entryRules } from "../server/refusal.js";
 import { SseHub } from "../server/sse-hub.js";
 
 export interface ServeOptions {
@@ -30,7 +31,7 @@ export const startServer = async (opts: ServeOptions): Promise<ServerHandle> => 
     pairingTtlMs: 2 * 60 * 1000,
     maxEntries: 100,
     maxEntryAgeMs: 30 * 24 * 60 * 60 * 1000,
-    maxEntryBytes: 64 * 1024,
+    entryRules: entryRules({ maxEntryBytes: 64 * 1024 }),
     maxPairingFailures: 3,
     logger: { level: process.env.LOG_LEVEL ?? "info" },
   };

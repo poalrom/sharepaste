@@ -48,8 +48,8 @@ impl AppError {
     /// The core has no opinion of its own about schemes, and must not grow one:
     /// every desktop already paired to a cleartext relay would lose its pairing
     /// on the next upgrade, turning an unrelated client into collateral. The
-    /// opinion belongs to the shell and arrives as
-    /// [`SharepasteConfig::require_https`](crate::facade::SharepasteConfig::require_https),
+    /// opinion belongs to the shell and arrives as the dial it hands over on
+    /// [`SharepasteConfig::relay`](crate::facade::SharepasteConfig::relay),
     /// enforced once in
     /// [`ServerClient::new`](crate::http::ServerClient::new) — which is where a
     /// shell that requires HTTPS gets [`AppError::InsecureRelay`] from.

@@ -16,20 +16,20 @@ use crate::capture::filter::{self, CaptureContext, FilterDecision, PasteboardSni
 use crate::crypto::UserKey;
 use crate::errors::AppError;
 use crate::event::{CoreEvent, Entry, Queued};
-use crate::http::{ServerClient, TransportPolicy};
 use crate::keychain::{token_account, user_key_account, Keychain};
 use crate::pairing::invite::{claim_invite, persist_claimed_pairing};
 use crate::pairing::payload::{
     fetch_and_decrypt_pair_payload, secret_proof_hex, start_pair, upload_pair_payload, PairClaim,
-    PairTransport,
 };
 use crate::pairing::registry::PairingRegistry;
 use crate::pairing::shortcode::{decode as decode_shortcode, group_for_display};
 use crate::platform::{Clipboard, EventSink};
+use crate::relay::{Relay, RelayDial};
 use crate::render;
+use crate::storage::history::Held;
 use crate::storage::settings::Settings;
-use crate::storage::{accounts, devices, entries_cache, pending, settings};
-use crate::sync::session::{self, ServerSession, SessionCtx, SessionState, SessionTransport};
+use crate::storage::{accounts, devices, history, settings};
+use crate::sync::session::{self, SessionCtx, SessionState};
 use crate::sync::ConnectionState;
 use parking_lot::Mutex;
 use rusqlite::Connection;
@@ -58,22 +58,27 @@ const PAIR_POLL_TIMEOUT_MS: u32 = 25_000;
 /// application's data lives, because the answer differs per shell and on
 /// Android is handed down by the framework.
 ///
-/// `require_https` is the same idea applied to a policy rather than a path. The
-/// core has no opinion about relay schemes — see
-/// [`ServerClient::new`] — so the shell states one.
+/// `relay` is the same idea applied to the network. The core has no opinion
+/// about relay schemes — see [`ServerClient::new`](crate::http::ServerClient::new)
+/// — so the shell states one by
+/// handing over the dial it wants:
+/// [`RelayDial::over_http`](crate::relay::RelayDial::over_http) with
+/// `TransportPolicy::RequireHttps` on the mobile shells,
+/// `TransportPolicy::AllowCleartext` on the desktop, because a desktop
+/// already paired to a cleartext relay has to keep working and baking the
+/// answer in here would break an existing installation on upgrade, with no way
+/// for its owner to recover the pairing.
+///
+/// It is also the whole of the transport seam. Every route this core calls goes
+/// to a [`Relay`] this dial produced, so a test that hands over a scripted one
+/// drives the real operations with no relay in reach — and no operation needs a
+/// twin taking a transport as an argument.
 pub struct SharepasteConfig {
     pub db_path: PathBuf,
     pub keychain: Arc<dyn Keychain>,
     pub clipboard: Arc<dyn Clipboard>,
     pub events: Arc<dyn EventSink>,
-    /// Refuse to build a client for an `http://` relay at all.
-    ///
-    /// `true` on the mobile shells, `false` on the desktop. It is a shell's
-    /// choice rather than the core's default because a desktop already paired to
-    /// a cleartext relay has to keep working: baking the answer in here would
-    /// break an existing installation on upgrade, with no way for its owner to
-    /// recover the pairing.
-    pub require_https: bool,
+    pub relay: RelayDial,
 }
 
 /// One Pairing as a shell lists it.
@@ -151,32 +156,52 @@ pub enum RecallSource {
     Cache,
 }
 
-/// Where a page of the History resumes from: the `(rank, ord, id)` of the last
-/// row of the page before it.
+/// Where a page of the History resumes from: the place of the last row of the
+/// page before it.
 ///
 /// Three parts and not an id, because the History is two regions in one order
-/// (ADR 0014) and the whole of that order is `(rank ASC, ord DESC, id DESC)`.
-/// `rank` says which region — refused, pending, settled — `ord` is the place
-/// inside it, and `id` keeps the order total when two rows share an `ord`.
-/// Keyset paging over the same tuple is what makes crossing the seam between
-/// the regions no different from any other page boundary.
+/// (ADR 0014): which region a row is in, its place inside that region, and the
+/// row's own id to keep the order total when two rows share a place. Keyset
+/// paging over the same three parts is what makes crossing the seam between the
+/// regions no different from any other page boundary. What the parts *are* is
+/// [`history`]'s to decide and nobody's to read — see [`history::Cursor`],
+/// which is this type.
 ///
-/// `id` is [`Entry::id`] — this device's own id for the row, not the relay's.
-/// The relay's does not cross this facade at all, and a row that has not reached
-/// the relay has none to page by.
+/// The id part is [`Entry::id`] — this device's own id for the row, not the
+/// relay's. The relay's does not cross this facade at all, and a row that has
+/// not reached the relay has none to page by.
 ///
-/// `rank` and `ord` are facts about the *order*, not about the entry, so they are
-/// deliberately not on [`Entry`]: a row says whether it is pending and why it was
-/// refused, and nothing about which of three groups the query put it in. A cursor
-/// is therefore built by the core from the cached row, and a shell that pages
-/// gets one back rather than assembling it — no shipped shell pages yet, and the
-/// one that does will be handed it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
-pub struct HistoryCursor {
-    pub rank: i64,
-    pub ord: i64,
-    pub id: i64,
-}
+/// **Nothing of this is on [`Entry`], and the reason is mechanical rather than a
+/// matter of principle: a shell already holds the whole of the region.** The
+/// projection is total — the History query's rank becomes a [`Queued`] and
+/// `Entry::new` turns that into two fields, so `refused_reason != None` is the
+/// refused region, `pending && refused_reason == None` is the pending one, and
+/// `!pending` is the settled one. Adding the rank back would give a shell a
+/// second way to ask the same question, and two ways is how they come to
+/// disagree.
+///
+/// The place inside a region is the part that genuinely does not cross: it is a
+/// queue position for the two device-side regions and a Last Use for the settled
+/// one, and a shell needs neither, because it receives rows already in the order
+/// they compose. A cursor is therefore taken off a row the core handed out, and a
+/// shell that pages gets one back rather than assembling it — no shipped shell
+/// pages yet, and the one that does will be handed it.
+pub use crate::storage::history::Cursor as HistoryCursor;
+
+/// How many rows the relay has ordered one Pairing keeps on this device.
+///
+/// The one number a shell needs from the retention rules, and the only one that
+/// crosses: the age cap and the page ceiling take rows away without a surface
+/// ever having to say so, but a list standing at *this* one owes the person the
+/// boundary — what is not on screen may still be on the relay. Both desktop
+/// surfaces draw a list-end sentinel naming it, and Android's `NO MATCHES` says
+/// the same thing in a sentence.
+///
+/// Exported rather than mirrored, because a mirror is a second owner. This is a
+/// re-export and not the declaration: [`crate::storage::history::MAX_PER_USER`]
+/// owns the number, and says there how the one shell that cannot import it is
+/// held to it instead.
+pub use crate::storage::history::MAX_PER_USER;
 
 /// What became of text handed to [`Sharepaste::offer`] or
 /// [`Sharepaste::capture_watched`].
@@ -195,15 +220,6 @@ pub enum OfferOutcome {
     /// immediately check.
     Recognised { pending: i64 },
     Rejected(SkipReason),
-}
-
-/// What this device already holds that matches the text just copied.
-enum Held {
-    Nothing,
-    /// An entry, which can be used.
-    Entry(i64),
-    /// A queued capture, which cannot: it has no relay id yet.
-    Pending(i64),
 }
 
 /// A change to the Settings, one `Option` per field: `None` leaves what is
@@ -233,10 +249,12 @@ pub struct Sharepaste {
     keychain: Arc<dyn Keychain>,
     clipboard: Arc<dyn Clipboard>,
     events: Arc<dyn EventSink>,
-    /// The shell's answer to "may a relay be plain HTTP", enforced at every
-    /// [`ServerClient`] this facade builds and at every one the registry builds
-    /// for a session.
-    transport: TransportPolicy,
+    /// How this facade reaches a Relay it has no Pairing for yet — an invite
+    /// claim, and the claimer's half of a short code.
+    ///
+    /// The same dial the registry holds, so a pairing already on this device
+    /// and one being made right now cross the same seam under the same policy.
+    relay: RelayDial,
     last_self_write: Arc<Mutex<Option<(Instant, String)>>>,
     /// The runtime every background task runs on.
     ///
@@ -274,22 +292,21 @@ impl Sharepaste {
             // resource that will not open — the same mapping the clipboard uses.
             .map_err(|e| AppError::Storage(format!("core runtime: {e}")))?;
         let conn = Arc::new(tokio::sync::Mutex::new(conn));
-        let transport = if cfg.require_https {
-            TransportPolicy::RequireHttps
-        } else {
-            TransportPolicy::AllowCleartext
-        };
-        // The registry builds the client for every *session* request, so the
-        // policy has to reach it too — otherwise a pairing stored before the
-        // shell required HTTPS would keep syncing over cleartext forever.
-        let registry = Arc::new(PairingRegistry::new(conn.clone(), cfg.keychain.clone(), transport));
+        // The registry dials for every *session* request, so the same dial has
+        // to reach it — otherwise a pairing stored before the shell required
+        // HTTPS would keep syncing over cleartext forever.
+        let registry = Arc::new(PairingRegistry::new(
+            conn.clone(),
+            cfg.keychain.clone(),
+            cfg.relay.clone(),
+        ));
         Ok(Arc::new(Sharepaste {
             state: SessionState::new(conn, runtime.handle().clone()),
             registry,
             keychain: cfg.keychain,
             clipboard: cfg.clipboard,
             events: cfg.events,
-            transport,
+            relay: cfg.relay,
             last_self_write: Arc::new(Mutex::new(None)),
             runtime,
         }))
@@ -306,32 +323,16 @@ impl Sharepaste {
     /// Returns once the pairing is unlocked and the two background tasks are on
     /// the runtime; it does not wait for the relay. A session already running
     /// for this user is cancelled first.
+    ///
+    /// One body, and the seam is under it: choosing the pairing and unlocking
+    /// its key is this facade's business, and everything the protocol does
+    /// afterwards goes to the [`Relay`] the pairing dialled.
     pub async fn start_session(&self, user_id: &str) -> Result<(), AppError> {
         let m = self.unlock(user_id).await?;
         // UserKey is Zeroizing<[u8;32]> with no Clone; clone the inner array via
         // a fresh Zeroizing wrapper so the session owns its own key.
         let user_key: UserKey = Zeroizing::new(*m.user_key);
-        session::spawn_session(
-            self.session_ctx(user_id),
-            Arc::new(ServerSession(m.server)),
-            user_key,
-        );
-        Ok(())
-    }
-
-    /// The same session, over a transport the caller supplies.
-    ///
-    /// The seam the loop's tests drive: everything above it is "which pairing,
-    /// over what connection", everything below it is the protocol.
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn start_session_over(
-        &self,
-        user_id: &str,
-        transport: Arc<dyn SessionTransport>,
-    ) -> Result<(), AppError> {
-        let m = self.unlock(user_id).await?;
-        let user_key: UserKey = Zeroizing::new(*m.user_key);
-        session::spawn_session(self.session_ctx(user_id), transport, user_key);
+        session::spawn_session(self.session_ctx(user_id), m.relay, user_key);
         Ok(())
     }
 
@@ -469,7 +470,7 @@ impl Sharepaste {
         let mut out = Vec::with_capacity(accts.len());
         let conn = self.state.conn.lock().await;
         for a in accts {
-            let pending = pending::count(&conn, &a.user_id)?;
+            let pending = history::depth(&conn, &a.user_id)?;
             let is_active = active.as_deref() == Some(a.user_id.as_str());
             let status = self.connection_state(&a.user_id);
             out.push(PairingSummary {
@@ -499,11 +500,13 @@ impl Sharepaste {
         device_label: &str,
     ) -> Result<PairedDevice, AppError> {
         // Trimmed once, here, and stored trimmed: an address with a stray space
-        // reaches the relay perfectly well through `ServerClient` and then fails
+        // reaches the relay perfectly well through the dial and then fails
         // to on the next launch, when it comes back out of the database.
         let server_url = server_url.trim();
-        let server = ServerClient::new(server_url, self.transport)?;
-        let mut claimed = claim_invite(&server, token, device_label)
+        // No token: this device is not one of that relay's devices until the
+        // claim it is about to make succeeds.
+        let relay = self.relay.at(server_url, None)?;
+        let mut claimed = claim_invite(relay.as_ref(), token, device_label)
             .await
             .map_err(|e| e.explain_insecure_relay(server_url))?;
         // The address that reached the relay from *here* is the one to keep; a
@@ -548,35 +551,12 @@ impl Sharepaste {
     pub async fn pair_start(&self, user_id: &str) -> Result<ShortCode, AppError> {
         let m = self.registry.load_active_membership(user_id).await?;
         let user_key: UserKey = Zeroizing::new(*m.user_key);
-        self.pair_start_with(user_id, Arc::new(m.server), user_key)
-            .await
-    }
-
-    /// The same handshake over a transport the caller supplies — the seam the
-    /// upload-before-reveal test drives.
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn pair_start_over(
-        &self,
-        user_id: &str,
-        transport: Arc<dyn PairTransport>,
-    ) -> Result<ShortCode, AppError> {
-        let m = self.registry.load_active_membership(user_id).await?;
-        let user_key: UserKey = Zeroizing::new(*m.user_key);
-        self.pair_start_with(user_id, transport, user_key).await
-    }
-
-    async fn pair_start_with(
-        &self,
-        user_id: &str,
-        transport: Arc<dyn PairTransport>,
-        user_key: UserKey,
-    ) -> Result<ShortCode, AppError> {
-        let server_url = transport.base_url();
-        let started = start_pair(transport.as_ref())
+        let server_url = m.relay.base_url();
+        let started = start_pair(m.relay.as_ref())
             .await
             .map_err(|e| e.explain_insecure_relay(&server_url))?;
         upload_pair_payload(
-            transport.as_ref(),
+            m.relay.as_ref(),
             started.pair_id,
             &started.pairing_secret,
             user_id,
@@ -594,11 +574,11 @@ impl Sharepaste {
             expires_at,
         });
 
-        // The watch carries the sink and the transport and never the facade: a
-        // task holding the last `Arc<Sharepaste>` would drop, from inside it, the
+        // The watch carries the sink and the relay and never the facade: a task
+        // holding the last `Arc<Sharepaste>` would drop, from inside it, the
         // very runtime it is running on.
         self.runtime.spawn(watch_for_claim(
-            transport,
+            m.relay,
             self.events.clone(),
             user_id.to_string(),
             started.pair_id.to_string(),
@@ -616,20 +596,25 @@ impl Sharepaste {
         let decoded = decode_shortcode(code)?;
         let server_url = decoded.server_url;
         // A short code carries the relay's address, so a scanned code can name a
-        // cleartext relay just as a typed one can. Same choke point, same answer.
-        let server = ServerClient::new(&server_url, self.transport)?;
+        // cleartext relay just as a typed one can. Same choke point, same answer
+        // — and no token, because this device becomes one of that relay's
+        // devices only at the last of the three calls below.
+        let relay = self.relay.at(&server_url, None)?;
         let proof = secret_proof_hex(&decoded.pairing_secret);
-        server
+        relay
             .pair_claim(&decoded.pair_id.to_string(), &proof)
             .await
             .map_err(|e| e.explain_insecure_relay(&server_url))?;
 
-        let payload =
-            fetch_and_decrypt_pair_payload(&server, decoded.pair_id, &decoded.pairing_secret)
-                .await
-                .map_err(|e| e.explain_insecure_relay(&server_url))?;
-        let device = server
-            .devices(&decoded.pair_id.to_string(), &proof, device_label)
+        let payload = fetch_and_decrypt_pair_payload(
+            relay.as_ref(),
+            decoded.pair_id,
+            &decoded.pairing_secret,
+        )
+        .await
+        .map_err(|e| e.explain_insecure_relay(&server_url))?;
+        let device = relay
+            .pair_devices(&decoded.pair_id.to_string(), &proof, device_label)
             .await
             .map_err(|e| e.explain_insecure_relay(&server_url))?;
 
@@ -784,8 +769,7 @@ impl Sharepaste {
         limit: i64,
     ) -> Result<Vec<Entry>, AppError> {
         let conn = self.state.conn.lock().await;
-        let cursor = before.map(|c| (c.rank, c.ord, c.id));
-        let rows = entries_cache::list_recent(&conn, user_id, cursor, limit)?;
+        let rows = history::page(&conn, user_id, before, limit)?;
         let labels = devices::map_for(&conn, user_id)?;
         Ok(to_entries(rows, &labels))
     }
@@ -801,18 +785,23 @@ impl Sharepaste {
         entry_id: i64,
     ) -> Result<Option<String>, AppError> {
         let conn = self.state.conn.lock().await;
-        entries_cache::get_full(&conn, user_id, entry_id)
+        history::plaintext_of(&conn, user_id, entry_id)
     }
 
     /// Put one entry back on the clipboard, and record the **Use**.
     ///
-    /// Returns as soon as the clipboard has the text. The use goes to the relay
-    /// on the facade's own runtime, because this is the popover's paste-and-go
-    /// path: it awaits this call before it hides, and the HTTP client has no
-    /// request timeout, so awaiting a round trip here would let a relay that
-    /// accepts a connection and never answers hang the paste. Nothing is lost
-    /// by not waiting — [`UseRecorder::record`] returns nothing, and what it
-    /// changes reaches a shell on `HistoryChanged` and `PendingCount`.
+    /// **The use is spawned, not awaited, and that is now the whole of the
+    /// decision.** This is the popover's paste-and-go path: it awaits this call
+    /// before it hides, and the HTTP client has no request timeout, so awaiting
+    /// a round trip here would let a relay that accepts a connection and never
+    /// answers hang the paste. Nothing is lost by not waiting —
+    /// [`UseRecorder::record`] returns nothing, and what it changes reaches a
+    /// shell on `HistoryChanged` and `PendingCount`.
+    ///
+    /// There used to be a second body for tests that awaited instead, which is
+    /// how a Recall came to mean one thing in the app and another in the tests
+    /// that were meant to pin it. A test now waits for the effect, exactly as a
+    /// shell does.
     ///
     /// The **Offer** path awaits its use instead, and says why: see
     /// [`Self::capture_or_use`].
@@ -824,31 +813,16 @@ impl Sharepaste {
         Ok(())
     }
 
-    /// The same recall over a transport the caller supplies, awaited rather
-    /// than spawned — the seam the use-recording tests drive, for the reason
-    /// [`Self::recall_latest_over`] exists.
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn recall_over(
-        &self,
-        user_id: &str,
-        entry_id: i64,
-        transport: &dyn SessionTransport,
-    ) -> Result<(), AppError> {
-        self.place_on_clipboard(user_id, entry_id).await?;
-        self.use_recorder().record_over(user_id, entry_id, transport).await;
-        Ok(())
-    }
-
     /// Read one entry's plaintext and put it on the clipboard — everything a
     /// Recall is before the use is recorded.
     ///
-    /// One body, so the seam above cannot come to differ from the operation it
-    /// stands in for. The self-write marker ordering lives in `write_clipboard`
+    /// Its own function because Recall Latest performs the same write for its
+    /// own reasons. The self-write marker ordering lives in `write_clipboard`
     /// and only there; nothing may reach the clipboard by another route.
     async fn place_on_clipboard(&self, user_id: &str, entry_id: i64) -> Result<(), AppError> {
         let plaintext = {
             let conn = self.state.conn.lock().await;
-            entries_cache::get_full(&conn, user_id, entry_id)?
+            history::plaintext_of(&conn, user_id, entry_id)?
                 .ok_or_else(|| AppError::NotFound("plaintext unavailable".into()))?
         };
         self.write_clipboard(&plaintext)
@@ -908,37 +882,13 @@ impl Sharepaste {
     pub async fn recall_latest(&self, user_id: &str) -> Result<Recalled, AppError> {
         let m = self.registry.load_active_membership(user_id).await?;
         let user_key: UserKey = Zeroizing::new(*m.user_key);
-        let server_url = m.server.base().to_string();
-        self.recall_latest_with(user_id, Arc::new(ServerSession(m.server)), &user_key, &server_url)
-            .await
-    }
-
-    /// The same recall over a transport the caller supplies.
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn recall_latest_over(
-        &self,
-        user_id: &str,
-        transport: Arc<dyn SessionTransport>,
-    ) -> Result<Recalled, AppError> {
-        let m = self.registry.load_active_membership(user_id).await?;
-        let user_key: UserKey = Zeroizing::new(*m.user_key);
-        let server_url = m.server.base().to_string();
-        self.recall_latest_with(user_id, transport, &user_key, &server_url)
-            .await
-    }
-
-    async fn recall_latest_with(
-        &self,
-        user_id: &str,
-        transport: Arc<dyn SessionTransport>,
-        user_key: &UserKey,
-        server_url: &str,
-    ) -> Result<Recalled, AppError> {
+        let server_url = m.relay.base_url();
+        let relay = m.relay;
         let drained = session::drain_pending(
             &self.state,
             self.events.clone(),
             user_id,
-            transport.clone(),
+            relay.clone(),
         )
         .await;
         let mut source = RecallSource::Relay;
@@ -953,22 +903,22 @@ impl Sharepaste {
             &self.state,
             self.events.as_ref(),
             user_id,
-            user_key,
-            transport.as_ref(),
+            &user_key,
+            relay.as_ref(),
         )
         .await
         {
             // Not fatal: the newest cached entry is still the best answer
             // available, and the caller is told which one it got.
             tracing::warn!(
-                err = %e.explain_insecure_relay(server_url), %user_id,
+                err = %e.explain_insecure_relay(&server_url), %user_id,
                 "recall latest could not reach the relay; falling back to the cache"
             );
             source = RecallSource::Cache;
         }
         let newest = {
             let conn = self.state.conn.lock().await;
-            entries_cache::list_recent(&conn, user_id, None, 1)?
+            history::page(&conn, user_id, None, 1)?
                 .into_iter()
                 .next()
                 .ok_or_else(|| AppError::NotFound(format!("no entries for {user_id}")))?
@@ -982,13 +932,13 @@ impl Sharepaste {
             .plaintext
             .ok_or_else(|| AppError::NotFound("plaintext unavailable".into()))?;
         self.write_clipboard(&text)?;
-        // After the clipboard, and over the transport this recall already
-        // holds: the entry it handed back becomes the head of the History on
-        // every device. Awaited rather than spawned, unlike `recall`: this
-        // operation performs a relay round trip by design — the backfill above
-        // — so its caller is already prepared for one.
+        // After the clipboard, and over the Relay this recall already holds: the
+        // entry it handed back becomes the head of the History on every device.
+        // Awaited rather than spawned, unlike `recall`: this operation performs
+        // a relay round trip by design — the backfill above — so its caller is
+        // already prepared for one.
         self.use_recorder()
-            .record_over(user_id, entry_id, transport.as_ref())
+            .record_with(user_id, entry_id, relay.as_ref())
             .await;
         Ok(Recalled {
             text,
@@ -1013,50 +963,31 @@ impl Sharepaste {
     /// branch above means this operation no longer consults the pairing on the way
     /// past, so nothing else would notice that there was never anything to delete.
     pub async fn delete_entry(&self, user_id: &str, entry_id: i64) -> Result<(), AppError> {
-        let reach = {
+        // Three answers and not two: the relay's id, no relay id at all, or
+        // `NotFound` for a row that is not here. Only the first needs the relay.
+        let named = {
             let conn = self.state.conn.lock().await;
-            entries_cache::reach_of(&conn, user_id, entry_id)?
+            history::relay_id_of(&conn, user_id, entry_id)?
         };
-        let withdrawn = match reach {
-            entries_cache::Reach::Absent => {
-                return Err(AppError::NotFound(format!(
-                    "no entry {entry_id} on this device"
-                )))
-            }
-            entries_cache::Reach::Flushed(relay_id) => {
-                let m = self.registry.load_active_membership(user_id).await?;
-                let server_url = m.server.base().to_string();
-                m.server
-                    .delete_entry(relay_id)
-                    .await
-                    .map_err(|e| e.explain_insecure_relay(&server_url))?;
-                let conn = self.state.conn.lock().await;
-                entries_cache::delete_one(&conn, user_id, entry_id)?;
-                false
-            }
-            entries_cache::Reach::Unflushed => {
-                let conn = self.state.conn.lock().await;
-                // The row and the act together, and in that order for no reason
-                // that matters: nothing else can observe the gap, because both
-                // writes happen under this one lock.
-                entries_cache::delete_one(&conn, user_id, entry_id)?;
-                pending::delete_for_entry(&conn, user_id, entry_id)?;
-                true
-            }
+        if let Some(relay_id) = named {
+            let m = self.registry.load_active_membership(user_id).await?;
+            let server_url = m.relay.base_url();
+            m.relay
+                .delete_entry(relay_id)
+                .await
+                .map_err(|e| e.explain_insecure_relay(&server_url))?;
+        }
+        let change = {
+            let conn = self.state.conn.lock().await;
+            history::forget_entry(&conn, user_id, entry_id)?
         };
         self.events.emit(CoreEvent::EntryDeleted {
             user_id: user_id.to_string(),
             entry_id,
         });
-        if withdrawn {
-            // The withdrawal changed the queue depth, and the count chrome is
-            // the only thing that says so.
-            let count = self.pending_depth(user_id).await?;
-            self.events.emit(CoreEvent::PendingCount {
-                user_id: user_id.to_string(),
-                count,
-            });
-        }
+        // A withdrawal changed the queue depth, and the count chrome is the only
+        // thing that says so; a row the relay already took left the queue alone.
+        history::announce(self.events.as_ref(), user_id, &change);
         Ok(())
     }
 
@@ -1064,7 +995,7 @@ impl Sharepaste {
     ///
     /// A fresh act and not a retry, so it goes to the back of the queue and
     /// thereby to the head of the History, and it carries nothing forward from the
-    /// refusal that preceded it — `requeue_to_back` copies the act and leaves
+    /// refusal that preceded it — the move copies the act and leaves
     /// `refused_at`, `attempts` and `last_error` behind with the row it replaces.
     ///
     /// **Not a Use.** There is no relay record to move: the relay never took this
@@ -1074,19 +1005,16 @@ impl Sharepaste {
     /// honest. The verb is for after the relay's limit or the Active Pairing has
     /// changed, and there is no way for this device to know that has happened.
     pub async fn resend(&self, user_id: &str, entry_id: i64) -> Result<(), AppError> {
-        {
+        let change = {
             let conn = self.state.conn.lock().await;
-            let rowid = pending::rowid_for_entry(&conn, user_id, entry_id)?.ok_or_else(|| {
+            history::resend(&conn, user_id, entry_id, crate::now_ms())?.ok_or_else(|| {
                 AppError::NotFound(format!("no act queued for entry {entry_id}"))
-            })?;
-            pending::requeue_to_back(&conn, rowid, crate::now_ms())?;
-        }
+            })?
+        };
         // The row left the refused region for the head of the pending one, which
         // reorders the list. The queue depth is unchanged — the act moved, it did
         // not multiply — so nothing reports one.
-        self.events.emit(CoreEvent::HistoryChanged {
-            user_id: user_id.to_string(),
-        });
+        history::announce(self.events.as_ref(), user_id, &change);
         self.nudge_uploader(user_id);
         Ok(())
     }
@@ -1098,37 +1026,23 @@ impl Sharepaste {
     /// every entry straight back on the next backfill. The queue goes for the
     /// same reason — left standing it would repopulate exactly what was just
     /// cleared, which is what it used to do.
+    ///
+    /// One body. `delete_all_entries` is on [`Relay`] like every other route, so
+    /// the local half no longer needs a private seam of its own for a test to
+    /// call: a scripted relay stands in for the remote half, and the ordering
+    /// between them is what a test can now see.
     pub async fn clear_history(&self, user_id: &str) -> Result<(), AppError> {
         let m = self.registry.load_active_membership(user_id).await?;
-        let server_url = m.server.base().to_string();
-        m.server
+        let server_url = m.relay.base_url();
+        m.relay
             .delete_all_entries()
             .await
             .map_err(|e| e.explain_insecure_relay(&server_url))?;
-        self.forget_history(user_id).await
-    }
-
-    /// Everything `clear_history` does once the relay has agreed, and the seam
-    /// its own tests drive.
-    ///
-    /// Separate because the relay half needs a relay: `delete_all_entries` is on
-    /// the pairing's own `ServerClient` rather than on a `SessionTransport`, so a
-    /// fake cannot stand in for it — and widening that trait for one test would
-    /// put a route on it that nothing in a session ever calls.
-    async fn forget_history(&self, user_id: &str) -> Result<(), AppError> {
-        let count = {
+        let change = {
             let conn = self.state.conn.lock().await;
-            entries_cache::delete_all(&conn, user_id)?;
-            pending::delete_all(&conn, user_id)?;
-            pending::count(&conn, user_id)?
+            history::forget_all(&conn, user_id)?
         };
-        self.events.emit(CoreEvent::HistoryChanged {
-            user_id: user_id.to_string(),
-        });
-        self.events.emit(CoreEvent::PendingCount {
-            user_id: user_id.to_string(),
-            count,
-        });
+        history::announce(self.events.as_ref(), user_id, &change);
         Ok(())
     }
 
@@ -1242,39 +1156,28 @@ impl Sharepaste {
         user_id: &str,
         text: String,
     ) -> Result<OfferOutcome, AppError> {
-        let hash = entries_cache::plaintext_sha256(&text);
         let held = {
             let conn = self.state.conn.lock().await;
-            // **The queue first, and only then the cache.** An un-flushed
-            // capture is now both a row in `entries_cache` and an act in the
-            // queue, and only the queue answer is actionable: the entry has no
-            // relay id to record a use against, and re-copying it is the same
-            // act as copying it (ADR 0012). A settled entry misses here — its
-            // queued act is long gone — and falls through to the cache.
-            match pending::find_by_hash(&conn, user_id, &hash)? {
-                Some(rowid) => Held::Pending(rowid),
-                None => match entries_cache::find_by_hash(&conn, user_id, &hash)? {
-                    Some(entry_id) => Held::Entry(entry_id),
-                    None => Held::Nothing,
-                },
-            }
+            history::recognise(&conn, user_id, &text)?
         };
         match held {
-            Held::Nothing => self.enqueue_capture(user_id, text, &hash).await,
+            Held::Nothing => self.enqueue_capture(user_id, text).await,
             Held::Entry(entry_id) => {
                 self.use_recorder().record(user_id, entry_id).await;
                 Ok(OfferOutcome::Recognised {
                     pending: self.pending_depth(user_id).await?,
                 })
             }
-            Held::Pending(rowid) => {
+            Held::Queued(entry_id) => {
                 let pending = {
                     let conn = self.state.conn.lock().await;
-                    pending::requeue_to_back(&conn, rowid, crate::now_ms())?;
-                    // Unchanged: the act moved, it did not multiply, so there is
-                    // nothing to report on `PendingCount`.
-                    pending::count(&conn, user_id)?
+                    history::resend(&conn, user_id, entry_id, crate::now_ms())?;
+                    history::depth(&conn, user_id)?
                 };
+                // Nothing is announced, and that is preserved rather than
+                // chosen: the move reorders the list exactly as `resend` does,
+                // and every other caller of it says so. Saying so here too is a
+                // behaviour change and belongs to its own ticket.
                 Ok(OfferOutcome::Recognised { pending })
             }
         }
@@ -1282,16 +1185,13 @@ impl Sharepaste {
 
     async fn pending_depth(&self, user_id: &str) -> Result<i64, AppError> {
         let conn = self.state.conn.lock().await;
-        pending::count(&conn, user_id)
+        history::depth(&conn, user_id)
     }
 
     /// Encrypt, store the Entry, queue the act, report.
     ///
-    /// **The Entry and the act go in together, in one transaction.** An Entry
-    /// exists from the moment of capture (ADR 0016), and the row is what the
-    /// queued act is *for*: a queue row with no entry would be an act nobody can
-    /// see or withdraw, and an entry with no queued act would be content that
-    /// never reaches the relay. Either half alone is a worse state than neither.
+    /// The Entry and the act go in together — one transaction, in
+    /// [`history::capture`], which is the only door to either half.
     ///
     /// `EntryAdded` fires here and nowhere else for a capture. The flush that
     /// follows creates nothing and announces nothing.
@@ -1299,11 +1199,10 @@ impl Sharepaste {
         &self,
         user_id: &str,
         text: String,
-        plaintext_sha256: &str,
     ) -> Result<OfferOutcome, AppError> {
         let m = self.registry.load_active_membership(user_id).await?;
         let ciphertext = crate::crypto::encrypt(&m.user_key, user_id, text.as_bytes())?;
-        let (entry, count) = {
+        let (entry, captured) = {
             let conn = self.state.conn.lock().await;
             // This device is the Entry's Origin, and the pairing row is where
             // its id lives. Without one there is nothing to attribute the row
@@ -1311,19 +1210,13 @@ impl Sharepaste {
             let device_id = accounts::find(&conn, user_id)?
                 .ok_or_else(|| AppError::NotFound(format!("no pairing for {user_id}")))?
                 .device_id;
-            let tx = conn.unchecked_transaction()?;
-            let local_id = entries_cache::insert_captured(
-                &tx, user_id, &ciphertext, &text, plaintext_sha256, &device_id,
+            let captured = history::capture(
+                &conn, user_id, &ciphertext, &text, &device_id, crate::now_ms(),
             )?;
-            pending::enqueue_capture(
-                &tx, user_id, local_id, &ciphertext, plaintext_sha256, crate::now_ms(),
-            )?;
-            let count = pending::count(&tx, user_id)?;
-            tx.commit()?;
             let device_label =
                 devices::label_for(&conn, user_id, &device_id).unwrap_or_default();
             let entry = Entry::new(
-                local_id,
+                captured.local_id,
                 user_id.to_string(),
                 Some(text),
                 // No relay stamp yet, and no device clock standing in for one:
@@ -1334,18 +1227,17 @@ impl Sharepaste {
                 device_label,
                 Queued::Pending,
             );
-            (entry, count)
+            (entry, captured)
         };
         self.events.emit(CoreEvent::EntryAdded {
             user_id: user_id.to_string(),
             entry,
         });
-        self.events.emit(CoreEvent::PendingCount {
-            user_id: user_id.to_string(),
-            count,
-        });
+        history::announce(self.events.as_ref(), user_id, &captured.change);
         self.nudge_uploader(user_id);
-        Ok(OfferOutcome::Queued { pending: count })
+        Ok(OfferOutcome::Queued {
+            pending: captured.change.depth.unwrap_or_default(),
+        })
     }
 
     // -- settings ---------------------------------------------------------
@@ -1459,12 +1351,11 @@ impl UseRecorder {
                 return;
             }
         };
-        self.record_over(user_id, entry_id, &ServerSession(m.server))
-            .await;
+        self.record_with(user_id, entry_id, m.relay.as_ref()).await;
     }
 
-    /// The same, over a transport the caller already holds — `recall_latest`
-    /// has one, and building a second is a second round trip for nothing.
+    /// The same, over a Relay the caller already holds — `recall_latest` has
+    /// one, and dialling a second is a second round trip for nothing.
     ///
     /// The relay's `last_use` is applied to the local row directly rather than
     /// waited for on the echo — the rule the uploader's reconciliation states
@@ -1472,21 +1363,21 @@ impl UseRecorder {
     /// watermark is deliberately not advanced with it, for the same reason: it
     /// means "everything up to here has been fetched", and this device has
     /// fetched nothing.
-    async fn record_over(&self, user_id: &str, entry_id: i64, transport: &dyn SessionTransport) {
+    async fn record_with(&self, user_id: &str, entry_id: i64, relay: &dyn Relay) {
         // `entry_id` is this device's own; the relay has never heard of it. A row
         // with no relay id has no relay record to move, so the use it just
         // received is carried by the queue instead. A row that is not here at all
         // is nothing to move either way.
         let relay_id = {
             let conn = self.state.conn.lock().await;
-            match entries_cache::reach_of(&conn, user_id, entry_id) {
-                Ok(entries_cache::Reach::Flushed(relay_id)) => relay_id,
-                Ok(entries_cache::Reach::Unflushed) => {
+            match history::relay_id_of(&conn, user_id, entry_id) {
+                Ok(Some(relay_id)) => relay_id,
+                Ok(None) => {
                     drop(conn);
                     self.move_act_to_back(user_id, entry_id).await;
                     return;
                 }
-                Ok(entries_cache::Reach::Absent) => {
+                Err(AppError::NotFound(_)) => {
                     tracing::warn!(entry_id, "a use arrived for an entry this device does not hold");
                     return;
                 }
@@ -1496,12 +1387,12 @@ impl UseRecorder {
                 }
             }
         };
-        match transport.use_entry(relay_id).await {
+        match relay.use_entry(relay_id).await {
             Ok(used) => {
-                let moved = {
+                let change = {
                     let conn = self.state.conn.lock().await;
-                    match entries_cache::set_last_use(&conn, user_id, relay_id, used.last_use) {
-                        Ok(rows) => rows > 0,
+                    match history::record_use(&conn, user_id, relay_id, used.last_use) {
+                        Ok(change) => change,
                         // Logged rather than swallowed: a cache write that
                         // failed must not be indistinguishable from a use of an
                         // entry this device no longer holds. The relay has the
@@ -1509,15 +1400,11 @@ impl UseRecorder {
                         // down with its new Last Use.
                         Err(e) => {
                             tracing::warn!(err = %e, entry_id, "the relay recorded this use but the cache did not");
-                            false
+                            history::Change::reorder(false)
                         }
                     }
                 };
-                if moved {
-                    self.events.emit(CoreEvent::HistoryChanged {
-                        user_id: user_id.to_string(),
-                    });
-                }
+                history::announce(self.events.as_ref(), user_id, &change);
             }
             // The relay does not have this entry — or is older than this client
             // and does not have the route. Neither earns a queued retry: skew is
@@ -1541,15 +1428,11 @@ impl UseRecorder {
     /// Both ids travel: the relay is told about `relay_id`, and `entry_id` is the
     /// row this device shows and orders the act against.
     async fn queue(&self, user_id: &str, entry_id: i64, relay_id: i64) -> Result<(), AppError> {
-        let count = {
+        let change = {
             let conn = self.state.conn.lock().await;
-            pending::enqueue_use(&conn, user_id, entry_id, relay_id, crate::now_ms())?;
-            pending::count(&conn, user_id)?
+            history::queue_use(&conn, user_id, entry_id, relay_id, crate::now_ms())?
         };
-        self.events.emit(CoreEvent::PendingCount {
-            user_id: user_id.to_string(),
-            count,
-        });
+        history::announce(self.events.as_ref(), user_id, &change);
         match self.state.upload_triggers.lock().get(user_id) {
             Some(trigger) => trigger.notify_one(),
             None => tracing::warn!(%user_id, "no uploader trigger registered"),
@@ -1566,53 +1449,47 @@ impl UseRecorder {
     /// thing this device did, and it is still owed. The queue's order is the only
     /// record of that, so the act moves rather than multiplying.
     ///
-    /// `requeue_to_back` already drops the attempt count and the last error as "a
-    /// fresh act, not a retry", which is what a Recall is.
+    /// The move already drops the attempt count and the last error as "a fresh
+    /// act, not a retry", which is what a Recall is.
     ///
     /// The queue depth does not change, so nothing reports one. What did change is
     /// where the row sits, and `HistoryChanged` is what says so.
     async fn move_act_to_back(&self, user_id: &str, entry_id: i64) {
-        let moved = {
+        let change = {
             let conn = self.state.conn.lock().await;
-            match pending::rowid_for_entry(&conn, user_id, entry_id) {
-                Ok(Some(rowid)) => {
-                    pending::requeue_to_back(&conn, rowid, crate::now_ms()).is_ok()
-                }
+            match history::resend(&conn, user_id, entry_id, crate::now_ms()) {
+                Ok(Some(change)) => change,
                 Ok(None) => {
                     // No relay id and no queued act: the row is beyond anything
                     // this can do for it, which is the state a withdrawn act
                     // leaves and nothing else reaches.
                     tracing::info!(entry_id, "no act queued for this entry; nothing to move");
-                    false
+                    return;
                 }
                 Err(e) => {
                     tracing::warn!(err = %e, entry_id, "could not find the act queued for this entry");
-                    false
+                    return;
                 }
             }
         };
-        if moved {
-            self.events.emit(CoreEvent::HistoryChanged {
-                user_id: user_id.to_string(),
-            });
-        }
+        history::announce(self.events.as_ref(), user_id, &change);
     }
 }
 
-/// Cached rows as a shell renders them, with each Origin resolved against the
-/// Device mirror and each region read off the row.
+/// Rows of the History as a shell renders them, with each Origin resolved
+/// against the Device mirror.
 ///
 /// A `device_id` the mirror has never heard of keeps a `None` label rather than
 /// failing the row: a device paired since the last `GET /me`, or a relay too old
 /// to serve one, is expected — [`Entry::new`] falls back to a slice of the id.
 fn to_entries(
-    rows: Vec<entries_cache::CachedEntry>,
+    rows: Vec<history::CachedEntry>,
     labels: &HashMap<String, String>,
 ) -> Vec<Entry> {
     rows.into_iter()
         .map(|r| {
             let device_label = labels.get(&r.device_id).cloned();
-            let queued = r.region.queued();
+            let queued = r.queued;
             Entry::new(
                 r.local_id,
                 r.user_id,
@@ -1633,13 +1510,13 @@ fn to_entries(
 /// loses the network while its code is on screen has until the relay expires the
 /// code to get it back, and the relay is what decides when that is.
 async fn watch_for_claim(
-    transport: Arc<dyn PairTransport>,
+    relay: Arc<dyn Relay>,
     events: Arc<dyn EventSink>,
     user_id: String,
     pair_id: String,
 ) {
     loop {
-        match transport.poll(&pair_id, PAIR_POLL_TIMEOUT_MS).await {
+        match relay.pair_poll(&pair_id, PAIR_POLL_TIMEOUT_MS).await {
             Ok(PairClaim::Consumed { device_label }) => {
                 events.emit(CoreEvent::PairClaimed {
                     user_id,
@@ -1664,12 +1541,23 @@ async fn watch_for_claim(
 mod tests {
     use super::*;
     use crate::capture::filter::MAX_BYTES;
+    use crate::http::TransportPolicy;
     use crate::keychain::{token_account, user_key_account, InMemoryKeychain};
     use crate::storage::accounts;
     use crate::testing::{
         encrypted_row, live_entry, FakeClipboard, FakePasteboard, RecordingSink, ScriptedRelay,
-        Wire, SCRIPTED_PAIR_ID, SCRIPTED_RELAY_URL, TEST_USER_KEY_HEX,
+        Wire, SCRIPTED_DEVICE_ID, SCRIPTED_PAIR_ID, SCRIPTED_RELAY_URL, SCRIPTED_USER_ID,
+        TEST_USER_KEY_HEX,
     };
+
+    /// The desktop's dial: a real HTTP client that permits cleartext.
+    ///
+    /// What a test that is about an *address* wants — a refused port, a
+    /// cleartext relay nobody is serving. The scheme rule itself has its own
+    /// tests in `http::client` and `pairing::registry`.
+    fn over_http() -> RelayDial {
+        RelayDial::over_http(TransportPolicy::AllowCleartext)
+    }
 
     fn facade(clipboard: Arc<FakeClipboard>) -> Arc<Sharepaste> {
         Sharepaste::open_in_memory(SharepasteConfig {
@@ -1677,9 +1565,7 @@ mod tests {
             keychain: Arc::new(InMemoryKeychain::default()),
             clipboard,
             events: Arc::new(RecordingSink::default()),
-            // The desktop's policy. The scheme rule has its own tests in
-            // `http::client` and `pairing::registry`; these are about everything else.
-            require_https: false,
+            relay: over_http(),
         })
         .unwrap()
     }
@@ -1777,23 +1663,21 @@ mod tests {
         let clipboard = FakeClipboard::new();
         let keychain = Arc::new(InMemoryKeychain::default());
         let sink = Arc::new(RecordingSink::default());
+        let relay = ScriptedRelay::new(
+            vec![Ok(vec![encrypted_row(1, "u", "from the backfill", "d")])],
+            vec![Wire::Holds(vec![live_entry(2, "u", "live one", "d")])],
+        );
         let sp = Sharepaste::open_in_memory(SharepasteConfig {
             db_path: PathBuf::from("ignored-by-open_in_memory"),
             keychain: keychain.clone(),
             clipboard: clipboard.clone(),
             events: sink.clone(),
-            require_https: false,
+            relay: relay.dial(),
         })
         .unwrap();
         seed_pairing(&sp, &keychain, "https://srv");
 
-        let relay = ScriptedRelay::new(
-            vec![Ok(vec![encrypted_row(1, "u", "from the backfill", "d")])],
-            vec![Wire::Holds(vec![live_entry(2, "u", "live one", "d")])],
-        );
-        sp.runtime
-            .block_on(sp.start_session_over("u", relay.clone()))
-            .unwrap();
+        sp.runtime.block_on(sp.start_session("u")).unwrap();
 
         until(|| sink.entry_previews() == ["live one"]);
         assert_eq!(sp.connection_state("u"), ConnectionState::Online);
@@ -1826,7 +1710,7 @@ mod tests {
             keychain: Arc::new(InMemoryKeychain::default()),
             clipboard: FakeClipboard::new(),
             events: sink.clone(),
-            require_https: false,
+            relay: over_http(),
         })
         .unwrap();
 
@@ -1871,20 +1755,18 @@ mod tests {
     fn stop_all_sessions_writes_contact_and_stops_claiming_online() {
         let keychain = Arc::new(InMemoryKeychain::default());
         let sink = Arc::new(RecordingSink::default());
+        let relay = ScriptedRelay::new(vec![Ok(Vec::new())], vec![Wire::Holds(Vec::new())]);
         let sp = Sharepaste::open_in_memory(SharepasteConfig {
             db_path: PathBuf::from("ignored-by-open_in_memory"),
             keychain: keychain.clone(),
             clipboard: FakeClipboard::new(),
             events: sink.clone(),
-            require_https: false,
+            relay: relay.dial(),
         })
         .unwrap();
         seed_pairing(&sp, &keychain, "https://srv");
 
-        let relay = ScriptedRelay::new(vec![Ok(Vec::new())], vec![Wire::Holds(Vec::new())]);
-        sp.runtime
-            .block_on(sp.start_session_over("u", relay.clone()))
-            .unwrap();
+        sp.runtime.block_on(sp.start_session("u")).unwrap();
         until(|| sp.connection_state("u") == ConnectionState::Online);
         assert_eq!(
             persisted_contact(&sp),
@@ -1928,20 +1810,18 @@ mod tests {
     fn backgrounded_session() -> (Arc<Sharepaste>, Arc<RecordingSink>, Arc<ScriptedRelay>) {
         let keychain = Arc::new(InMemoryKeychain::default());
         let sink = Arc::new(RecordingSink::default());
+        let relay = ScriptedRelay::new(vec![Ok(Vec::new())], vec![Wire::Holds(Vec::new())]);
         let sp = Sharepaste::open_in_memory(SharepasteConfig {
             db_path: PathBuf::from("ignored-by-open_in_memory"),
             keychain: keychain.clone(),
             clipboard: FakeClipboard::new(),
             events: sink.clone(),
-            require_https: false,
+            relay: relay.dial(),
         })
         .unwrap();
         seed_pairing(&sp, &keychain, "https://srv");
 
-        let relay = ScriptedRelay::new(vec![Ok(Vec::new())], vec![Wire::Holds(Vec::new())]);
-        sp.runtime
-            .block_on(sp.start_session_over("u", relay.clone()))
-            .unwrap();
+        sp.runtime.block_on(sp.start_session("u")).unwrap();
         until(|| sp.connection_state("u") == ConnectionState::Online);
         sp.stop_all_sessions();
         (sp, sink, relay)
@@ -1966,11 +1846,25 @@ mod tests {
         clipboard: Arc<FakeClipboard>,
     }
 
-    /// `server_url` decides what a relay call does: nothing here reaches a
-    /// network, and every rig points at a port that refuses instantly so an
-    /// operation that *does* try is a fast, deterministic failure rather than a
-    /// hang.
+    /// A rig whose relay is the shell's own HTTP dial, aimed at `server_url`.
+    ///
+    /// Nothing here reaches a network, and every rig points at a port that
+    /// refuses instantly, so an operation that *does* try is a fast,
+    /// deterministic failure rather than a hang. What a test about an address
+    /// wants; [`rig_over`] is what a test about an answer wants.
     fn rig_at(server_url: &str) -> Rig {
+        rig_dialling(server_url, over_http())
+    }
+
+    /// A rig whose every address reaches one scripted relay.
+    ///
+    /// The seam under the facade: the operations below are the ones a shell
+    /// calls, driven with no relay in reach and no twin standing in for them.
+    fn rig_over(relay: &Arc<ScriptedRelay>) -> Rig {
+        rig_dialling(SCRIPTED_RELAY_URL, relay.dial())
+    }
+
+    fn rig_dialling(server_url: &str, dial: RelayDial) -> Rig {
         let keychain = Arc::new(InMemoryKeychain::default());
         let sink = Arc::new(RecordingSink::default());
         let clipboard = FakeClipboard::new();
@@ -1979,7 +1873,7 @@ mod tests {
             keychain: keychain.clone(),
             clipboard: clipboard.clone(),
             events: sink.clone(),
-            require_https: false,
+            relay: dial,
         })
         .unwrap();
         seed_pairing(&sp, &keychain, server_url);
@@ -2019,10 +1913,10 @@ mod tests {
      */
     #[test]
     fn pair_start_uploads_the_payload_before_the_code_can_be_observed() {
-        let Rig { sp, sink, .. } = rig();
         let relay = ScriptedRelay::new(Vec::new(), Vec::new()).pairing(vec![Ok(
             PairClaim::Consumed { device_label: Some("mac-B".into()) },
         )]);
+        let Rig { sp, sink, .. } = rig_over(&relay);
 
         let observed: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
         let seen = observed.clone();
@@ -2033,7 +1927,7 @@ mod tests {
 
         let revealed = sp
             .runtime
-            .block_on(sp.pair_start_over("u", relay.clone()))
+            .block_on(sp.pair_start("u"))
             .unwrap();
 
         let during_upload = observed
@@ -2062,6 +1956,136 @@ mod tests {
         until(|| sink.pair_claimed() == vec![Some("mac-B".to_string())]);
     }
 
+    /// A facade with no Pairing at all, dialling one scripted relay.
+    ///
+    /// The two pairing operations are the ones that *make* a Pairing, so they
+    /// cannot start from a rig that already has one.
+    fn unpaired_over(relay: &Arc<ScriptedRelay>) -> (Arc<Sharepaste>, Arc<RecordingSink>) {
+        let sink = Arc::new(RecordingSink::default());
+        let sp = Sharepaste::open_in_memory(SharepasteConfig {
+            db_path: PathBuf::from("ignored-by-open_in_memory"),
+            keychain: Arc::new(InMemoryKeychain::default()),
+            clipboard: FakeClipboard::new(),
+            events: sink.clone(),
+            relay: relay.dial(),
+        })
+        .unwrap();
+        (sp, sink)
+    }
+
+    /*
+     * The first device onto a relay, all the way through, with no relay in
+     * reach. Only the failure path could be driven before the seam moved, which
+     * left the operation's whole *effect* — a key and a token in the keychain, a
+     * Pairing row, the Active Pairing, the report — resting on the flow test and
+     * on a live relay.
+     *
+     * `pair_with_invite` is also the only path that mints a user key, so the
+     * key it stores is this device's own and not one the relay handed over.
+     */
+    #[test]
+    fn pairing_with_an_invite_keeps_the_pairing_it_was_handed() {
+        let relay = ScriptedRelay::new(Vec::new(), Vec::new());
+        let (sp, sink) = unpaired_over(&relay);
+
+        let paired = sp
+            .runtime
+            .block_on(sp.pair_with_invite("  https://relay.example  ", "an-invite", "mac-A"))
+            .unwrap();
+
+        assert_eq!(relay.invites(), vec!["an-invite".to_string()], "the token was redeemed");
+        assert_eq!(paired.user_id, SCRIPTED_USER_ID);
+        assert_eq!(paired.device_id, SCRIPTED_DEVICE_ID);
+
+        let pairings = sp.runtime.block_on(sp.list_pairings()).unwrap();
+        assert_eq!(pairings.len(), 1, "one Pairing, kept");
+        assert_eq!(pairings[0].label, "mac-A");
+        assert_eq!(
+            pairings[0].server_url, "https://relay.example",
+            "trimmed once, here, and stored trimmed"
+        );
+        assert!(pairings[0].is_active, "and it is the Active Pairing");
+
+        let keychain_holds = |account: String| {
+            sp.keychain.get(&account).unwrap().is_some_and(|v| !v.is_empty())
+        };
+        assert!(keychain_holds(token_account(SCRIPTED_USER_ID)), "the device token is kept");
+        assert!(
+            keychain_holds(user_key_account(SCRIPTED_USER_ID)),
+            "and a user key this device minted, because an invite claim is the only path that does"
+        );
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                CoreEvent::PairingAdded { user_id, .. } if user_id == SCRIPTED_USER_ID
+            )),
+            "and the shell was told"
+        );
+        sp.stop_all_sessions();
+    }
+
+    /*
+     * The claimer's half of a short code, all the way through, with no relay in
+     * reach — the other operation whose success path had no test of its own.
+     *
+     * The user key comes out of the payload the inviter sealed to the pairing
+     * secret rather than being minted here: that is the whole difference between
+     * the two doors, and it is why a device paired this way can read the other
+     * one's entries at all.
+     */
+    #[test]
+    fn pairing_with_a_code_takes_the_user_key_out_of_the_payload() {
+        let relay = ScriptedRelay::new(Vec::new(), Vec::new());
+        let (sp, sink) = unpaired_over(&relay);
+        let secret = [3u8; 32];
+        let pair_id = uuid::Uuid::parse_str(SCRIPTED_PAIR_ID).unwrap();
+        let code = crate::pairing::shortcode::encode(&crate::pairing::shortcode::ShortcodePayload {
+            server_url: SCRIPTED_RELAY_URL.into(),
+            pair_id,
+            pairing_secret: secret,
+        })
+        .unwrap();
+
+        let paired = sp
+            .runtime
+            .block_on(sp.pair_with_code(&code, "mac-B"))
+            .unwrap();
+
+        assert_eq!(
+            relay.pair_claims(),
+            vec![pair_id.to_string(), pair_id.to_string()],
+            "the secret is proved once to claim the slot and again to become a device"
+        );
+        assert_eq!(relay.joined(), vec!["mac-B".to_string()]);
+        assert_eq!(paired.user_id, SCRIPTED_USER_ID);
+        assert_eq!(paired.device_id, SCRIPTED_DEVICE_ID);
+
+        let pairings = sp.runtime.block_on(sp.list_pairings()).unwrap();
+        assert_eq!(pairings.len(), 1);
+        assert_eq!(
+            pairings[0].server_url, SCRIPTED_RELAY_URL,
+            "the relay's address as the inviter knows it, which is what travelled in the code"
+        );
+        assert!(pairings[0].is_active);
+        assert_eq!(
+            sp.keychain.get(&user_key_account(SCRIPTED_USER_ID)).unwrap().as_deref(),
+            Some(TEST_USER_KEY_HEX),
+            "the key came out of the payload, so both devices can read one History"
+        );
+        assert_eq!(
+            sp.keychain.get(&token_account(SCRIPTED_USER_ID)).unwrap().as_deref(),
+            Some("scripted-token")
+        );
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                CoreEvent::PairingAdded { user_id, .. } if user_id == SCRIPTED_USER_ID
+            )),
+            "and the shell was told"
+        );
+        sp.stop_all_sessions();
+    }
+
     /*
      * Recall Latest always makes the round trip. Nothing is cached here, so a
      * fetch is the only way to answer at all — and the relay having answered is
@@ -2069,15 +2093,15 @@ mod tests {
      */
     #[test]
     fn recall_latest_fetches_and_reports_the_relay_as_the_source() {
-        let Rig { sp, clipboard, .. } = rig();
         let relay = ScriptedRelay::new(
             vec![Ok(vec![encrypted_row(7, "u", "the newest", "d")])],
             Vec::new(),
         );
+        let Rig { sp, clipboard, .. } = rig_over(&relay);
 
         let out = sp
             .runtime
-            .block_on(sp.recall_latest_over("u", relay.clone()))
+            .block_on(sp.recall_latest("u"))
             .unwrap();
 
         assert_eq!(out.text, "the newest");
@@ -2099,16 +2123,19 @@ mod tests {
      */
     #[test]
     fn recall_latest_returns_an_entry_the_cache_has_never_seen() {
-        let Rig { sp, clipboard, .. } = rig();
-        seed_entry(&sp, 1, "yesterday's link");
         let relay = ScriptedRelay::new(
             vec![Ok(vec![encrypted_row(2, "u", "today's link", "d")])],
             Vec::new(),
         );
+        let Rig { sp, clipboard, .. } = rig_over(&relay);
+        // Explicitly older, rather than older by construction order: the row the
+        // relay is holding is stamped from the clock when the fixture is built,
+        // and "yesterday" is the fact this test is about.
+        seed_entry_at(&sp, 1, "yesterday's link", crate::now_ms() - 60_000);
 
         let out = sp
             .runtime
-            .block_on(sp.recall_latest_over("u", relay))
+            .block_on(sp.recall_latest("u"))
             .unwrap();
 
         assert_eq!(out.text, "today's link", "it must not have read the cache");
@@ -2124,13 +2151,13 @@ mod tests {
      */
     #[test]
     fn recall_latest_falls_back_to_the_cache_and_says_so() {
-        let Rig { sp, clipboard, .. } = rig();
-        seed_entry(&sp, 1, "the only one cached");
         let relay = ScriptedRelay::new(vec![Err(AppError::Network("no route".into()))], Vec::new());
+        let Rig { sp, clipboard, .. } = rig_over(&relay);
+        seed_entry(&sp, 1, "the only one cached");
 
         let out = sp
             .runtime
-            .block_on(sp.recall_latest_over("u", relay))
+            .block_on(sp.recall_latest("u"))
             .unwrap();
 
         assert_eq!(out.text, "the only one cached");
@@ -2147,13 +2174,13 @@ mod tests {
      */
     #[test]
     fn a_fetch_that_finds_nothing_new_is_still_the_relays_answer() {
-        let Rig { sp, .. } = rig();
-        seed_entry(&sp, 1, "already had it");
         let relay = ScriptedRelay::new(vec![Ok(Vec::new())], Vec::new());
+        let Rig { sp, .. } = rig_over(&relay);
+        seed_entry(&sp, 1, "already had it");
 
         let out = sp
             .runtime
-            .block_on(sp.recall_latest_over("u", relay))
+            .block_on(sp.recall_latest("u"))
             .unwrap();
 
         assert_eq!(out.text, "already had it");
@@ -2162,10 +2189,10 @@ mod tests {
 
     #[test]
     fn recall_latest_with_nothing_anywhere_is_not_found() {
-        let Rig { sp, .. } = rig();
         let relay = ScriptedRelay::new(vec![Ok(Vec::new())], Vec::new());
+        let Rig { sp, .. } = rig_over(&relay);
         // `Recalled` has no `Debug` on purpose, so match rather than `unwrap_err`.
-        let Err(err) = sp.runtime.block_on(sp.recall_latest_over("u", relay)) else {
+        let Err(err) = sp.runtime.block_on(sp.recall_latest("u")) else {
             panic!("a recall with nothing on the relay and nothing cached cannot succeed");
         };
         assert!(matches!(err, AppError::NotFound(_)), "got {err:?}");
@@ -2242,13 +2269,11 @@ mod tests {
             "recognised, and the queue is no deeper for it"
         );
 
-        let conn = sp.runtime.block_on(sp.state.conn.lock());
-        let head = pending::head(&conn, "u").unwrap().unwrap();
-        assert!(
-            matches!(&head.kind, pending::PendingKind::Capture(_)),
-            "the head is still a capture"
+        assert_eq!(
+            queued_texts(&sp),
+            vec!["a second thing", "ssh admin@10.0.0.4"],
+            "the act moved to the back rather than a second being queued beside it"
         );
-        drop(conn);
         assert_eq!(
             sink.pending_counts(),
             vec![1, 2],
@@ -2307,9 +2332,9 @@ mod tests {
         // it again and what lets it be withdrawn.
         let queued = sp.runtime.block_on(async {
             let conn = sp.state.conn.lock().await;
-            pending::head(&conn, "u").unwrap().unwrap()
+            history::next_act(&conn, "u").unwrap().unwrap()
         });
-        assert_eq!(queued.local_entry_id, Some(history[0].id));
+        assert_eq!(queued.entry_id, Some(history[0].id));
     }
 
     /*
@@ -2333,13 +2358,9 @@ mod tests {
             2,
             "and no second row for the same text"
         );
-        let head = sp.runtime.block_on(async {
-            let conn = sp.state.conn.lock().await;
-            pending::head(&conn, "u").unwrap().unwrap()
-        });
         assert_eq!(
-            head_plaintext(&head),
-            "second",
+            queued_texts(&sp),
+            vec!["second", "first"],
             "`second` is at the head now: re-copying `first` sent its act to the back"
         );
     }
@@ -2374,15 +2395,10 @@ mod tests {
             vec!["keep this"],
             "the row is gone and the other one is not"
         );
-        let queued = sp.runtime.block_on(async {
-            let conn = sp.state.conn.lock().await;
-            (pending::count(&conn, "u").unwrap(), pending::head(&conn, "u").unwrap())
-        });
-        assert_eq!(queued.0, 1, "the act went with the row");
         assert_eq!(
-            head_plaintext(&queued.1.unwrap()),
-            "keep this",
-            "and what is left is the act nobody withdrew"
+            queued_texts(&sp),
+            vec!["keep this"],
+            "the act went with the row, and what is left is the one nobody withdrew"
         );
         assert!(
             sink.pending_counts().ends_with(&[1]),
@@ -2405,29 +2421,22 @@ mod tests {
      */
     #[test]
     fn recalling_an_un_flushed_capture_moves_its_act_and_leads_the_history() {
-        let Rig { sp, sink, .. } = rig();
         let relay = ScriptedRelay::new(Vec::new(), Vec::new());
+        let Rig { sp, sink, .. } = rig_over(&relay);
         sp.runtime.block_on(sp.offer("u", "captured first")).unwrap();
         sp.runtime.block_on(sp.offer("u", "captured second")).unwrap();
         let first = history_ids(&sp)[1];
 
-        sp.runtime.block_on(sp.recall_over("u", first, relay.as_ref())).unwrap();
+        sp.runtime.block_on(sp.recall("u", first)).unwrap();
 
+        // `recall` spawns the use, so a test waits for the effect exactly as a
+        // shell does — there is no second body that awaits it.
+        until(|| history_ids(&sp)[0] == first);
         assert_eq!(
-            history_ids(&sp)[0], first,
-            "the recalled capture leads the History"
-        );
-        let queued = sp.runtime.block_on(async {
-            let conn = sp.state.conn.lock().await;
-            (
-                pending::count(&conn, "u").unwrap(),
-                head_plaintext(&pending::head(&conn, "u").unwrap().unwrap()),
-            )
-        });
-        assert_eq!(queued.0, 2, "one act moved; nothing was queued beside it");
-        assert_eq!(
-            queued.1, "captured second",
-            "and the recalled act is behind it now: `second` is the head of the queue"
+            queued_texts(&sp),
+            vec!["captured second", "captured first"],
+            "one act moved and nothing was queued beside it: the recalled act is \
+             at the back now, which is the head of the History"
         );
         assert!(
             relay.uses().is_empty(),
@@ -2445,24 +2454,19 @@ mod tests {
      */
     #[test]
     fn a_recall_during_an_outage_reaches_the_relay_last() {
-        let Rig { sp, .. } = rig();
         let relay = ScriptedRelay::new(Vec::new(), Vec::new());
+        let Rig { sp, .. } = rig_over(&relay);
         sp.runtime.block_on(sp.offer("u", "A")).unwrap();
         sp.runtime.block_on(sp.offer("u", "B")).unwrap();
         let a = history_ids(&sp)[1];
-        sp.runtime.block_on(sp.recall_over("u", a, relay.as_ref())).unwrap();
+        sp.runtime.block_on(sp.recall("u", a)).unwrap();
+        until(|| queued_texts(&sp) == vec!["B".to_string(), "A".to_string()]);
 
-        // The queue, drained in its own order the way the uploader drains it.
-        let sent = sp.runtime.block_on(async {
-            let conn = sp.state.conn.lock().await;
-            let mut out = Vec::new();
-            while let Some(head) = pending::head(&conn, "u").unwrap() {
-                out.push(head_plaintext(&head));
-                pending::ack(&conn, head.rowid).unwrap();
-            }
-            out
-        });
-        assert_eq!(sent, vec!["B".to_string(), "A".to_string()]);
+        assert_eq!(
+            queued_texts(&sp),
+            vec!["B".to_string(), "A".to_string()],
+            "the order the relay will be told in"
+        );
     }
 
     /*
@@ -2473,11 +2477,11 @@ mod tests {
      */
     #[test]
     fn recall_latest_drains_the_queue_before_it_reads_the_head() {
-        let Rig { sp, clipboard, .. } = rig();
-        sp.runtime.block_on(sp.offer("u", "queued while offline")).unwrap();
         let relay = ScriptedRelay::new(vec![Ok(Vec::new())], Vec::new());
+        let Rig { sp, clipboard, .. } = rig_over(&relay);
+        sp.runtime.block_on(sp.offer("u", "queued while offline")).unwrap();
 
-        let out = sp.runtime.block_on(sp.recall_latest_over("u", relay.clone())).unwrap();
+        let out = sp.runtime.block_on(sp.recall_latest("u")).unwrap();
 
         assert_eq!(relay.uploaded().len(), 1, "the queue went to the relay first");
         assert_eq!(out.text, "queued while offline");
@@ -2489,7 +2493,7 @@ mod tests {
         assert_eq!(clipboard.writes(), vec!["queued while offline".to_string()]);
         let left = sp.runtime.block_on(async {
             let conn = sp.state.conn.lock().await;
-            pending::count(&conn, "u").unwrap()
+            history::depth(&conn, "u").unwrap()
         });
         assert_eq!(left, 0, "and the queue is empty");
     }
@@ -2500,22 +2504,22 @@ mod tests {
      */
     #[test]
     fn recall_latest_with_a_queue_and_no_relay_falls_back_to_the_local_head() {
-        let Rig { sp, clipboard, .. } = rig();
-        sp.runtime.block_on(sp.offer("u", "still owed to the relay")).unwrap();
         let relay = ScriptedRelay::new(
             vec![Err(AppError::Network("no route".into()))],
             Vec::new(),
         )
         .answering_uploads(crate::testing::UploadAnswer::Unreachable);
+        let Rig { sp, clipboard, .. } = rig_over(&relay);
+        sp.runtime.block_on(sp.offer("u", "still owed to the relay")).unwrap();
 
-        let out = sp.runtime.block_on(sp.recall_latest_over("u", relay.clone())).unwrap();
+        let out = sp.runtime.block_on(sp.recall_latest("u")).unwrap();
 
         assert_eq!(out.text, "still owed to the relay");
         assert_eq!(out.source, RecallSource::Cache);
         assert_eq!(clipboard.writes(), vec!["still owed to the relay".to_string()]);
         let left = sp.runtime.block_on(async {
             let conn = sp.state.conn.lock().await;
-            pending::count(&conn, "u").unwrap()
+            history::depth(&conn, "u").unwrap()
         });
         assert_eq!(left, 1, "nothing was lost trying");
     }
@@ -2527,11 +2531,12 @@ mod tests {
      */
     #[test]
     fn a_drain_that_exceeds_its_bound_falls_back_rather_than_hanging() {
-        let Rig { sp, clipboard, .. } = rig();
+        let relay = ScriptedRelay::new(vec![Ok(Vec::new())], Vec::new())
+            .answering_uploads(crate::testing::UploadAnswer::Stall);
+        let Rig { sp, clipboard, .. } = rig_over(&relay);
         sp.runtime.block_on(sp.offer("u", "behind a silent relay")).unwrap();
-        let relay = ScriptedRelay::new(vec![Ok(Vec::new())], Vec::new()).answering_uploads(crate::testing::UploadAnswer::Stall);
 
-        let out = sp.runtime.block_on(sp.recall_latest_over("u", relay)).unwrap();
+        let out = sp.runtime.block_on(sp.recall_latest("u")).unwrap();
 
         assert_eq!(out.text, "behind a silent relay");
         assert_eq!(out.source, RecallSource::Cache, "the bound was reached, so it is ours");
@@ -2551,9 +2556,10 @@ mod tests {
         let refused = history_ids(&sp)[1];
         sp.runtime.block_on(async {
             let conn = sp.state.conn.lock().await;
-            let rowid = pending::rowid_for_entry(&conn, "u", refused).unwrap().unwrap();
-            pending::record_failure(&conn, rowid, "an earlier attempt").unwrap();
-            pending::refuse(&conn, rowid, 1, "payload too large").unwrap();
+            let act = history::next_act(&conn, "u").unwrap().unwrap();
+            assert_eq!(act.entry_id, Some(refused), "the oldest act is the head");
+            history::record_failure(&conn, &act, "an earlier attempt").unwrap();
+            history::refuse(&conn, "u", &act, 1, "payload too large").unwrap();
         });
 
         // A refusal leads the History, above every act still on its way.
@@ -2568,16 +2574,19 @@ mod tests {
         assert_eq!(after[0].id, refused, "and still leads it, now as a fresh act");
         assert_eq!(after[0].refused_reason, None, "the reason is gone");
         assert!(after[0].pending);
-        let head = sp.runtime.block_on(async {
+        let queue = sp.runtime.block_on(async {
             let conn = sp.state.conn.lock().await;
-            (
-                pending::count(&conn, "u").unwrap(),
-                pending::head(&conn, "u").unwrap().unwrap(),
-            )
+            history::owed(&conn, "u").unwrap()
         });
-        assert_eq!(head.0, 2, "the act moved; nothing was queued beside it");
-        assert_eq!(head.1.attempts, 0, "and carries nothing forward from the refusal");
-        assert_eq!(head.1.last_error, None);
+        assert_eq!(queue.len(), 2, "the act moved; nothing was queued beside it");
+        let resent = queue.last().unwrap();
+        assert_eq!(
+            resent.entry_id,
+            Some(refused),
+            "and is deliverable again, at the back — which is the head of the History"
+        );
+        assert_eq!(resent.attempts, 0, "carrying nothing forward from the refusal");
+        assert_eq!(resent.last_error, None);
         assert!(
             sink.saw_history_changed("u"),
             "the row left the refused region, which reorders the list"
@@ -2585,25 +2594,29 @@ mod tests {
     }
 
     /*
-     * `clear_history` used to wipe the cache and leave the queue standing, so the
-     * next flush put back exactly what had just been cleared. The queue goes with
-     * it.
+     * `clear_history`, whole, with no relay in reach.
      *
-     * Driven through `forget_history`, which is everything the operation does
-     * once the relay has agreed; that the relay is asked *first* is what
-     * `an_unreachable_cleartext_relay_explains_itself` pins.
+     * It used to wipe the cache and leave the queue standing, so the next flush
+     * put back exactly what had just been cleared — the rule the second half of
+     * this test pins. The first half is what could not be tested at all before
+     * the seam moved: the relay really is asked to drop the User's entries, and
+     * the operation the shell calls is the one being driven, rather than a
+     * private half of it that skipped the relay.
      */
     #[test]
-    fn clearing_the_history_empties_the_queue_with_it() {
-        let Rig { sp, sink, .. } = rig();
+    fn clearing_the_history_asks_the_relay_and_empties_the_queue_with_it() {
+        let relay = ScriptedRelay::new(Vec::new(), Vec::new());
+        let Rig { sp, sink, .. } = rig_over(&relay);
         sp.runtime.block_on(sp.offer("u", "queued and then cleared")).unwrap();
 
-        sp.runtime.block_on(sp.forget_history("u")).unwrap();
+        sp.runtime.block_on(sp.clear_history("u")).unwrap();
+
+        assert_eq!(relay.cleared(), 1, "the relay was told to drop the History");
         let after = sp.runtime.block_on(async {
             let conn = sp.state.conn.lock().await;
             (
-                entries_cache::list_recent(&conn, "u", None, 50).unwrap().len(),
-                pending::count(&conn, "u").unwrap(),
+                history::page(&conn, "u", None, 50).unwrap().len(),
+                history::depth(&conn, "u").unwrap(),
             )
         });
         assert_eq!(after, (0, 0), "nothing cached and nothing left to repopulate it");
@@ -2614,16 +2627,22 @@ mod tests {
         );
     }
 
-    /// The plaintext of a queued capture, decrypted the way the relay's echo of
-    /// it would be. The queue holds ciphertext, and ciphertext cannot be
-    /// compared: `crypto::encrypt` draws a fresh nonce every call.
-    fn head_plaintext(head: &pending::PendingUpload) -> String {
-        let pending::PendingKind::Capture(ciphertext) = &head.kind else {
-            panic!("expected a queued capture at the head");
-        };
-        let plain = crate::crypto::decrypt(&crate::testing::test_user_key(), "u", ciphertext)
-            .expect("the queue holds what this pairing's key sealed");
-        String::from_utf8(plain).unwrap()
+    /// What is queued, in the order the relay will be told about it — asked of
+    /// the module rather than decrypted out of the queue.
+    ///
+    /// The queue holds ciphertext and the Entry holds the text, and nothing used
+    /// to join them, so a test that wanted to know what sat at the head reached
+    /// for `testing::test_user_key` and decrypted it.
+    fn queued_texts(sp: &Sharepaste) -> Vec<String> {
+        sp.runtime.block_on(async {
+            let conn = sp.state.conn.lock().await;
+            history::owed(&conn, "u")
+                .unwrap()
+                .into_iter()
+                .filter_map(|a| a.entry_id)
+                .filter_map(|id| history::plaintext_of(&conn, "u", id).unwrap())
+                .collect()
+        })
     }
 
     /// Put one entry in the cache with an explicit age, so a use stamped from
@@ -2664,21 +2683,20 @@ mod tests {
      */
     #[test]
     fn a_recall_moves_the_entry_to_the_head_and_records_the_use() {
-        let Rig { sp, sink, clipboard } = rig();
+        let relay = ScriptedRelay::new(Vec::new(), Vec::new());
+        let Rig { sp, sink, clipboard } = rig_over(&relay);
         let long_ago = crate::now_ms() - 3 * 24 * 60 * 60 * 1000;
         seed_entry_at(&sp, 1, "ssh admin@10.0.0.4", long_ago);
         seed_entry_at(&sp, 2, "captured since", crate::now_ms() - 1000);
         assert_eq!(history_ids(&sp), vec![2, 1], "precondition: 1 is buried");
 
-        let relay = ScriptedRelay::new(Vec::new(), Vec::new());
-        sp.runtime
-            .block_on(sp.recall_over("u", 1, relay.as_ref()))
-            .unwrap();
+        sp.runtime.block_on(sp.recall("u", 1)).unwrap();
 
         assert_eq!(clipboard.writes(), vec!["ssh admin@10.0.0.4".to_string()]);
-        assert_eq!(relay.uses(), vec![1], "the relay was told, so every device reorders");
-        assert_eq!(history_ids(&sp), vec![1, 2], "and this device did not wait to be told back");
-        assert!(sink.saw_history_changed("u"));
+        // The use is spawned, so the effect is what a test waits on.
+        until(|| relay.uses() == vec![1]);
+        until(|| history_ids(&sp) == vec![1, 2]);
+        assert!(sink.saw_history_changed("u"), "and this device did not wait to be told back");
 
         let recalled = sp.runtime.block_on(sp.list_history("u", None, 1)).unwrap();
         assert_eq!(recalled[0].created_at, long_ago, "a use leaves identity alone");
@@ -2692,13 +2710,11 @@ mod tests {
      */
     #[test]
     fn recalling_the_entry_already_on_top_is_still_a_use() {
-        let Rig { sp, .. } = rig();
-        seed_entry_at(&sp, 1, "the only one", crate::now_ms() - 1000);
         let relay = ScriptedRelay::new(Vec::new(), Vec::new());
-        sp.runtime
-            .block_on(sp.recall_over("u", 1, relay.as_ref()))
-            .unwrap();
-        assert_eq!(relay.uses(), vec![1]);
+        let Rig { sp, .. } = rig_over(&relay);
+        seed_entry_at(&sp, 1, "the only one", crate::now_ms() - 1000);
+        sp.runtime.block_on(sp.recall("u", 1)).unwrap();
+        until(|| relay.uses() == vec![1]);
     }
 
     /*
@@ -2708,18 +2724,17 @@ mod tests {
      */
     #[test]
     fn a_relay_that_will_not_record_the_use_neither_fails_nor_queues_it() {
-        let Rig { sp, clipboard, .. } = rig();
-        seed_entry_at(&sp, 1, "recalled anyway", crate::now_ms() - 1000);
         let relay =
             ScriptedRelay::new(Vec::new(), Vec::new()).answering_uses(crate::testing::UseAnswer::Gone);
+        let Rig { sp, clipboard, .. } = rig_over(&relay);
+        seed_entry_at(&sp, 1, "recalled anyway", crate::now_ms() - 1000);
 
-        sp.runtime
-            .block_on(sp.recall_over("u", 1, relay.as_ref()))
-            .unwrap();
+        sp.runtime.block_on(sp.recall("u", 1)).unwrap();
 
         assert_eq!(clipboard.writes(), vec!["recalled anyway".to_string()]);
+        until(|| relay.uses() == vec![1]);
         let conn = sp.runtime.block_on(sp.state.conn.lock());
-        assert_eq!(pending::count(&conn, "u").unwrap(), 0, "a 404 is not worth retrying");
+        assert_eq!(history::depth(&conn, "u").unwrap(), 0, "a 404 is not worth retrying");
     }
 
     /*
@@ -2728,20 +2743,17 @@ mod tests {
      */
     #[test]
     fn a_use_the_relay_cannot_be_told_about_is_queued() {
-        let Rig { sp, sink, .. } = rig();
-        seed_entry_at(&sp, 1, "recalled offline", crate::now_ms() - 1000);
         let relay = ScriptedRelay::new(Vec::new(), Vec::new())
             .answering_uses(crate::testing::UseAnswer::Unreachable);
+        let Rig { sp, sink, .. } = rig_over(&relay);
+        seed_entry_at(&sp, 1, "recalled offline", crate::now_ms() - 1000);
 
-        sp.runtime
-            .block_on(sp.recall_over("u", 1, relay.as_ref()))
-            .unwrap();
+        sp.runtime.block_on(sp.recall("u", 1)).unwrap();
 
+        until(|| sink.pending_counts() == vec![1]);
         let conn = sp.runtime.block_on(sp.state.conn.lock());
-        let head = pending::head(&conn, "u").unwrap().unwrap();
-        assert_eq!(head.kind, pending::PendingKind::Use(1));
-        drop(conn);
-        assert_eq!(sink.pending_counts(), vec![1], "and the queue depth is reported");
+        let head = history::next_act(&conn, "u").unwrap().unwrap();
+        assert_eq!(head.kind, history::ActKind::Use(1));
     }
 
     /*
@@ -2750,18 +2762,18 @@ mod tests {
      */
     #[test]
     fn a_recall_whose_clipboard_write_fails_records_no_use() {
-        let Rig { sp, clipboard, .. } = rig();
+        let relay = ScriptedRelay::new(Vec::new(), Vec::new());
+        let Rig { sp, clipboard, .. } = rig_over(&relay);
         seed_entry_at(&sp, 1, "never arrived", crate::now_ms() - 1000);
         clipboard.on_write(|_| Err(AppError::Storage("clipboard failed".into())));
-        let relay = ScriptedRelay::new(Vec::new(), Vec::new());
 
-        let err = sp
-            .runtime
-            .block_on(sp.recall_over("u", 1, relay.as_ref()))
-            .unwrap_err();
+        let err = sp.runtime.block_on(sp.recall("u", 1)).unwrap_err();
 
         assert!(matches!(err, AppError::Storage(_)));
-        assert!(relay.uses().is_empty());
+        assert!(
+            relay.uses().is_empty(),
+            "and nothing was spawned to record one, so there is nothing to wait for"
+        );
     }
 
     /*
@@ -2794,13 +2806,13 @@ mod tests {
             "and the depth the caller was handed is the one the sink reports"
         );
         let conn = sp.runtime.block_on(sp.state.conn.lock());
-        let head = pending::head(&conn, "u").unwrap().unwrap();
+        let head = history::next_act(&conn, "u").unwrap().unwrap();
         assert_eq!(
             head.kind,
-            pending::PendingKind::Use(1),
+            history::ActKind::Use(1),
             "the one thing queued is the use, not a duplicate capture"
         );
-        assert_eq!(pending::count(&conn, "u").unwrap(), 1);
+        assert_eq!(history::depth(&conn, "u").unwrap(), 1);
     }
 
     /*
@@ -2813,7 +2825,7 @@ mod tests {
         seed_entry_at(&sp, 1, "readable", crate::now_ms() - 1000);
         sp.runtime.block_on(async {
             let conn = sp.state.conn.lock().await;
-            entries_cache::mark_undecryptable(&conn, "u", 1).unwrap();
+            history::mark_undecryptable(&conn, "u", 1).unwrap();
         });
 
         assert_eq!(
@@ -2874,22 +2886,27 @@ mod tests {
         );
     }
 
-    fn cached(id: i64, device_id: &str) -> entries_cache::CachedEntry {
-        entries_cache::CachedEntry {
-            user_id: "u".into(),
-            local_id: id,
-            relay_id: Some(id),
-            ciphertext: vec![1],
-            plaintext: Some(format!("entry {id}")),
-            created_at: 1_000 + id,
-            last_use: 1_000 + id,
-            device_id: device_id.into(),
-            region: entries_cache::Region {
-                rank: 2,
-                ord: 1_000 + id,
-                refused_reason: None,
+    /// One settled row of the History, as the module hands it out. Built through
+    /// it rather than by hand: the place a row holds in the order is the
+    /// module's own, and a fixture that invented one would be testing nothing.
+    fn cached(id: i64, device_id: &str) -> history::CachedEntry {
+        let c = crate::storage::open_in_memory().unwrap();
+        let text = format!("entry {id}");
+        history::store(
+            &c,
+            history::RelayEntry {
+                user_id: "u",
+                relay_id: id,
+                ciphertext: b"ct",
+                plaintext: Some(&text),
+                created_at: 1_000 + id,
+                last_use: 1_000 + id,
+                device_id,
             },
-        }
+            1_000 + id,
+        )
+        .unwrap();
+        history::page(&c, "u", None, 1).unwrap().remove(0)
     }
 
     #[test]
@@ -2939,14 +2956,12 @@ mod tests {
      */
     #[test]
     fn an_entry_that_will_not_decrypt_arrives_flagged() {
-        let Rig { sp, sink, .. } = rig();
         let relay = ScriptedRelay::new(
             vec![Ok(Vec::new())],
             vec![Wire::Holds(vec![live_entry(9, "somebody-else", "unreadable here", "d")])],
         );
-        sp.runtime
-            .block_on(sp.start_session_over("u", relay))
-            .unwrap();
+        let Rig { sp, sink, .. } = rig_over(&relay);
+        sp.runtime.block_on(sp.start_session("u")).unwrap();
 
         until(|| !sink.entries().is_empty());
         let entry = sink.entries().remove(0);
@@ -2969,12 +2984,12 @@ mod tests {
         let indented = "\n\tssh admin@10.0.0.4\n  -i ~/.ssh/id_ed25519\n  -p 2222\n";
         let flattened = " ssh admin@10.0.0.4   -i ~/.ssh/id_ed25519   -p 2222";
 
-        let Rig { sp, sink, .. } = rig();
         let relay = ScriptedRelay::new(
             vec![Ok(Vec::new())],
             vec![Wire::Holds(vec![live_entry(4, "u", indented, "d1")])],
         );
-        sp.runtime.block_on(sp.start_session_over("u", relay)).unwrap();
+        let Rig { sp, sink, .. } = rig_over(&relay);
+        sp.runtime.block_on(sp.start_session("u")).unwrap();
         until(|| !sink.entries().is_empty());
 
         let on_the_event = sink.entries().remove(0);
@@ -3127,13 +3142,12 @@ mod tests {
         let history = rt.block_on(sp.list_history("u", None, 50)).unwrap();
         assert_eq!(history.len(), 1);
         assert!(!history[0].undecryptable);
-        // A cursor is taken from a row's region, which is a fact about the order
-        // rather than about the entry, so it comes off the cache rather than off
-        // `Entry` — see `HistoryCursor`.
+        // A cursor is a fact about the order rather than about the entry, so it
+        // comes off the row the History handed out rather than off `Entry` —
+        // see `HistoryCursor`.
         let cursor = rt.block_on(async {
             let conn = sp.state.conn.lock().await;
-            let row = entries_cache::list_recent(&conn, "u", None, 1).unwrap().remove(0);
-            HistoryCursor { rank: row.region.rank, ord: row.region.ord, id: row.local_id }
+            history::page(&conn, "u", None, 1).unwrap().remove(0).resume_from
         });
         assert!(rt.block_on(sp.list_history("u", Some(cursor), 50)).unwrap().is_empty());
         assert_eq!(

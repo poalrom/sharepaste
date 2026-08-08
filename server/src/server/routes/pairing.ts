@@ -1,8 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { FastifyInstance } from "fastify";
-import { randomId } from "../../crypto.js";
 import { verifyBearer } from "../auth.js";
-import { loadUsableSlot, verifySlotProof } from "../pairing-slot.js";
+import { PairSlot } from "../pair-slot.js";
 import { HEX_64, SECRET_PROOF, UUID } from "./schemas.js";
 
 export const registerPairingRoutes = (app: FastifyInstance): void => {
@@ -20,20 +19,8 @@ export const registerPairingRoutes = (app: FastifyInstance): void => {
     },
     async (req, reply) => {
       const auth = await verifyBearer(app, req);
-      const id = randomId();
-      const now = Date.now();
-      app.deps.repo.pairings.create({
-        id,
-        user_id: auth.user_id,
-        secret_hash: req.body.secret_hash.toLowerCase(),
-        encrypted_payload: null,
-        claimed_at: null,
-        paired_device_label: null,
-        failed_attempts: 0,
-        consumed_at: null,
-        expires_at: now + app.deps.pairingTtlMs,
-      });
-      return reply.send({ pair_id: id });
+      const pairId = PairSlot.open(app, auth.user_id, req.body.secret_hash, Date.now());
+      return reply.send({ pair_id: pairId });
     }
   );
 
@@ -53,11 +40,10 @@ export const registerPairingRoutes = (app: FastifyInstance): void => {
       },
     },
     async (req, reply) => {
-      const { pair_id, secret_proof } = req.body;
       const now = Date.now();
-      const pairing = loadUsableSlot(app, pair_id, now);
-      verifySlotProof(app, pairing, secret_proof, now);
-      app.deps.repo.pairings.markClaimed(pair_id, now);
+      PairSlot.read(app, req.body.pair_id, now)
+        .requireUsable()
+        .claim(req.body.secret_proof, now);
       return reply.send({ ok: true });
     }
   );
@@ -80,12 +66,10 @@ export const registerPairingRoutes = (app: FastifyInstance): void => {
     },
     async (req, reply) => {
       const auth = await verifyBearer(app, req);
-      const pairing = loadUsableSlot(app, req.body.pair_id, Date.now());
-      if (pairing.user_id !== auth.user_id)
-        throw app.httpErrors.forbidden("not the inviter");
-
-      const buf = Buffer.from(req.body.encrypted_payload, "base64");
-      app.deps.repo.pairings.setPayload(pairing.id, buf);
+      PairSlot.read(app, req.body.pair_id, Date.now())
+        .requireUsable()
+        .requireInviter(auth.user_id)
+        .attachPayload(req.body.encrypted_payload);
       return reply.send({ ok: true });
     }
   );
@@ -98,13 +82,10 @@ export const registerPairingRoutes = (app: FastifyInstance): void => {
       const proof = req.query.proof;
       if (!id || !proof) throw app.httpErrors.badRequest("missing id or proof");
       const now = Date.now();
-      const pairing = loadUsableSlot(app, id, now);
-      verifySlotProof(app, pairing, proof, now);
-      if (!pairing.encrypted_payload)
-        throw app.httpErrors.notFound("payload not yet uploaded");
-      return reply.send({
-        encrypted_payload: pairing.encrypted_payload.toString("base64"),
-      });
+      const encrypted_payload = PairSlot.read(app, id, now)
+        .requireUsable()
+        .takePayload(proof, now);
+      return reply.send({ encrypted_payload });
     }
   );
 
@@ -121,22 +102,13 @@ export const registerPairingRoutes = (app: FastifyInstance): void => {
       );
       const deadline = Date.now() + timeoutMs;
       while (true) {
-        // Deliberately not `loadUsableSlot`: the poller reports expiry and
-        // consumption as 200 statuses instead of throwing 410.
-        const pairing = app.deps.repo.pairings.find(id);
-        if (!pairing) throw app.httpErrors.notFound("pair not found");
-        if (pairing.user_id !== auth.user_id)
-          throw app.httpErrors.forbidden("not the inviter");
-        const now = Date.now();
-        if (pairing.consumed_at !== null) {
-          return reply.send({
-            status: "consumed",
-            device_label: pairing.paired_device_label,
-          });
-        }
-        if (pairing.expires_at <= now) return reply.send({ status: "expired" });
-        if (pairing.claimed_at !== null) return reply.send({ status: "claimed" });
-        if (Date.now() >= deadline) return reply.send({ status: "waiting" });
+        // `pollBody`, not `requireUsable`: the poller renders the same
+        // classification as 200 statuses where the proof routes throw 410.
+        const body = PairSlot.read(app, id, Date.now())
+          .requireInviter(auth.user_id)
+          .pollBody();
+        if (body.status !== "waiting" || Date.now() >= deadline)
+          return reply.send(body);
         await sleep(Math.min(250, deadline - Date.now()));
       }
     }

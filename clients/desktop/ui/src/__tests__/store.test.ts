@@ -1,5 +1,6 @@
+import coreHistoryRs from "../../../../core/src/storage/history.rs?raw";
 import { describe, it, expect, beforeEach } from "vitest";
-import { hydrateFrom, noteChange, useHistoryStore } from "../store/history";
+import { atHistoryCap, HISTORY_CAP, hydrateFrom, noteChange, useHistoryStore } from "../store/history";
 import type { EntryView } from "../types";
 import { usePairingsStore } from "../store/pairings";
 import { useUiStore } from "../store/ui";
@@ -30,22 +31,45 @@ describe("history store", () => {
   });
 
   /*
+   * The cap has one owner and it is not this side of the seam. Nothing carries a
+   * compile-time constant over an IPC call, so `HISTORY_CAP` is a copy — and a
+   * copy nobody holds to its original drifts the first time the original moves,
+   * leaving both surfaces announcing "the oldest of a hundred" over a list the
+   * core prunes to some other number.
+   *
+   * So the core's own source is an input to this suite, the way
+   * `.github/scripts/check-versions.mjs` reads `Cargo.toml` rather than trusting
+   * the manifests to stay level. It goes red if the number changes, and equally
+   * if the constant is renamed, un-published or moved out of that file — each of
+   * which is the cap acquiring a second owner again.
+   */
+  it("carries the cap the core owns, not one of its own", () => {
+    // `[\d_]` and not `\d`: Rust digit separators are ordinary here — the
+    // neighbouring `MAX_PAGE` is already written `1_000` — and a cap raised to
+    // `1_000` must fail on the number disagreeing, not on the spelling.
+    const declared = /^pub const MAX_PER_USER: i64 = ([\d_]+);$/m.exec(coreHistoryRs);
+    expect(declared, "MAX_PER_USER is no longer declared where this reads it").not.toBeNull();
+    expect(HISTORY_CAP).toBe(Number(declared![1]!.replace(/_/g, "")));
+  });
+
+  /*
    * The store's own cap is a cache of a cache, and it spares un-flushed rows for
-   * the reason `entries_cache::prune` does: an act this device has not delivered
-   * is undelivered clipboard content, and dropping one to keep a number down is
-   * the trade ADR 0014 refuses. Counting every row would silently truncate the
-   * display of an offline burst past a hundred — and the list-end sentinel is
+   * the reason `history::prune` does: an act this device has not delivered is
+   * undelivered clipboard content, and dropping one to keep a number down is the
+   * trade ADR 0014 refuses. Counting every row would silently truncate the
+   * display of an offline burst past the cap — and the list-end sentinel is
    * counted the same way, so nothing would even say so.
    */
   it("the cap counts the settled rows and spares the un-flushed ones", () => {
     const { add } = useHistoryStore.getState();
-    for (let i = 1; i <= 100; i += 1) add(row(i));
-    expect(useHistoryStore.getState().entries).toHaveLength(100);
+    for (let i = 1; i <= HISTORY_CAP; i += 1) add(row(i));
+    expect(useHistoryStore.getState().entries).toHaveLength(HISTORY_CAP);
+    expect(atHistoryCap(useHistoryStore.getState().entries)).toBe(true);
 
     // One more the relay has ordered: the oldest of the hundred goes.
-    add(row(101));
+    add(row(HISTORY_CAP + 1));
     const settled = useHistoryStore.getState().entries;
-    expect(settled).toHaveLength(100);
+    expect(settled).toHaveLength(HISTORY_CAP);
     expect(settled.map((e) => e.id)).not.toContain(1);
 
     // And fifty offline captures on top of a full cache are fifty more rows.
@@ -53,9 +77,9 @@ describe("history store", () => {
       add({ ...row(i), created_at: 0, last_use: 0, pending: true });
     }
     const both = useHistoryStore.getState().entries;
-    expect(both).toHaveLength(150);
+    expect(both).toHaveLength(HISTORY_CAP + 50);
     expect(both.filter((e) => e.pending)).toHaveLength(50);
-    expect(both.filter((e) => !e.pending)).toHaveLength(100);
+    expect(both.filter((e) => !e.pending)).toHaveLength(HISTORY_CAP);
     expect(both[0]?.id, "the newest act still leads").toBe(249);
   });
 

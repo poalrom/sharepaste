@@ -1,14 +1,10 @@
 import { useEffect, useState } from "react";
-import { cmd, HISTORY_PAGE } from "../ipc/commands";
+import { attachHistory } from "../attachHistory";
 import { events } from "../ipc/events";
 import { useNow } from "../lib/useNow";
 import {
-  hydrateFrom,
-  noteChange,
-  useContactStore,
   useHistoryStore,
   usePairingsStore,
-  useStatusStore,
   useUiStore,
   type MainSection,
 } from "../store";
@@ -50,17 +46,9 @@ export default function Main() {
   const setPairingFlowOpen = useUiStore((s) => s.setPairingFlowOpen);
   const setSeedEntryId = useUiStore((s) => s.setSeedEntryId);
   const toast = useUiStore((s) => s.toast);
-  const hydratePairings = usePairingsStore((s) => s.hydrate);
-  const hydrateHistory = useHistoryStore((s) => s.hydrate);
-  const addEntry = useHistoryStore((s) => s.add);
-  const removeEntry = useHistoryStore((s) => s.remove);
-  const settleEntry = useHistoryStore((s) => s.settle);
-  const refuseEntry = useHistoryStore((s) => s.refuse);
-  const setStatus = useStatusStore((s) => s.set);
-  const setLastContact = useContactStore((s) => s.setLastContact);
-  const now = useNow(60_000);
   const entryCount = useHistoryStore((s) => s.entries.length);
   const pairingCount = usePairingsStore((s) => s.pairings.length);
+  const now = useNow(60_000);
 
   /*
    * The mock printed a flavour code here — `HST-00`, `ACC-01`. Dropped as
@@ -107,82 +95,11 @@ export default function Main() {
 
   // The main window is its own webview with its own store, so it subscribes to
   // the same stream the popover does rather than inheriting anything from it.
-  useEffect(() => {
-    const unsub: Array<() => void> = [];
-    let cancelled = false;
-    (async () => {
-      // The entry subscriptions come first, before anything is awaited: the
-      // reason is `noteChange`'s, and `HistorySection` takes the snapshot they
-      // have to survive.
-      unsub.push(await events.onEntryAdded(({ user_id, entry }) => {
-        noteChange({ kind: "added", user_id, entry });
-        if (user_id === viewedUserId()) addEntry(entry);
-      }));
-      unsub.push(await events.onEntryDeleted(({ user_id, entry_id }) => {
-        noteChange({ kind: "deleted", user_id, entry_id });
-        if (user_id === viewedUserId()) removeEntry(entry_id);
-      }));
-      // In place and by id, with no refetch: nothing reorders at a flush and the
-      // id does not change, so the reader's selection stays where it was. The
-      // relay's stamp rides along, or the row would stop waiting and go on saying
-      // the relay has never stamped it.
-      unsub.push(await events.onEntrySettled(({ user_id, entry_id, created_at, last_use }) => {
-        noteChange({ kind: "settled", user_id, entry_id, created_at, last_use });
-        if (user_id === viewedUserId()) settleEntry(entry_id, created_at, last_use);
-      }));
-      unsub.push(await events.onEntryRefused(({ user_id, entry_id, reason }) => {
-        noteChange({ kind: "refused", user_id, entry_id, reason });
-        if (user_id === viewedUserId()) refuseEntry(entry_id, reason);
-      }));
-      const rows = await cmd.listPairings();
-      if (cancelled) return;
-      hydratePairings(rows);
-      // `list_pairings` already knows each session's state; without seeding it
-      // here the footer reads Disconnected until the next transition fires.
-      for (const p of rows) setStatus(p.user_id, { state: p.status, pending: p.pending });
-      for (const p of rows) {
-        cmd.getContact({ user_id: p.user_id })
-          .then((c) => c && setLastContact(c.user_id, c.last_contact_at))
-          .catch(() => {});
-      }
-      unsub.push(await events.onHistoryChanged(({ user_id }) => {
-        if (user_id !== viewedUserId()) return;
-        void hydrateFrom(user_id, () => cmd.listHistory({ user_id, limit: HISTORY_PAGE }))
-          .catch(() => {});
-      }));
-      unsub.push(await events.onConnectionState(({ user_id, state, last_error }) => {
-        setStatus(user_id, last_error !== undefined ? { state, last_error } : { state });
-        usePairingsStore.getState().updateStatus(user_id, state);
-      }));
-      unsub.push(await events.onPendingCount(({ user_id, count }) => {
-        setStatus(user_id, { pending: count });
-      }));
-      unsub.push(await events.onPairingAdded(() => {
-        cmd.listPairings().then(hydratePairings).catch(() => {});
-      }));
-      unsub.push(await events.onPairingRemoved(({ user_id }) => {
-        usePairingsStore.getState().remove(user_id);
-        // The Viewed Pairing can outlive the pairing it named; drop it so the
-        // pane falls back to the Active one rather than showing a ghost.
-        if (useUiStore.getState().viewedUserId === user_id) {
-          useUiStore.getState().setViewedUserId(undefined);
-        }
-      }));
-      unsub.push(await events.onActivePairingChanged(({ user_id }) => {
-        usePairingsStore.getState().setActive(user_id ?? undefined);
-      }));
-      unsub.push(await events.onContact(({ user_id, last_contact_at }) => {
-        setLastContact(user_id, last_contact_at);
-      }));
-    })();
-    return () => {
-      cancelled = true;
-      unsub.forEach((u) => u());
-    };
-  }, [
-    addEntry, hydrateHistory, hydratePairings, refuseEntry, removeEntry, setLastContact,
-    settleEntry, setStatus,
-  ]);
+  //
+  // It does not show its own scope here: `HistorySection` shows the Viewed
+  // Pairing and re-shows it whenever the reader picks another, so an attach
+  // that also showed it would take the same snapshot twice.
+  useEffect(() => attachHistory({ userId: viewedUserId, showsHistory: false }), []);
 
   // Keyed on `seq`, not the toast object, so the same message twice restarts
   // the window instead of inheriting what is left of the first one.

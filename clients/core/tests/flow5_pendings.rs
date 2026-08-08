@@ -4,7 +4,9 @@ use sharepaste_core::event::Entry;
 use sharepaste_core::facade::{
     OfferOutcome, RecallSource, Sharepaste, SharepasteConfig,
 };
+use sharepaste_core::http::TransportPolicy;
 use sharepaste_core::keychain::InMemoryKeychain;
+use sharepaste_core::relay::RelayDial;
 use sharepaste_core::testing::{FakeClipboard, RecordingSink};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -50,7 +52,7 @@ impl Rig {
             keychain: Arc::new(InMemoryKeychain::default()),
             clipboard: clipboard.clone(),
             events: sink.clone(),
-            require_https: false,
+            relay: RelayDial::over_http(TransportPolicy::AllowCleartext),
         })
         .unwrap();
         let paired = core

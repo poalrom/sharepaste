@@ -6,15 +6,57 @@ import { useUiStore } from "./ui";
 /**
  * How many rows the relay has ordered that this store keeps.
  *
- * The same hundred `entries_cache` prunes at, and enforced here for the same
- * reason it is there: the store is a cache of a cache. Both surfaces name it too,
- * because both draw a sentinel when it bites.
+ * **Owned by `sharepaste_core::storage::history::MAX_PER_USER`, and copied here
+ * only because a compile-time constant cannot ride an IPC call.** That
+ * declaration is the one owner; `sharepaste_core::facade::MAX_PER_USER` is a
+ * re-export of it, and it is the declaration — not the re-export — that
+ * `store.test.ts` reads, so a copy that stops agreeing goes red. Everything else
+ * this store knows arrives from the core at runtime; a number the surfaces need
+ * before any answer comes back cannot. The same trick
+ * `.github/scripts/check-versions.mjs` uses to hold the manifests to one version
+ * rather than trusting them to stay level.
+ *
+ * It is enforced here for the reason the core enforces it: the store is a cache
+ * of a cache. Both surfaces draw a sentinel naming it, through [`atHistoryCap`].
  */
-const CACHE_CAP = 100;
+export const HISTORY_CAP = 100;
+
+/**
+ * Which rows the cap is about: the ones the relay has ordered.
+ *
+ * **Not the un-flushed ones, and this is the only place that says so.** The cap
+ * bounds a cache of what the relay holds; nothing bounds the acts this device
+ * has not delivered yet, because an act this device has not delivered is
+ * undelivered clipboard content and evicting one to protect a display invariant
+ * is the trade ADR 0014 refuses — `history::prune` exempts exactly the same rows
+ * for exactly that reason.
+ *
+ * So an offline burst is kept whole however long it runs, and the sentinel stays
+ * down while it does. Counting every row would truncate the burst *and* announce
+ * a limit that never bit, which is the one thing the sentinel exists to avoid.
+ */
+const counted = (e: EntryView): boolean => !e.pending;
+
+/**
+ * Whether the cap has bitten — what both surfaces draw their list-end sentinel
+ * on, so that neither has to restate [`counted`].
+ */
+export const atHistoryCap = (entries: EntryView[]): boolean =>
+  entries.filter(counted).length >= HISTORY_CAP;
 
 export type HistoryState = {
   entries: EntryView[];
   hydrate: (rows: EntryView[]) => void;
+  /**
+   * A row the core has just announced, at the head of the list.
+   *
+   * The head is not a rule this store derives. `EntryAdded` is the core saying
+   * an act happened, and `HistoryChanged` follows it with the page the core has
+   * ordered — so this position is the one the next snapshot restates, written
+   * here only so the row is not somewhere else for the width of that round
+   * trip. Any older copy of the same id goes, because the announcement is the
+   * newer account of it.
+   */
   add: (e: EntryView) => void;
   remove: (id: number) => void;
   /**
@@ -43,7 +85,8 @@ export type HistoryState = {
 export const useHistoryStore = create<HistoryState>((set) => ({
   entries: [],
   hydrate: (rows) => set({ entries: rows }),
-  add: (entry) => set((s) => ({ entries: dedupePrepend(s.entries, entry) })),
+  add: (entry) =>
+    set((s) => ({ entries: withinCap([entry, ...s.entries.filter((e) => e.id !== entry.id)]) })),
   remove: (id) => set((s) => ({ entries: s.entries.filter((e) => e.id !== id) })),
   settle: (id, createdAt, lastUse) =>
     set((s) => ({
@@ -77,21 +120,14 @@ const inFlight = new Set<Change[]>();
 /**
  * Note an incremental change, so no snapshot can silently roll it back.
  *
- * **The defect this exists for**, reproduced twice on a Windows smoke run and
- * recorded as anomaly A of `.scratch/mobile-client/issues/06`: an offline burst
- * flushed, the relay gained every row, and one of them was on screen
- * afterwards. Each surface subscribed to `entry-added` only *after* its first
- * `list_history` had answered, so an Entry the uploader cached in between was
- * announced to a listener that did not exist and absent from the snapshot. It
- * stayed lost, because nothing later provokes a refetch: the relay's echo of an
- * Entry this device uploaded deliberately raises neither event, and a backfill
- * that ingests only rows the cache already holds does not advance the watermark
- * and so raises none either.
+ * Half of the fix for anomaly A of `.scratch/mobile-client/issues/06`, whose
+ * other half — subscribing to the four entry events before the first snapshot
+ * is asked for — is [`attachHistory`]'s, and is written up there. Subscribing
+ * first is not sufficient on its own: a snapshot requested before a change and
+ * applied after it would undo the change it never saw.
  *
- * Subscribing before the first snapshot is half the fix and not the whole of
- * it — a snapshot requested before a change and applied after it would undo it.
- * Every subscription that mutates this store calls this as well, and
- * [`hydrateFrom`] replays what it recorded.
+ * So every subscription that mutates this store calls this before mutating it,
+ * and [`hydrateFrom`] replays what it recorded.
  */
 export function noteChange(change: Change): void {
   for (const log of inFlight) log.push(change);
@@ -156,21 +192,16 @@ export function useFilteredEntries(): EntryView[] {
 }
 
 /**
- * Prepend one entry, dropping any older copy of it, and keep the list inside the
- * cache cap.
+ * The list with the oldest rows over [`HISTORY_CAP`] dropped, exactly as
+ * `history::prune` drops them: oldest first, and only among the rows
+ * [`counted`] admits.
  *
- * **The cap spares un-flushed rows**, exactly as `entries_cache::prune` does. It
- * bounds a cache of what the relay has ordered; an act this device has not
- * delivered is undelivered clipboard content, and dropping one to keep a number
- * down is the trade ADR 0014 refuses. Counting every row would silently truncate
- * the display of an offline burst past a hundred — and the list-end sentinel is
- * counted the same way, so nothing would even say so.
+ * On `add` alone. A snapshot arrives already pruned by the module that owns the
+ * cap, and nothing else here grows the list.
  */
-function dedupePrepend(existing: EntryView[], next: EntryView): EntryView[] {
-  const without = existing.filter((e) => e.id !== next.id);
-  const rows = [next, ...without];
-  let settled = 0;
-  return rows.filter((e) => e.pending || ++settled <= CACHE_CAP);
+function withinCap(rows: EntryView[]): EntryView[] {
+  let kept = 0;
+  return rows.filter((e) => !counted(e) || ++kept <= HISTORY_CAP);
 }
 
 /**

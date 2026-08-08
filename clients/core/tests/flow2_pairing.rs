@@ -9,6 +9,7 @@ use sharepaste_core::pairing::payload::{
 use sharepaste_core::pairing::shortcode::decode as decode_shortcode;
 use sharepaste_core::facade::{RecallSource, Sharepaste, SharepasteConfig};
 use sharepaste_core::keychain::InMemoryKeychain;
+use sharepaste_core::relay::RelayDial;
 use sharepaste_core::testing::{FakeClipboard, RecordingSink};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -141,7 +142,7 @@ fn facade() -> (Arc<Sharepaste>, Arc<RecordingSink>, Arc<FakeClipboard>) {
         keychain: Arc::new(InMemoryKeychain::default()),
         clipboard: clipboard.clone(),
         events: sink.clone(),
-        require_https: false,
+        relay: RelayDial::over_http(TransportPolicy::AllowCleartext),
     })
     .unwrap();
     (sp, sink, clipboard)

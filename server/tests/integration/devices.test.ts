@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { addDevice, provisionDevice, startAndClaim, startPair, withApp } from "../helpers.js";
-import { hashToken, randomId, randomToken, sha256Hex } from "../../src/crypto.js";
+import { randomToken } from "../../src/crypto.js";
+import { DeviceCredentials } from "../../src/server/device-credentials.js";
 
 describe("POST /devices", () => {
   it("issues a device_token and consumes the slot", () =>
@@ -21,12 +22,14 @@ describe("POST /devices", () => {
       });
       expect(authed.statusCode).not.toBe(401);
 
-      const slot = repo.pairings.find(ctx.pair_id);
+      const slot = repo.pairSlots.find(ctx.pair_id);
       expect(slot?.consumed_at).not.toBeNull();
       expect(slot?.encrypted_payload).toBeNull();
 
-      const mem = repo.memberships.findByDeviceId(ctx.user_id, body.device_id);
-      expect(mem?.device_label).toBe("ipad");
+      const listed = DeviceCredentials.list(repo, ctx.user_id).find(
+        (d) => d.device_id === body.device_id
+      );
+      expect(listed?.label).toBe("ipad");
     }));
 
   it("returns 410 if called twice on the same slot", () =>
@@ -56,6 +59,25 @@ describe("POST /devices", () => {
       expect(res.statusCode).toBe(403);
     }));
 
+  it("returns 410 on a slot already at the failure cap", () =>
+    withApp(async ({ app, repo }) => {
+      const ctx = await startAndClaim(app, repo);
+      // A Pair Slot at the cap but not yet consumed: `PairSlot.proveSecret` is
+      // the only writer of the counter and it burns the slot on reaching the cap,
+      // so the fixture drives the counter directly to hold the two states apart.
+      for (let i = 0; i < 3; i++) repo.pairSlots.incrementFailed(ctx.pair_id);
+      expect(repo.pairSlots.find(ctx.pair_id)?.consumed_at).toBeNull();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/devices",
+        payload: { pair_id: ctx.pair_id, secret_proof: ctx.secret, label: "x" },
+      });
+      expect(res.statusCode).toBe(410);
+      // Only the inviter's device: no membership was minted off a burned slot.
+      expect(DeviceCredentials.list(repo, ctx.user_id)).toHaveLength(1);
+    }));
+
   it("returns 409 if the slot was never claimed", () =>
     withApp(async ({ app, repo }) => {
       const ctx = await startPair(app, repo);
@@ -81,8 +103,10 @@ describe("DELETE /devices/:id", () => {
       });
       expect(res.statusCode).toBe(200);
 
-      const mem = repo.memberships.findByDeviceId(a.user_id, second.device_id);
-      expect(mem?.revoked_at).not.toBeNull();
+      const revoked = DeviceCredentials.list(repo, a.user_id).find(
+        (d) => d.device_id === second.device_id
+      );
+      expect(revoked?.revoked_at).not.toBeNull();
     }));
 
   it("cannot revoke a device of a different user", () =>
@@ -95,7 +119,7 @@ describe("DELETE /devices/:id", () => {
         headers: { authorization: `Bearer ${a.device_token}` },
       });
       expect(res.statusCode).toBe(404);
-      expect(repo.memberships.findByDeviceId(b.user_id, b.device_id)?.revoked_at).toBeNull();
+      expect(DeviceCredentials.list(repo, b.user_id)[0]?.revoked_at).toBeNull();
     }));
 });
 
@@ -134,12 +158,18 @@ describe("GET /me", () => {
       expect(typeof ipad?.created_at).toBe("number");
     }));
 
+  /**
+   * A regression test now, not the only guard: `DeviceCredentials.list` is what
+   * the route sends and it cannot carry credential material, so this defends the
+   * wire against a future handler that goes around the module rather than
+   * against a spread nobody wrote.
+   */
   it("never emits token material", () =>
     withApp(async ({ app, repo }) => {
       const a = await provisionDevice(repo);
-      const mem = repo.memberships.findByDeviceId(a.user_id, a.device_id);
-      const tokenHash = mem?.device_token_hash ?? "";
-      const tokenSha = mem?.token_sha256 ?? "";
+      const [row] = DeviceCredentials.listForOperator(repo);
+      const tokenHash = row?.device_token_hash ?? "";
+      const tokenSha = row?.token_sha256 ?? "";
       expect(tokenHash.length).toBeGreaterThan(0);
       expect(tokenSha.length).toBeGreaterThan(0);
 
@@ -190,7 +220,7 @@ describe("GET /me", () => {
       const a = await provisionDevice(repo);
       const second = await addDevice(repo, a.user_id, "retired");
       const revokedAt = Date.now();
-      repo.memberships.revoke(a.user_id, second.device_id, revokedAt);
+      DeviceCredentials.revoke(repo, a.user_id, second.device_id, revokedAt);
 
       const res = await app.inject({
         method: "GET",
@@ -206,16 +236,10 @@ describe("GET /me", () => {
   it("surfaces a null device_label as label: null", () =>
     withApp(async ({ app, repo }) => {
       const a = await provisionDevice(repo);
-      const unlabelled = randomId();
-      const token = randomToken();
-      repo.memberships.create({
-        user_id: a.user_id,
-        device_id: unlabelled,
-        device_token_hash: await hashToken(token),
-        token_sha256: sha256Hex(token),
-        device_label: null,
-        created_at: Date.now(),
-        revoked_at: null,
+      const unlabelled = await DeviceCredentials.issue(repo, {
+        userId: a.user_id,
+        deviceLabel: null,
+        now: Date.now(),
       });
 
       const res = await app.inject({
@@ -223,7 +247,9 @@ describe("GET /me", () => {
         url: "/me",
         headers: { authorization: `Bearer ${a.device_token}` },
       });
-      const found = (res.json() as MeBody).devices.find((d) => d.device_id === unlabelled);
+      const found = (res.json() as MeBody).devices.find(
+        (d) => d.device_id === unlabelled.device_id
+      );
       expect(found).toBeDefined();
       expect(found?.label).toBeNull();
     }));

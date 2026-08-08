@@ -4,32 +4,11 @@ import { verifyBearer } from "../auth.js";
 export const registerEntryRoutes = (app: FastifyInstance): void => {
   app.post<{ Body: { ciphertext: string } }>(
     "/entries",
-    {
-      schema: {
-        body: {
-          type: "object",
-          required: ["ciphertext"],
-          additionalProperties: false,
-          properties: {
-            ciphertext: {
-              type: "string",
-              minLength: 1,
-              pattern: "^[A-Za-z0-9+/]+={0,2}$",
-            },
-          },
-        },
-      },
-    },
+    { schema: { body: app.deps.entryRules.bodySchema } },
     async (req, reply) => {
       const auth = await verifyBearer(app, req);
       const { ciphertext } = req.body;
-      if (ciphertext.length % 4 !== 0)
-        throw app.httpErrors.badRequest("malformed base64");
-      const padding = ciphertext.endsWith("==") ? 2 : ciphertext.endsWith("=") ? 1 : 0;
-      const size = (ciphertext.length / 4) * 3 - padding;
-      if (size === 0) throw app.httpErrors.badRequest("empty ciphertext");
-      if (size > app.deps.maxEntryBytes)
-        throw app.httpErrors.payloadTooLarge("ciphertext exceeds maxEntryBytes");
+      const size = app.deps.entryRules.sizeOf(ciphertext);
       const now = Date.now();
       const row = app.deps.repo.entries.insertAndPrune(
         {
@@ -95,9 +74,7 @@ export const registerEntryRoutes = (app: FastifyInstance): void => {
     "/entries/:id/use",
     async (req, reply) => {
       const auth = await verifyBearer(app, req);
-      const id = Number(req.params.id);
-      if (!Number.isInteger(id) || id <= 0)
-        throw app.httpErrors.badRequest("bad id");
+      const id = app.deps.entryRules.idFrom(req.params.id);
       const row = app.deps.repo.entries.recordUse(auth.user_id, id, Date.now());
       if (!row) throw app.httpErrors.notFound("entry not found");
       app.deps.hub.publish(auth.user_id, {
@@ -117,9 +94,7 @@ export const registerEntryRoutes = (app: FastifyInstance): void => {
     "/entries/:id",
     async (req, reply) => {
       const auth = await verifyBearer(app, req);
-      const id = Number(req.params.id);
-      if (!Number.isInteger(id) || id <= 0)
-        throw app.httpErrors.badRequest("bad id");
+      const id = app.deps.entryRules.idFrom(req.params.id);
       const changed = app.deps.repo.entries.delete(auth.user_id, id);
       if (changed === 0) throw app.httpErrors.notFound("entry not found");
       app.deps.hub.publish(auth.user_id, { type: "delete", id });

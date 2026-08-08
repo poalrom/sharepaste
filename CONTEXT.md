@@ -38,6 +38,12 @@ pairing and may differ from it. A transient view choice only: it changes nothing
 about syncing or capture, and is forgotten when the window closes.
 _Avoid_: current account, selection, focus
 
+**Pair Slot**:
+The relay's record of a pairing handshake in progress: short-lived, single-use,
+and claimed by exactly one device. It expires on its own and burns after too
+many wrong proofs, so it is never the lasting record a Pairing is.
+_Avoid_: pairing, pair record, handshake session
+
 **Relay**:
 The self-hosted service that stores and fans out ciphertext. Holds no key
 material and can never read an entry.
@@ -54,6 +60,12 @@ _Avoid_: clip, item, paste, snippet
 **Preview**:
 The decrypted, single-line rendering of an entry as shown in a list.
 _Avoid_: excerpt, summary
+
+**Act**:
+Something a device does that the relay has to be told about: a capture, or a
+use. An act is real from the moment the device performs it, whether or not the
+relay has heard of it — which is what a pending one is waiting to change.
+_Avoid_: operation, action, mutation, event
 
 **History**:
 A user's entries, newest first. Two regions in one order: this device's pending

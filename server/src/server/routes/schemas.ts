@@ -1,10 +1,7 @@
-export const UUID = {
-  type: "string",
-  pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
-} as const;
-
-export const HEX_64 = { type: "string", pattern: "^[0-9a-fA-F]{64}$" } as const;
-
-export const SECRET_PROOF = { type: "string", minLength: 16, maxLength: 256 } as const;
-
-export const DEVICE_LABEL = { type: "string", minLength: 1, maxLength: 128 } as const;
+/**
+ * The wire fragments a malformed request is refused against. They are declared by the
+ * Refusal module (`../refusal.ts`), which owns what makes an act refusable and the status
+ * that says so; this path stays because every route already imports them from here, and
+ * moving six imports pays no reader back.
+ */
+export { DEVICE_LABEL, HEX_64, SECRET_PROOF, UUID } from "../refusal.js";

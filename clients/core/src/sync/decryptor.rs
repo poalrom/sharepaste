@@ -1,9 +1,7 @@
 use crate::crypto::{decrypt, UserKey};
 use crate::http::dto::EntryRow;
 use crate::pairing::payload::base64_decode;
-use crate::storage::entries_cache::{
-    mark_undecryptable, plaintext_sha256, upsert_and_prune, NewCachedEntry, Stored,
-};
+use crate::storage::history::{mark_undecryptable, store, RelayEntry, Stored};
 use crate::errors::AppError;
 use rusqlite::Connection;
 
@@ -17,7 +15,7 @@ pub struct DecryptOutcome {
     /// job, derived in the same place — deriving it here as well is how the two
     /// came to mean different things on the two ingest paths.
     pub plaintext: Option<String>,
-    /// What the ingest did to the cache: whether this Entry is new here, and
+    /// What the ingest did to the History: whether this Entry is new here, and
     /// whether an Entry already here changed its place.
     ///
     /// Three paths reach the same id — a backfill, the relay's SSE echo, and
@@ -45,24 +43,19 @@ pub fn ingest(
         },
         Err(_) => (None, true),
     };
-    // Only a plaintext this device can read has a hash, and only a hash makes a
-    // repeat copy recognisable. An Undecryptable row must never match text this
-    // device cannot prove it holds.
-    let hash = plaintext_str.as_deref().map(plaintext_sha256);
-    let stored = upsert_and_prune(conn, NewCachedEntry {
+    let stored = store(conn, RelayEntry {
         user_id,
-        relay_id: Some(row.id),
+        relay_id: row.id,
         ciphertext: &wire,
         plaintext: plaintext_str.as_deref(),
-        plaintext_sha256: hash.as_deref(),
         created_at: row.created_at,
         last_use: row.last_use,
         device_id: &row.device_id,
     }, now_ms)?;
     if undecryptable {
-        // upsert_and_prune COALESCEs a NULL plaintext onto whatever is already
-        // stored, so an entry that decrypted once and no longer does would keep
-        // serving its old plaintext through get_full - and therefore through
+        // `store` COALESCEs a NULL plaintext onto whatever is already stored, so
+        // an entry that decrypted once and no longer does would keep serving its
+        // old plaintext through `plaintext_of` - and therefore through
         // copy_to_clipboard - while this same ingest reports the row as
         // Undecryptable. Clear it so the cache agrees with what we tell the user.
         mark_undecryptable(conn, user_id, row.id)?;
@@ -104,7 +97,7 @@ mod tests {
         let r = row_for("u", 1, multiline.as_bytes(), &k);
         let out = ingest(&c, &k, "u", &r, 9_999).unwrap();
         assert_eq!(out.plaintext.as_deref(), Some(multiline));
-        let pt = crate::storage::entries_cache::get_full(&c, "u", 1).unwrap();
+        let pt = crate::storage::history::plaintext_of(&c, "u", 1).unwrap();
         assert_eq!(pt.as_deref(), Some(multiline));
     }
 
@@ -115,7 +108,7 @@ mod tests {
         let r = row_for("alice", 1, b"x", &k);
         let out = ingest(&c, &k, "bob", &r, 9_999).unwrap();
         assert!(out.plaintext.is_none(), "no plaintext is what Undecryptable means here");
-        let pt = crate::storage::entries_cache::get_full(&c, "bob", 1).unwrap();
+        let pt = crate::storage::history::plaintext_of(&c, "bob", 1).unwrap();
         assert!(pt.is_none());
     }
 
@@ -126,7 +119,7 @@ mod tests {
         let r = row_for("u", 1, b"secret", &good);
         ingest(&c, &good, "u", &r, 9_999).unwrap();
         assert_eq!(
-            crate::storage::entries_cache::get_full(&c, "u", 1).unwrap().as_deref(),
+            crate::storage::history::plaintext_of(&c, "u", 1).unwrap().as_deref(),
             Some("secret"),
             "precondition: the entry decrypted and was cached"
         );
@@ -138,7 +131,7 @@ mod tests {
 
         assert!(out.plaintext.is_none(), "and the row this ingest reports is Undecryptable now");
         assert!(
-            crate::storage::entries_cache::get_full(&c, "u", 1).unwrap().is_none(),
+            crate::storage::history::plaintext_of(&c, "u", 1).unwrap().is_none(),
             "and must not keep serving the old plaintext through copy_to_clipboard"
         );
     }
@@ -159,7 +152,7 @@ mod tests {
         let out = ingest(&c, &k, "u", &used, 9_999).unwrap();
 
         assert!(!out.stored.first_insert);
-        let head = crate::storage::entries_cache::list_recent(&c, "u", None, 1).unwrap();
+        let head = crate::storage::history::page(&c, "u", None, 1).unwrap();
         assert_eq!(head[0].last_use, 8_000);
         assert_eq!(head[0].created_at, 1000, "a use leaves identity alone");
     }
@@ -168,15 +161,15 @@ mod tests {
     /// is, so a repeat copy is recognised however the entry arrived.
     #[test]
     fn ingest_records_the_hash_of_what_it_decrypted() {
-        use crate::storage::entries_cache::{find_by_hash, plaintext_sha256};
+        use crate::storage::history::{recognise, Held};
         let c = open_in_memory().unwrap();
         let k = key();
         ingest(&c, &k, "u", &row_for("u", 1, b"npm run dev", &k), 9_999).unwrap();
-        assert_eq!(find_by_hash(&c, "u", &plaintext_sha256("npm run dev")).unwrap(), Some(1));
+        assert_eq!(recognise(&c, "u", "npm run dev").unwrap(), Held::Entry(1));
 
         // And an Undecryptable one records none: it cannot prove what it holds.
         let rotated: UserKey = Zeroizing::new([6u8; 32]);
         ingest(&c, &k, "u", &row_for("u", 2, b"npm run build", &rotated), 9_999).unwrap();
-        assert_eq!(find_by_hash(&c, "u", &plaintext_sha256("npm run build")).unwrap(), None);
+        assert_eq!(recognise(&c, "u", "npm run build").unwrap(), Held::Nothing);
     }
 }

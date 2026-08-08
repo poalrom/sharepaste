@@ -13,6 +13,21 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use sharepaste_core::facade::{Sharepaste as CoreSharepaste, SharepasteConfig};
+use sharepaste_core::http::TransportPolicy;
+use sharepaste_core::relay::RelayDial;
+
+/// The shell's `require_https` as the core's own policy.
+///
+/// The boolean stays the foreign signature, because it is what every binding
+/// already passes and what `TransportPolicyTest` reads; the core takes the
+/// dial that boolean chooses.
+fn policy(require_https: bool) -> TransportPolicy {
+    if require_https {
+        TransportPolicy::RequireHttps
+    } else {
+        TransportPolicy::AllowCleartext
+    }
+}
 
 /// The facade, wrapped so a foreign caller sees plain values instead of
 /// futures.
@@ -73,7 +88,7 @@ impl Sharepaste {
             keychain: Arc::new(KeychainBridge(keychain)),
             clipboard: Arc::new(ClipboardBridge(clipboard)),
             events: Arc::new(EventSinkBridge(events)),
-            require_https,
+            relay: RelayDial::over_http(policy(require_https)),
         };
         Ok(Self::wrap(CoreSharepaste::open(cfg)?))
     }
@@ -292,7 +307,7 @@ impl Sharepaste {
             keychain: Arc::new(KeychainBridge(keychain)),
             clipboard: Arc::new(ClipboardBridge(clipboard)),
             events: Arc::new(EventSinkBridge(events)),
-            require_https,
+            relay: RelayDial::over_http(policy(require_https)),
         };
         Ok(Self::wrap(CoreSharepaste::open_in_memory(cfg)?))
     }

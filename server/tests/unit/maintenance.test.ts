@@ -17,7 +17,7 @@ describe("maintenance.sweep", () => {
     repo.users.create({ id: "u1", username: "alice" });
 
     // Expired pairing
-    repo.pairings.create({
+    repo.pairSlots.create({
       id: "pair1",
       user_id: "u1",
       secret_hash: "00".repeat(32),
@@ -30,7 +30,7 @@ describe("maintenance.sweep", () => {
     });
 
     // Live pairing
-    repo.pairings.create({
+    repo.pairSlots.create({
       id: "pair2",
       user_id: "u1",
       secret_hash: "11".repeat(32),
@@ -70,9 +70,9 @@ describe("maintenance.sweep", () => {
     expect(result).toEqual({ pairings: 1, invites: 2 });
 
     // Check that live pairing survives
-    expect(repo.pairings.find("pair2")).not.toBeUndefined();
+    expect(repo.pairSlots.find("pair2")).not.toBeUndefined();
     // Check that expired pairing is gone
-    expect(repo.pairings.find("pair1")).toBeUndefined();
+    expect(repo.pairSlots.find("pair1")).toBeUndefined();
 
     // Check that only live invite survives
     expect(repo.invites.findByHash("cc".repeat(32))).not.toBeUndefined();

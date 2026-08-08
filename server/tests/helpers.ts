@@ -3,10 +3,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildApp, type AppDeps } from "../src/server/app.js";
-import { hashToken, randomId, randomToken, sha256Hex } from "../src/crypto.js";
+import { randomId, randomToken, sha256Hex } from "../src/crypto.js";
 import { openDb, type Db } from "../src/db/index.js";
 import { migrate } from "../src/db/migrate.js";
 import { Repository } from "../src/db/repository.js";
+import { DeviceCredentials, type IssuedCredential } from "../src/server/device-credentials.js";
+import { entryRules } from "../src/server/refusal.js";
 import { SseHub } from "../src/server/sse-hub.js";
 
 export interface TempDb {
@@ -57,7 +59,7 @@ export const buildTestApp = async (
     pairingTtlMs: 2 * 60 * 1000,
     maxEntries: 100,
     maxEntryAgeMs: 30 * 24 * 60 * 60 * 1000,
-    maxEntryBytes: 64 * 1024,
+    entryRules: entryRules({ maxEntryBytes: 64 * 1024 }),
     maxPairingFailures: 3,
     logger: false,
     ...overrides,
@@ -94,62 +96,36 @@ export const withApp = async <T>(
 
 export const cipherB64 = (s: string): string => Buffer.from(s).toString("base64");
 
-export interface ProvisionedDevice {
-  user_id: string;
-  device_id: string;
-  device_token: string;
-}
+export type ProvisionedDevice = IssuedCredential;
 
-/** Adds a device to an existing user, indexed the way the server now issues them. */
-export const addDevice = async (
+/** Adds a Device to an existing user, minted the one way the relay mints one. */
+export const addDevice = (
   repo: Repository,
   user_id: string,
   device_label = "test"
-): Promise<ProvisionedDevice> => {
-  const device_token = randomToken();
-  const device_id = randomId();
-  repo.memberships.create({
-    user_id,
-    device_id,
-    device_token_hash: await hashToken(device_token),
-    token_sha256: sha256Hex(device_token),
-    device_label,
-    created_at: Date.now(),
-    revoked_at: null,
-  });
-  return { user_id, device_id, device_token };
-};
+): Promise<ProvisionedDevice> =>
+  DeviceCredentials.issue(repo, { userId: user_id, deviceLabel: device_label, now: Date.now() });
 
-export const provisionDevice = async (
+export const provisionDevice = (
   repo: Repository,
   username = "alice"
-): Promise<ProvisionedDevice> => {
-  const user = repo.users.create({ id: randomId(), username });
-  return addDevice(repo, user.id);
-};
+): Promise<ProvisionedDevice> =>
+  addDevice(repo, repo.users.create({ id: randomId(), username }).id);
 
 /**
- * A membership as it existed before the sha256 index: argon2 hash only.
- * Exercises the legacy authentication path and its backfill.
+ * A membership as it existed before the sha256 index: argon2 hash only. The same
+ * mint, stripped of its index — so the fixture cannot drift from what the relay
+ * actually issued back then. Exercises the scan and its backfill.
  */
-export const provisionLegacyDevice = async (
+export const provisionLegacyDevice = (
   repo: Repository,
   username = "legacy"
-): Promise<ProvisionedDevice> => {
-  const user = repo.users.create({ id: randomId(), username });
-  const device_token = randomToken();
-  const device_id = randomId();
-  repo.memberships.create({
-    user_id: user.id,
-    device_id,
-    device_token_hash: await hashToken(device_token),
-    token_sha256: null,
-    device_label: "legacy",
-    created_at: Date.now(),
-    revoked_at: null,
+): Promise<ProvisionedDevice> =>
+  DeviceCredentials.issueUnindexed(repo, {
+    userId: repo.users.create({ id: randomId(), username }).id,
+    deviceLabel: "legacy",
+    now: Date.now(),
   });
-  return { user_id: user.id, device_id, device_token };
-};
 
 export const seedInvite = (repo: Repository, userId = "u1", username = "alice"): string => {
   repo.users.create({ id: userId, username });
@@ -168,7 +144,7 @@ export interface PairContext extends ProvisionedDevice {
   pair_id: string;
 }
 
-/** Provisions an inviter device and opens a pairing slot. */
+/** Provisions an inviter device and opens a Pair Slot. */
 export const startPair = async (
   app: FastifyInstance,
   repo: Repository
@@ -185,7 +161,7 @@ export const startPair = async (
   return { ...inviter, secret, pair_id: body.pair_id };
 };
 
-/** `startPair`, then claims the slot with the correct proof. */
+/** `startPair`, then claims the Pair Slot with the correct proof. */
 export const startAndClaim = async (
   app: FastifyInstance,
   repo: Repository

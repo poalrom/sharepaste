@@ -10,11 +10,10 @@
 
 use crate::errors::AppError;
 use crate::event::CoreEvent;
-use crate::http::dto::{EntryRow, MeResp};
+use crate::http::dto::{ClaimInviteResp, DevicesResp, EntryRow, MeResp};
 use crate::platform::{Clipboard, EventSink};
-use crate::pairing::payload::{PairClaim, PairTransport};
-use crate::sync::session::SessionTransport;
-use crate::sync::uploader::{Uploaded, Used};
+use crate::pairing::payload::{base64_encode, PairClaim, PairPayload};
+use crate::relay::{Relay, RelayDial, Uploaded, Used};
 use crate::sync::{sse, ConnectionState};
 use async_trait::async_trait;
 use parking_lot::Mutex;
@@ -180,6 +179,17 @@ type PutPayloadHook = Box<dyn Fn() + Send + Sync>;
 pub const SCRIPTED_PAIR_ID: &str = "11111111-2222-3333-4444-555555555555";
 pub const SCRIPTED_RELAY_URL: &str = "https://scripted.invalid";
 
+/// The User a claim of either kind comes away with, and the device row this
+/// relay creates for it.
+///
+/// One identity for the invite claim and the short-code claim alike, because a
+/// relay answers both with the same three things — which is what lets a test
+/// assert that a Pairing reached the database without knowing which door it
+/// came through.
+pub const SCRIPTED_USER_ID: &str = "scripted-user";
+pub const SCRIPTED_DEVICE_ID: &str = "scripted-device";
+pub const SCRIPTED_DEVICE_TOKEN: &str = "scripted-token";
+
 /// A pasteboard holding exactly what a test says it holds.
 ///
 /// `types()` is answered without reading the text, which is the whole point of
@@ -312,6 +322,10 @@ pub struct ScriptedRelay {
     polls: Mutex<VecDeque<Result<PairClaim, AppError>>>,
     put_payload_hook: Mutex<Option<PutPayloadHook>>,
     base_url: Mutex<Option<String>>,
+    invites: Mutex<Vec<String>>,
+    pair_claims: Mutex<Vec<String>>,
+    joined: Mutex<Vec<String>>,
+    cleared: AtomicI64,
 }
 
 impl ScriptedRelay {
@@ -402,10 +416,49 @@ impl ScriptedRelay {
     pub fn pair_payloads(&self) -> Vec<String> {
         self.pair_payloads.lock().clone()
     }
+
+    /// Every invite token this relay was asked to redeem, in order.
+    pub fn invites(&self) -> Vec<String> {
+        self.invites.lock().clone()
+    }
+
+    /// Every pair id a claimer proved its secret against, in order.
+    pub fn pair_claims(&self) -> Vec<String> {
+        self.pair_claims.lock().clone()
+    }
+
+    /// Every Device Label this relay made a device for, in order.
+    pub fn joined(&self) -> Vec<String> {
+        self.joined.lock().clone()
+    }
+
+    /// How many times this relay was asked to drop a User's whole History.
+    pub fn cleared(&self) -> i64 {
+        self.cleared.load(Ordering::Relaxed)
+    }
+
+    /// A dial that reaches this relay whatever address it is handed.
+    ///
+    /// A scripted relay is not *at* an address: it answers an invite claim, a
+    /// short-code claim and every session request alike. Handed to
+    /// [`SharepasteConfig::relay`](crate::facade::SharepasteConfig::relay), it
+    /// is what lets a test drive a production operation — `clear_history`,
+    /// `pair_with_code` — with no relay in reach and no twin to call instead.
+    pub fn dial(self: &Arc<Self>) -> RelayDial {
+        let relay = self.clone();
+        RelayDial::new(move |_base_url, _token| Ok(relay.clone() as Arc<dyn Relay>))
+    }
 }
 
 #[async_trait]
-impl SessionTransport for ScriptedRelay {
+impl Relay for ScriptedRelay {
+    fn base_url(&self) -> String {
+        self.base_url
+            .lock()
+            .clone()
+            .unwrap_or_else(|| SCRIPTED_RELAY_URL.to_string())
+    }
+
     async fn list_entries(&self, since: i64, _limit: u32) -> Result<Vec<EntryRow>, AppError> {
         self.asked_since.lock().push(since);
         self.backfills.lock().pop_front().unwrap_or_else(|| Ok(Vec::new()))
@@ -484,15 +537,35 @@ impl SessionTransport for ScriptedRelay {
         self.deleted.lock().push(entry_id);
         Ok(())
     }
-}
 
-#[async_trait]
-impl PairTransport for ScriptedRelay {
-    async fn start(&self, _secret_hash: &str) -> Result<String, AppError> {
+    async fn delete_all_entries(&self) -> Result<(), AppError> {
+        self.cleared.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn claim_invite(
+        &self,
+        token: &str,
+        device_label: &str,
+    ) -> Result<ClaimInviteResp, AppError> {
+        self.invites.lock().push(token.to_string());
+        self.joined.lock().push(device_label.to_string());
+        Ok(ClaimInviteResp {
+            device_token: SCRIPTED_DEVICE_TOKEN.to_string(),
+            user_id: SCRIPTED_USER_ID.to_string(),
+            device_id: SCRIPTED_DEVICE_ID.to_string(),
+        })
+    }
+
+    async fn pair_start(&self, _secret_hash: &str) -> Result<String, AppError> {
         Ok(SCRIPTED_PAIR_ID.to_string())
     }
 
-    async fn put_payload(&self, _pair_id: &str, encrypted_payload: &str) -> Result<(), AppError> {
+    async fn pair_payload_put(
+        &self,
+        _pair_id: &str,
+        encrypted_payload: &str,
+    ) -> Result<(), AppError> {
         self.pair_payloads.lock().push(encrypted_payload.to_string());
         if let Some(f) = self.put_payload_hook.lock().as_ref() {
             f();
@@ -500,18 +573,49 @@ impl PairTransport for ScriptedRelay {
         Ok(())
     }
 
-    async fn poll(&self, _pair_id: &str, _timeout_ms: u32) -> Result<PairClaim, AppError> {
+    async fn pair_poll(&self, _pair_id: &str, _timeout_ms: u32) -> Result<PairClaim, AppError> {
         self.polls
             .lock()
             .pop_front()
             .unwrap_or_else(|| Ok(PairClaim::Expired))
     }
 
-    fn base_url(&self) -> String {
-        self.base_url
-            .lock()
-            .clone()
-            .unwrap_or_else(|| SCRIPTED_RELAY_URL.to_string())
+    async fn pair_claim(&self, pair_id: &str, _secret_proof: &str) -> Result<(), AppError> {
+        self.pair_claims.lock().push(pair_id.to_string());
+        Ok(())
+    }
+
+    /// The Pairing an inviter would have uploaded, sealed to the secret the
+    /// claimer just proved it holds.
+    ///
+    /// Encrypted here rather than scripted, because the proof *is* the secret in
+    /// hex — so this relay can produce exactly the ciphertext the real one
+    /// stored, and a test never has to reach for the crypto to set one up.
+    async fn pair_payload(&self, pair_id: &str, secret_proof: &str) -> Result<String, AppError> {
+        let secret = crate::pairing::invite::hex::decode_user_key(secret_proof)?;
+        let payload = PairPayload {
+            user_id: SCRIPTED_USER_ID.to_string(),
+            user_key: TEST_USER_KEY_HEX.to_string(),
+            server_url: self.base_url(),
+        };
+        let plaintext =
+            serde_json::to_vec(&payload).map_err(|e| AppError::Crypto(e.to_string()))?;
+        Ok(base64_encode(&crate::crypto::encrypt(&secret, pair_id, &plaintext)?))
+    }
+
+    async fn pair_devices(
+        &self,
+        pair_id: &str,
+        _secret_proof: &str,
+        device_label: &str,
+    ) -> Result<DevicesResp, AppError> {
+        self.pair_claims.lock().push(pair_id.to_string());
+        self.joined.lock().push(device_label.to_string());
+        Ok(DevicesResp {
+            device_token: SCRIPTED_DEVICE_TOKEN.to_string(),
+            device_id: SCRIPTED_DEVICE_ID.to_string(),
+            user_id: SCRIPTED_USER_ID.to_string(),
+        })
     }
 }
 
@@ -530,10 +634,11 @@ fn ciphertext_of(user_id: &str, plaintext: &str) -> String {
 
 /// A backfill row [`test_user_key`] can actually decrypt.
 ///
-/// Stamped from the clock, not from a small constant: `entries_cache` prunes
-/// anything older than its 30-day window on every insert, so a fixture dated
-/// near the epoch is deleted by the very write that stores it and no test could
-/// then read the row back.
+/// Stamped from the clock, not from a small constant:
+/// [`storage::history`](crate::storage::history) prunes anything older than
+/// [`MAX_AGE_MS`](crate::storage::history::MAX_AGE_MS) on every insert, so a
+/// fixture dated near the epoch is deleted by the very write that stores it and
+/// no test could then read the row back.
 pub fn encrypted_row(id: i64, user_id: &str, plaintext: &str, device_id: &str) -> EntryRow {
     let at = crate::now_ms() + id;
     EntryRow {

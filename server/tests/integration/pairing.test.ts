@@ -16,7 +16,7 @@ describe("POST /pair/start", () => {
       expect(res.statusCode).toBe(200);
       const body = res.json() as { pair_id: string };
 
-      const pairing = repo.pairings.find(body.pair_id);
+      const pairing = repo.pairSlots.find(body.pair_id);
       expect(pairing?.user_id).toBe(a.user_id);
       expect(pairing?.secret_hash).toBe(sha256Hex(secret));
       expect(pairing?.consumed_at).toBeNull();
@@ -34,7 +34,7 @@ describe("POST /pair/claim", () => {
         payload: { pair_id: ctx.pair_id, secret_proof: ctx.secret },
       });
       expect(res.statusCode).toBe(200);
-      expect(repo.pairings.find(ctx.pair_id)?.claimed_at).not.toBeNull();
+      expect(repo.pairSlots.find(ctx.pair_id)?.claimed_at).not.toBeNull();
     }));
 
   it("returns 403 on a wrong secret_proof and increments failed_attempts", () =>
@@ -46,7 +46,7 @@ describe("POST /pair/claim", () => {
         payload: { pair_id: ctx.pair_id, secret_proof: randomToken() },
       });
       expect(res.statusCode).toBe(403);
-      expect(repo.pairings.find(ctx.pair_id)?.failed_attempts).toBe(1);
+      expect(repo.pairSlots.find(ctx.pair_id)?.failed_attempts).toBe(1);
     }));
 
   it("burns the slot after 3 wrong attempts", () =>
@@ -65,7 +65,7 @@ describe("POST /pair/claim", () => {
         payload: { pair_id: ctx.pair_id, secret_proof: ctx.secret },
       });
       expect(res.statusCode).toBe(410);
-      expect(repo.pairings.find(ctx.pair_id)?.consumed_at).not.toBeNull();
+      expect(repo.pairSlots.find(ctx.pair_id)?.consumed_at).not.toBeNull();
     }));
 
   it("returns 410 on an expired slot", () =>

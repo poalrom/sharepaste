@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import { hashToken, randomId, randomToken, sha256Hex } from "../../crypto.js";
 import { verifyBearer } from "../auth.js";
-import { verifySlotProof } from "../pairing-slot.js";
+import { DeviceCredentials } from "../device-credentials.js";
+import { PairSlot } from "../pair-slot.js";
 import { DEVICE_LABEL, SECRET_PROOF, UUID } from "./schemas.js";
 
 export const registerDeviceRoutes = (app: FastifyInstance): void => {
@@ -23,33 +23,23 @@ export const registerDeviceRoutes = (app: FastifyInstance): void => {
     },
     async (req, reply) => {
       const { pair_id, secret_proof, label } = req.body;
-      const pairing = app.deps.repo.pairings.find(pair_id);
-      if (!pairing) throw app.httpErrors.notFound("pair not found");
       const now = Date.now();
-      if (pairing.consumed_at !== null) throw app.httpErrors.gone("pair slot consumed");
-      if (pairing.expires_at <= now) throw app.httpErrors.gone("pair slot expired");
-      if (pairing.claimed_at === null) throw app.httpErrors.conflict("pair slot not claimed");
-      verifySlotProof(app, pairing, secret_proof, now);
+      const slot = PairSlot.read(app, pair_id, now).requireClaimed();
+      slot.proveSecret(secret_proof, now);
 
-      const deviceId = randomId();
-      const token = randomToken();
-      const tokenHash = await hashToken(token);
+      const issued = await DeviceCredentials.issue(
+        app.deps.repo,
+        { userId: slot.userId, deviceLabel: label, now },
+        // Single-use: the Pair Slot is spent on the Device minted from it, in
+        // the one transaction, so a slot never yields two credentials.
+        () => slot.consumeInto(label, now)
+      );
 
-      const tx = app.deps.repo.db.transaction(() => {
-        app.deps.repo.memberships.create({
-          user_id: pairing.user_id,
-          device_id: deviceId,
-          device_token_hash: tokenHash,
-          token_sha256: sha256Hex(token),
-          device_label: label,
-          created_at: now,
-          revoked_at: null,
-        });
-        app.deps.repo.pairings.markConsumed(pair_id, now, label);
+      return reply.send({
+        device_token: issued.device_token,
+        device_id: issued.device_id,
+        user_id: issued.user_id,
       });
-      tx();
-
-      return reply.send({ device_token: token, device_id: deviceId, user_id: pairing.user_id });
     }
   );
 
@@ -58,16 +48,11 @@ export const registerDeviceRoutes = (app: FastifyInstance): void => {
     const user = app.deps.repo.users.find(auth.user_id);
     if (!user) throw app.httpErrors.notFound("user not found");
 
-    // Field-by-field, never a spread: MembershipRow carries `device_token_hash`
-    // and `token_sha256`, and neither may ever reach a response body.
-    // Revoked devices stay in the list so clients can still resolve the Origin
-    // of entries captured on a device that has since been revoked.
-    const devices = app.deps.repo.memberships.listByUser(auth.user_id).map((m) => ({
-      device_id: m.device_id,
-      label: m.device_label ?? null,
-      created_at: m.created_at,
-      revoked_at: m.revoked_at,
-    }));
+    // ADR 0001's shape, and the module's to build: a route never handles a row
+    // that could carry credential material, so there is nothing here to redact.
+    // Revoked Devices stay listed so a client can still resolve the Origin of
+    // entries captured on one.
+    const devices = DeviceCredentials.list(app.deps.repo, auth.user_id);
 
     return reply.send({ user: { id: user.id, username: user.username }, devices });
   });
@@ -76,9 +61,7 @@ export const registerDeviceRoutes = (app: FastifyInstance): void => {
     "/devices/:id",
     async (req, reply) => {
       const auth = await verifyBearer(app, req);
-      const target = app.deps.repo.memberships.findByDeviceId(auth.user_id, req.params.id);
-      if (!target) throw app.httpErrors.notFound("device not found for this user");
-      app.deps.repo.memberships.revoke(auth.user_id, req.params.id, Date.now());
+      DeviceCredentials.revoke(app.deps.repo, auth.user_id, req.params.id, Date.now());
       return reply.send({ ok: true });
     }
   );

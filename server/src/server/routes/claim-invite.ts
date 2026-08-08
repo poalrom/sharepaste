@@ -1,15 +1,14 @@
 import type { FastifyInstance } from "fastify";
-import { hashToken, randomId, randomToken, sha256Hex } from "../../crypto.js";
+import { sha256Hex } from "../../crypto.js";
+import { DeviceCredentials } from "../device-credentials.js";
+import { DEVICE_LABEL, SECRET_PROOF } from "./schemas.js";
 
 const SCHEMA = {
   body: {
     type: "object",
     required: ["token", "device_label"],
     additionalProperties: false,
-    properties: {
-      token: { type: "string", minLength: 16, maxLength: 256 },
-      device_label: { type: "string", minLength: 1, maxLength: 128 },
-    },
+    properties: { token: SECRET_PROOF, device_label: DEVICE_LABEL },
   },
 } as const;
 
@@ -27,28 +26,18 @@ export const registerClaimInviteRoute = (app: FastifyInstance): void => {
       const now = Date.now();
       if (invite.expires_at < now) throw app.httpErrors.gone("invite expired");
 
-      const deviceId = randomId();
-      const deviceToken = randomToken();
-      const deviceTokenHash = await hashToken(deviceToken);
-
-      const tx = app.deps.repo.db.transaction(() => {
-        app.deps.repo.invites.markClaimed(tokenHash, now);
-        app.deps.repo.memberships.create({
-          user_id: invite.user_id,
-          device_id: deviceId,
-          device_token_hash: deviceTokenHash,
-          token_sha256: sha256Hex(deviceToken),
-          device_label,
-          created_at: now,
-          revoked_at: null,
-        });
-      });
-      tx();
+      const issued = await DeviceCredentials.issue(
+        app.deps.repo,
+        { userId: invite.user_id, deviceLabel: device_label, now },
+        // Single-use: the Invite is spent in the same transaction the Device is
+        // minted in, so no second claim can reach a second credential.
+        () => app.deps.repo.invites.markClaimed(tokenHash, now)
+      );
 
       return reply.send({
-        device_token: deviceToken,
-        user_id: invite.user_id,
-        device_id: deviceId,
+        device_token: issued.device_token,
+        user_id: issued.user_id,
+        device_id: issued.device_id,
       });
     }
   );

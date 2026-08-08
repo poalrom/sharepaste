@@ -4,7 +4,7 @@ import { tauri } from "./tauri";
 /**
  * How many rows a surface asks the core for in one page.
  *
- * Larger than the hundred `entries_cache` keeps, and it has to be: that hundred
+ * Larger than [`HISTORY_CAP`], and it has to be: that cap
  * bounds the region the relay has ordered, and the un-flushed region is unbounded
  * on purpose — an act this device has not delivered is undelivered clipboard
  * content, and evicting one to protect a number is the trade ADR 0014 refuses. A
@@ -27,7 +27,8 @@ export const cmd = {
   /**
    * `before` is a `(last_use, id)` cursor and not an id: id stopped being the
    * order (ADR 0011), so paging by it alone would both skip and repeat rows.
-   * Nothing passes it — the cache holds 100 and `list_recent` clamps there.
+   * Nothing passes it — the core clamps every page to its own ceiling, and
+   * `HISTORY_PAGE` is already above it.
    */
   listHistory:         (args: { user_id: string; before?: { last_use: number; id: number }; limit: number }) =>
                          tauri.invoke<EntryView[]>("list_history", { args }),
