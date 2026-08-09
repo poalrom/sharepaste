@@ -18,6 +18,13 @@ import type { EntryView, Pairing } from "../types";
  */
 const ENTRY_EVENTS = ["entry-added", "entry-deleted", "entry-settled", "entry-refused"] as const;
 
+/**
+ * The three a *relay* drives, and so the three that can fire while a surface is
+ * still attaching. The two below them are seeded from the same snapshot the
+ * attach is waiting on, which is what makes the ordering load-bearing twice.
+ */
+const RELAY_EVENTS = ["connection-state", "pending-count", "contact"] as const;
+
 const pairings: Pairing[] = [
   {
     user_id: "u-active",
@@ -183,6 +190,78 @@ describe("attachHistory — the ordering rule", () => {
           "offline-burst-three",
         ]),
       );
+    },
+  );
+
+  /*
+   * The same rule, for the events that report on the relay rather than on the
+   * History. `build_popover_window` runs one line before
+   * `spawn_sync_for_existing_pairings`, so the popover attaches across
+   * Connecting → Online every launch; holding the snapshot open is that gap
+   * held still.
+   */
+  it.each(SCOPES)(
+    "registers the relay-driven subscriptions before its first command answers (%s)",
+    async (_name, scope) => {
+      serve({ listPairings: () => new Promise<never>(() => {}) });
+
+      detach = attachHistory(scope);
+
+      await waitFor(() => expect(commandsSent()).toContain("list_pairings"));
+      for (const event of RELAY_EVENTS) {
+        expect(ipc.handlers.get(event)).toHaveLength(1);
+      }
+      // The three a user drives stay below it: nothing but a hand produces
+      // them, and their handlers assume the list is hydrated.
+      expect(ipc.handlers.get("pairing-added") ?? []).toHaveLength(0);
+      expect(ipc.handlers.get("pairing-removed") ?? []).toHaveLength(0);
+      expect(ipc.handlers.get("active-pairing-changed") ?? []).toHaveLength(0);
+    },
+  );
+
+  /*
+   * Rule 2's hazard, on the readings rule 4 seeds: hearing the transition is
+   * no use if the snapshot taken before it lands on top afterwards. There is no
+   * replay here — the seed yields instead, per field — because a healthy
+   * session emits nothing again and the surface would stay wrong for its whole
+   * life. This is the popover reading CONNECTING beside a main window reading
+   * ONLINE.
+   */
+  it.each(SCOPES)(
+    "does not let the pairings snapshot roll back a state already announced (%s)",
+    async (_name, scope) => {
+      let release: (rows: Pairing[]) => void = () => {};
+      serve({
+        listPairings: () =>
+          new Promise<Pairing[]>((resolve) => {
+            release = resolve;
+          }),
+      });
+
+      detach = attachHistory(scope);
+      await waitFor(() => expect(ipc.handlers.get("connection-state")).toHaveLength(1));
+
+      // The session finishes connecting and the queue drains. The snapshot in
+      // flight was taken before both and still reports Connecting.
+      ipc.emit("connection-state", { user_id: "u-active", state: "Online" });
+      ipc.emit("pending-count", { user_id: "u-active", count: 4 });
+      release(pairings);
+
+      await waitFor(() => expect(usePairingsStore.getState().active).toBe("u-active"));
+      expect(useStatusStore.getState().byUser["u-active"]).toEqual({
+        state: "Online",
+        pending: 4,
+      });
+      // The hydrated row carries that same stale reading, and the Pairings pane
+      // draws its light from there rather than from the map above.
+      expect(
+        usePairingsStore.getState().pairings.find((p) => p.user_id === "u-active")?.status,
+      ).toBe("Online");
+      // A Pairing nothing was announced about still takes the snapshot's word.
+      expect(useStatusStore.getState().byUser["u-other"]).toEqual({
+        state: "Disconnected",
+        pending: 2,
+      });
     },
   );
 });

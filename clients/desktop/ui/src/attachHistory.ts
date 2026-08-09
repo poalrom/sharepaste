@@ -9,7 +9,7 @@ import {
   useStatusStore,
   useUiStore,
 } from "./store";
-import type { EntryView } from "./types";
+import type { ConnectionState, EntryView } from "./types";
 
 /**
  * Which Pairing's History a surface is showing, and whether this attach is what
@@ -46,27 +46,45 @@ export type HistoryScope = {
  * Every surface that shows a History needs the same six things right, and
  * before this they each re-derived them:
  *
- * 1. **The four entry subscriptions come before the first `await`.** This is
- *    anomaly A of `.scratch/mobile-client/issues/06`, reproduced twice on a
- *    Windows smoke run: an offline burst flushed, the relay gained every row,
- *    and one of them was on screen afterwards. An Entry the uploader caches
- *    between a `list_history` and the subscription is announced to a listener
- *    that does not exist and absent from that snapshot, and it stays lost —
- *    the relay's echo of an Entry this device uploaded deliberately raises no
- *    event, and a backfill that ingests only rows the cache already holds does
- *    not advance the watermark and so raises none either.
- * 2. **`noteChange` fires on all four, before the store mutation.** Subscribing
- *    first is only half the fix: a snapshot requested before a change and
- *    applied after it would undo it. [`hydrateFrom`] replays what was recorded.
+ * 1. **Every subscription a relay drives comes before the first `await`.** The
+ *    four entry events, and the two readings rule 4 seeds. This is anomaly A of
+ *    `.scratch/mobile-client/issues/06`, reproduced twice on a Windows smoke
+ *    run: an offline burst flushed, the relay gained every row, and one of them
+ *    was on screen afterwards. An Entry the uploader caches between a
+ *    `list_history` and the subscription is announced to a listener that does
+ *    not exist and absent from that snapshot, and it stays lost — the relay's
+ *    echo of an Entry this device uploaded deliberately raises no event, and a
+ *    backfill that ingests only rows the cache already holds does not advance
+ *    the watermark and so raises none either.
+ *
+ *    The three a *user* drives — a Pairing added, forgotten, or made Active —
+ *    stay below the snapshot, where their handlers can assume a hydrated list.
+ *    Nothing but a hand produces them, and no hand reaches this app in the
+ *    fraction of a second between its window opening and this line.
+ * 2. **`noteChange` fires on all four entry events, before the store
+ *    mutation.** Subscribing first is only half the fix: a snapshot requested
+ *    before a change and applied after it would undo it. [`hydrateFrom`]
+ *    replays what was recorded.
  * 3. **Every snapshot carries a staleness guard**, because the History store
  *    keys nothing per user and a slow answer for the Pairing just left must not
  *    land on top of the one now shown.
  * 4. **Status is seeded from `list_pairings`**, which already knows each
- *    session's state. Without it the surface reads Disconnected until the next
- *    transition happens to fire, and a window opened onto a healthy session
- *    shows the degraded strip indefinitely.
+ *    session's state — and the seed yields, per field, to anything the live
+ *    subscription has already said. Without the seed a surface reads
+ *    Disconnected until the next transition happens to fire. Without the yield
+ *    it reads whatever the snapshot caught mid-connect, because rule 2's
+ *    hazard applies here too and there is no replay to undo it. Either way it
+ *    is wrong until the *next* transition, and a healthy session has none:
+ *    `SessionCtx::transition` is the only thing that speaks, and it speaks only
+ *    on an edge. The popover is where this showed — `build_popover_window` runs
+ *    one line before `spawn_sync_for_existing_pairings`, so the session reaches
+ *    Online while the webview is still attaching, and the window is shown and
+ *    hidden rather than remounted, so nothing ever takes a second snapshot.
  * 5. **Contact is asked for by command**, because it is stamped by traffic the
- *    surface was not open for and no event fires until the next byte.
+ *    surface was not open for and no event fires until the next byte. It needs
+ *    no yield of its own: `get_contact` prefers the same live cell the event's
+ *    reading was flushed out of, so the answer to the later question is never
+ *    the older reading.
  * 6. **Every handle is released on teardown.**
  *
  * A verb and not a noun: *session* already names a live Relay connection in
@@ -79,6 +97,10 @@ export function attachHistory(scope: HistoryScope): () => void {
   const stale = () => detached;
   const inScope = (user_id: string) => user_id === scope.userId();
   const keep = (off: () => void) => (detached ? off() : unsub.push(off));
+  // Rule 4's yield. Membership, not history: the newest reading is the one in
+  // the store already, and these only say the snapshot has nothing to add.
+  const liveState = new Map<string, ConnectionState>();
+  const livePending = new Set<string>();
 
   void (async () => {
     // Rule 1: these four first, before this function awaits anything else —
@@ -106,12 +128,43 @@ export function attachHistory(scope: HistoryScope): () => void {
       if (inScope(user_id)) useHistoryStore.getState().refuse(entry_id, reason);
     }));
 
+    // Rule 1's other half. These two are relay-driven, so they fire during the
+    // attach itself; the seed below defers to whatever they have already
+    // written. `pairing-added` and the rest are further down, where a hydrated
+    // list is safe to assume.
+    keep(await events.onConnectionState(({ user_id, state, last_error }) => {
+      liveState.set(user_id, state);
+      useStatusStore.getState().set(
+        user_id,
+        last_error !== undefined ? { state, last_error } : { state },
+      );
+      usePairingsStore.getState().updateStatus(user_id, state);
+    }));
+    keep(await events.onPendingCount(({ user_id, count }) => {
+      livePending.add(user_id);
+      useStatusStore.getState().set(user_id, { pending: count });
+    }));
+    keep(await events.onContact(({ user_id, last_contact_at }) => {
+      useContactStore.getState().setLastContact(user_id, last_contact_at);
+    }));
+
     const pairings = await cmd.listPairings();
     if (detached) return;
     usePairingsStore.getState().hydrate(pairings);
-    // Rule 4: the state each session is already in, before any transition.
+    // The rows arrive carrying the same snapshot the seed below is yielding on,
+    // so a state already announced has to be put back on top of them.
+    for (const [user_id, state] of liveState) {
+      usePairingsStore.getState().updateStatus(user_id, state);
+    }
+    // Rule 4: the state each session is already in, for the Pairings the two
+    // subscriptions above have not spoken for.
     for (const p of pairings) {
-      useStatusStore.getState().set(p.user_id, { state: p.status, pending: p.pending });
+      const patch: { state?: ConnectionState; pending?: number } = {};
+      if (!liveState.has(p.user_id)) patch.state = p.status;
+      if (!livePending.has(p.user_id)) patch.pending = p.pending;
+      if (patch.state !== undefined || patch.pending !== undefined) {
+        useStatusStore.getState().set(p.user_id, patch);
+      }
     }
     // Rule 5, at whichever width this scope needs it — and, for a surface that
     // shows its own scope, the first snapshot the four above exist to survive.
@@ -122,16 +175,6 @@ export function attachHistory(scope: HistoryScope): () => void {
       // A refetch, not a re-show: the rows moved, not what the surface is
       // looking at, so Contact is not asked for again.
       if (inScope(user_id)) void loadHistory(user_id, stale);
-    }));
-    keep(await events.onConnectionState(({ user_id, state, last_error }) => {
-      useStatusStore.getState().set(
-        user_id,
-        last_error !== undefined ? { state, last_error } : { state },
-      );
-      usePairingsStore.getState().updateStatus(user_id, state);
-    }));
-    keep(await events.onPendingCount(({ user_id, count }) => {
-      useStatusStore.getState().set(user_id, { pending: count });
     }));
     keep(await events.onPairingAdded(() => {
       cmd.listPairings().then(usePairingsStore.getState().hydrate).catch(() => {});
@@ -149,9 +192,6 @@ export function attachHistory(scope: HistoryScope): () => void {
       // Only for a surface whose scope *is* the Active Pairing; anywhere else
       // this event has just moved the footer, not the pane.
       if (scope.showsHistory) void showHistory(scope.userId(), stale);
-    }));
-    keep(await events.onContact(({ user_id, last_contact_at }) => {
-      useContactStore.getState().setLastContact(user_id, last_contact_at);
     }));
   })();
 
