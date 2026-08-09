@@ -7,6 +7,24 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.8.3
+
+**Only this machine changes, and only what it says about itself.** A patch over 0.8.2 for one
+wrong word on the popover. Nothing on the phone moves, the relay is not involved, and no
+entry, key or pairing is touched — if your popover has always read ONLINE, this changes
+nothing for you.
+
+- **The popover said CONNECTING at a relay it was already talking to.** On most launches the
+  line along the bottom of the popover settled on `CONNECTING` and stayed there for the rest
+  of the session — amber, pulsing, and wrong — while the main window one keystroke away read
+  `ONLINE` about the same pairing, and entries kept arriving in the popover's own list while
+  it claimed to still be looking. The popover asks once what state the connection is in and
+  listens for changes after that; it starts up in the same instant the connection does, so
+  the answer it got was `CONNECTING` and the news that connecting had finished arrived in the
+  moment before it was listening. It listens first and asks second now, so the two windows
+  cannot disagree about one pairing, and the count of copies waiting to upload — which the
+  popover learned the same way — can no longer stick at a number it has since left behind.
+
 ## 0.8.2
 
 **Relay only, and this download does not carry it.** The one fix in this release is on the
