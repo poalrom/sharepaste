@@ -7,6 +7,29 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.8.2
+
+**Relay only, and this download does not carry it.** The one fix in this release is on the
+server you run yourself, which is not attached to a Release and never has been — you get it
+by rebuilding your own container from this commit. Nothing you can see changes on the desktop
+or on the phone. Install it so your machines report the same version as the relay they talk
+to; there is no other reason, and no order to do anything in.
+
+- **A pairing slot that had run out of guesses could still be used once more.** Adding a
+  device to an existing pairing goes through a short-lived slot on the relay that burns itself
+  after too many wrong secrets. One of the two routes that accept a secret was not counting
+  against that limit, so a slot already at the cap was refused by the pairing endpoint and
+  still accepted by the device endpoint — one extra attempt, on a route that should have said
+  no. It says no now, and the limit is enforced by the code that owns the slot rather than
+  re-derived by each route that reads it. Your existing pairings are unaffected and there is
+  nothing to redo.
+
+Underneath, a large amount of this codebase moved without changing what it does: the queue of
+acts a device owes the relay, the network seam under the client facade, the live-history
+wiring the desktop windows share, the entry row both desktop surfaces draw, and three
+separate places on the relay that had each been deciding the same thing differently. If you
+are on 0.8.1 and everything works, this changes nothing for you.
+
 ## 0.8.1
 
 **Android only.** A patch over 0.8.0's reader, which showed you an entry's whole text and
