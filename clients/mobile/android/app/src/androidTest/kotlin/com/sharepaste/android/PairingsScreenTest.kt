@@ -24,6 +24,8 @@ import com.sharepaste.android.ui.Confirmation
 import com.sharepaste.android.ui.PairingsScreen
 import com.sharepaste.android.ui.SessionPhase
 import com.sharepaste.android.ui.SharepasteTheme
+import com.sharepaste.android.ui.TAG_CONFIRM_OFFERS
+import com.sharepaste.android.ui.TAG_CONFIRM_OFFERS_NOTE
 import com.sharepaste.android.ui.TAG_DIVERGED
 import com.sharepaste.android.ui.TAG_DIVERGED_USE
 import com.sharepaste.android.ui.TAG_FAULT
@@ -64,10 +66,10 @@ import org.junit.runner.RunWith
  * [TwoPairingsTest] and [PendingOnANonActivePairingTest] prove the same rules
  * against a real one; this proves the screen renders them.
  *
- * The one control here that is not a verb — the `SHOW WHAT WAS RECALLED` switch —
- * is asserted the same way, as a snapshot in and a call out. What it *persists*
- * across process death belongs to a test with a real DataStore behind it, not to
- * one that hands the screen a `Boolean`.
+ * The two controls here that are not verbs — the `SHOW WHAT WAS RECALLED` and
+ * `CONFIRM OFFERS` switches — are asserted the same way, as a snapshot in and a
+ * call out. What they *persist* across process death belongs to a test with a
+ * real DataStore behind it, not to one that hands the screen two `Boolean`s.
  */
 @RunWith(AndroidJUnit4::class)
 class PairingsScreenTest {
@@ -107,6 +109,7 @@ class PairingsScreenTest {
         onClear: (String) -> Unit = {},
         onForget: (String) -> Unit = {},
         onShowRecalled: (Boolean) -> Unit = {},
+        onConfirmOffers: (Boolean) -> Unit = {},
     ) {
         compose.setContent {
             SharepasteTheme {
@@ -119,6 +122,7 @@ class PairingsScreenTest {
                         clearHistory = onClear,
                         forgetPairing = onForget,
                         setShowRecalled = onShowRecalled,
+                        setConfirmOffers = onConfirmOffers,
                     ),
                 )
             }
@@ -392,8 +396,8 @@ class PairingsScreenTest {
     }
 
     /**
-     * `THIS PHONE` carries the phone's one real preference and shows which way it
-     * is set.
+     * `THIS PHONE` carries both of the phone's real preferences and shows which
+     * way each is set.
      *
      * Both directions, because a switch wedged on is indistinguishable from a
      * working one for everybody whose preference is the default — and the default
@@ -405,29 +409,47 @@ class PairingsScreenTest {
      * rectangle.
      */
     @Test
-    fun the_show_what_was_recalled_switch_shows_which_way_it_is_set() {
-        val on = mutableStateOf(true)
+    fun the_two_this_phone_switches_show_which_way_they_are_set() {
+        val recalls = mutableStateOf(true)
+        val offers = mutableStateOf(true)
         compose.setContent {
             SharepasteTheme {
                 PairingsScreen(
-                    state = both().copy(showRecalled = on.value),
+                    state = both().copy(
+                        showRecalled = recalls.value,
+                        confirmOffers = offers.value,
+                    ),
                     actions = noActions(),
                 )
             }
         }
 
         scrollTo(TAG_THIS_PHONE)
-        compose.onNodeWithTag(TAG_SHOW_RECALLED).assertIsOn()
-        compose.onNodeWithTag(TAG_SHOW_RECALLED)
-            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
-        val note = resources.getString(R.string.settings_show_recalled_note)
-        compose.onNodeWithTag(TAG_SHOW_RECALLED_NOTE).assertTextEquals(note)
+        listOf(TAG_SHOW_RECALLED, TAG_CONFIRM_OFFERS).forEach { tag ->
+            compose.onNodeWithTag(tag).assertIsOn()
+            compose.onNodeWithTag(tag)
+                .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
+        }
+        val recallNote = resources.getString(R.string.settings_show_recalled_note)
+        val offerNote = resources.getString(R.string.settings_confirm_offers_note)
+        compose.onNodeWithTag(TAG_SHOW_RECALLED_NOTE).assertTextEquals(recallNote)
+        compose.onNodeWithTag(TAG_CONFIRM_OFFERS_NOTE).assertTextEquals(offerNote)
 
-        on.value = false
+        // One at a time, so a screen wired to draw both rows from one field would
+        // fail here rather than pass a both-off assertion by accident.
+        recalls.value = false
         compose.waitForIdle()
         compose.onNodeWithTag(TAG_SHOW_RECALLED).assertIsOff()
-        Evidence.log("show-recalled = on, then off, as the row's own switch semantics")
-        Evidence.log("switch note   = $note")
+        compose.onNodeWithTag(TAG_CONFIRM_OFFERS).assertIsOn()
+
+        recalls.value = true
+        offers.value = false
+        compose.waitForIdle()
+        compose.onNodeWithTag(TAG_SHOW_RECALLED).assertIsOn()
+        compose.onNodeWithTag(TAG_CONFIRM_OFFERS).assertIsOff()
+        Evidence.log("switches      = each row follows its own field, on and off")
+        Evidence.log("recall note   = $recallNote")
+        Evidence.log("offer note    = $offerNote")
     }
 
     /**
@@ -441,21 +463,34 @@ class PairingsScreenTest {
      * the write failed.
      */
     @Test
-    fun pressing_the_switch_asks_for_the_change_rather_than_making_it() {
-        var asked: Boolean? = null
-        show(both(), onShowRecalled = { asked = it })
+    fun pressing_either_switch_asks_for_the_change_rather_than_making_it() {
+        var askedRecalls: Boolean? = null
+        var askedOffers: Boolean? = null
+        show(
+            both(),
+            onShowRecalled = { askedRecalls = it },
+            onConfirmOffers = { askedOffers = it },
+        )
 
         scrollTo(TAG_THIS_PHONE)
         compose.onNodeWithTag(TAG_SHOW_RECALLED).performClick()
+        compose.onNodeWithTag(TAG_CONFIRM_OFFERS).performClick()
         compose.waitForIdle()
 
         assertEquals(
-            "the switch has to ask for the opposite of what it is showing",
+            "the Recall switch has to ask for the opposite of what it is showing",
             false,
-            asked,
+            askedRecalls,
+        )
+        assertEquals(
+            "the Offer switch has to ask for the opposite of what it is showing, and it must not " +
+                "be wired to the Recall switch's own action",
+            false,
+            askedOffers,
         )
         compose.onNodeWithTag(TAG_SHOW_RECALLED).assertIsOn()
-        Evidence.log("switch press  = setShowRecalled(false), and the row did not move itself")
+        compose.onNodeWithTag(TAG_CONFIRM_OFFERS).assertIsOn()
+        Evidence.log("switch press  = each row asked for false, and neither moved itself")
     }
 
     /**
@@ -498,14 +533,16 @@ class PairingsScreenTest {
      * file-based encryption covers, so a switch would either lie or do nothing.
      * The spec's mention of one is mistaken.
      *
-     * **A census, not an absence.** This screen has exactly one switch — `SHOW
-     * WHAT WAS RECALLED`, which decides only whether a Receipt names what it put
-     * on the clipboard — so an assertion of *no* switches anywhere would have had
-     * to be deleted the day that arrived, and deleting the guard is how the
-     * guarded thing gets in. Naming the one permitted switch instead fails the
-     * second one whatever it ends up called. The count is taken at every scroll
-     * position in the list rather than once, because a `LazyColumn` composes what
-     * is on screen and a control parked off it would otherwise never be counted.
+     * **A census, not an absence.** This screen has exactly two switches — `SHOW
+     * WHAT WAS RECALLED` and `CONFIRM OFFERS`, which decide only whether
+     * Sharepaste speaks after a verb it performed either way — so an assertion of
+     * *no* switches anywhere would have had to be deleted the day the first one
+     * arrived, and deleting the guard is how the guarded thing gets in. Naming
+     * the permitted switches instead fails a third one whatever it ends up
+     * called; that is the whole reason this survived ADR 0018 as an edit rather
+     * than as a deletion. The count is taken at every scroll position in the list
+     * rather than once, because a `LazyColumn` composes what is on screen and a
+     * control parked off it would otherwise never be counted.
      *
      * The other half is the classpath: the biometric API is not on it, so a gate
      * cannot be written without a dependency change somebody has to justify.
@@ -522,11 +559,14 @@ class PairingsScreenTest {
             TAG_SETTINGS_ABSENT_NOTE,
         ).forEach { tag ->
             scrollTo(tag)
-            compose.onAllNodes(isToggleable() and !hasTestTag(TAG_SHOW_RECALLED))
-                .assertCountEquals(0)
+            compose.onAllNodes(
+                isToggleable() and
+                    !hasTestTag(TAG_SHOW_RECALLED) and
+                    !hasTestTag(TAG_CONFIRM_OFFERS),
+            ).assertCountEquals(0)
         }
         scrollTo(TAG_THIS_PHONE)
-        compose.onAllNodes(isToggleable()).assertCountEquals(1)
+        compose.onAllNodes(isToggleable()).assertCountEquals(2)
 
         listOf(
             "androidx.biometric.BiometricPrompt",
@@ -542,6 +582,6 @@ class PairingsScreenTest {
                 // As it should be.
             }
         }
-        Evidence.log("switch census = 1 on this screen, and it is the Receipt one; no biometric API")
+        Evidence.log("switch census = 2 on this screen, both confirmation ones; no biometric API")
     }
 }

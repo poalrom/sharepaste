@@ -4,6 +4,7 @@ import android.content.Context
 import android.widget.Toast
 import androidx.annotation.StringRes
 import com.sharepaste.android.R
+import com.sharepaste.android.platform.UiPreferenceValues
 
 /**
  * Confirmation that a verb did what was asked, needing nothing back.
@@ -76,8 +77,8 @@ sealed interface Receipt {
      * **Not a confirmation, and named so it cannot be mistaken for one.** These
      * are Notices by CONTEXT.md's definition and would be Notices on an open
      * screen. What they share with a Receipt is the Toast and nothing else —
-     * which is why the `SHOW WHAT WAS RECALLED` switch, which silences a
-     * confirmation, must never be written to match this.
+     * which is why neither switch on the Settings Screen may reach this, and why
+     * [silences] answers `false` for it at every position of both.
      *
      * Two resource ids and nothing else. Every sentence it can carry takes no
      * format argument, so there is no slot for an Entry to reach.
@@ -129,6 +130,42 @@ fun receiptLogged(receipt: Receipt): Int = when (receipt) {
     is Receipt.Recognised -> R.string.offer_recognised
     is Receipt.Recalled -> R.string.recall_done
     is Receipt.Aloud -> receipt.sentence
+}
+
+/**
+ * Whether the person has asked not to be told about this outcome.
+ *
+ * The whole of what the two switches on the Settings Screen do, in one
+ * exhaustive `when` over the sealed interface. Exhaustive is the feature rather
+ * than a style choice — a fourth confirmation cannot reach a Toast until an
+ * author decides here which switch owns it, and one of these outcomes has already
+ * escaped a hand-written guard once (see [Receipt.Recalled]).
+ *
+ * On [UiPreferenceValues] rather than taking it as a second argument, because the
+ * switches are the subject: the body reads two of their fields and nothing off the
+ * Receipt. It reads at the call site the way it reads here —
+ * `if (!prefs.silences(receipt))`.
+ *
+ * **Two switches, one verb each**, and neither reaches the other's. See ADR 0018
+ * for why an Offer did not simply join the Recall's switch.
+ *
+ * The two that no switch may silence:
+ *
+ * - [Receipt.Recognised] saved nothing. Silence there reads exactly like the
+ *   ordinary Offer that did save, so it would state the one thing ADR 0012 made
+ *   a separate Receipt in order not to state.
+ * - [Receipt.Aloud] is a [Notice] on a surface with no band. Every sentence it
+ *   carries is something to act on, and nothing on the Settings Screen may take
+ *   one of those away.
+ *
+ * Suppression is **whole**, not a stripped Preview: off means the verb happens
+ * and Sharepaste says nothing, which is what both switches promise. The log line
+ * is not this function's business and still goes — see [receiptLogged].
+ */
+fun UiPreferenceValues.silences(receipt: Receipt): Boolean = when (receipt) {
+    is Receipt.Recalled -> !showRecalled
+    is Receipt.Offered -> !confirmOffers
+    is Receipt.Recognised, is Receipt.Aloud -> false
 }
 
 /**

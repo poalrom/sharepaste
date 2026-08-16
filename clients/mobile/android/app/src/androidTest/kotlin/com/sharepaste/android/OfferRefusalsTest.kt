@@ -15,6 +15,7 @@ import com.sharepaste.android.ui.TAG_NOTICE
 import com.sharepaste.android.ui.TAG_OFFER
 import com.sharepaste.android.ui.offerRefusalMessage
 import com.sharepaste.core.SkipReason
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -84,6 +85,55 @@ class OfferRefusalsTest {
             phone.state.notice,
         )
         Evidence.log("recognised    = ${resources.getString(R.string.offer_recognised)}")
+    }
+
+    /**
+     * With `CONFIRM OFFERS` off, an Offer is taken and says nothing — and a
+     * repeat still says `ALREADY SAVED`.
+     *
+     * Both halves in one test because the second is what makes the first
+     * defensible. Silencing the ordinary Offer is the switch; leaving the
+     * recognised one speaking is the exception the switch's own note has to state,
+     * because silence there would read exactly like the Offer that did save (ADR
+     * 0012, ADR 0018).
+     *
+     * The proof that the Offer was *taken* is the Entry, not the Receipt: the
+     * switch decides whether Sharepaste speaks and never whether the verb runs,
+     * and this is the only place that distinction is observable end to end.
+     *
+     * `receipts` keeps every Receipt rather than the latest, which is what lets
+     * "the Offer said nothing" be told apart from "the Offer was overtaken".
+     */
+    @Test
+    fun an_offer_is_silent_with_the_switch_off_and_a_repeat_still_speaks() {
+        runBlocking { phone.preferences.setConfirmOffers(false) }
+
+        val text = "offered in silence ${System.currentTimeMillis()}"
+        phone.clip.putText(text)
+        compose.onNodeWithTag(TAG_OFFER).performClick()
+
+        // The verb ran: the Entry reached the Relay and came back.
+        val entry = phone.awaitEntry("a silenced Offer must still be taken") { it.preview == text }
+        Evidence.log("silent offer  = Entry id=${entry.id} exists with no Receipt for it")
+        assertEquals(
+            "a silenced Offer still drew its Receipt. Off means the Offer is taken and Sharepaste " +
+                "says nothing; the Entry above proves the verb ran either way.",
+            emptyList<Receipt>(),
+            phone.receipts.filterIsInstance<Receipt.Offered>(),
+        )
+
+        // The exception, on the same clipboard and through the same button.
+        compose.onNodeWithTag(TAG_OFFER).performClick()
+        phone.awaitReceipt("a recognised Offer must speak whatever the switch says") {
+            it is Receipt.Recognised
+        }
+        assertEquals(
+            "silencing Offers silenced ALREADY SAVED as well. Nothing was saved, and going quiet " +
+                "there says otherwise — it reads exactly like the Offer that did save.",
+            emptyList<Receipt>(),
+            phone.receipts.filterIsInstance<Receipt.Offered>(),
+        )
+        Evidence.log("exception     = ${resources.getString(R.string.offer_recognised)} still drawn")
     }
 
     /**

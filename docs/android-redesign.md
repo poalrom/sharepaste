@@ -53,7 +53,7 @@ Vocabulary is fixed by [`CONTEXT.md`](../CONTEXT.md): **User**, **Device**,
 | 6 | **One target per Entry row at rest; the swipe arms a real Delete** | Two word-buttons was 20 targets a screen, destructive beside safe. "At rest" is enforced rather than assumed — §3 |
 | 7 | **An Undecryptable row keeps both controls inline** | Recall disabled-not-hidden; Delete is the only thing left to do with it |
 | 8 | **Erasures are confirmed inside the card**, never in a dialog | The scope stays on screen while the choice is made |
-| 9 | **Three N/A chips** for the settings a phone does not have | A missing switch and an unbuilt screen look identical without them. The phone's one live switch sits under its own `THIS PHONE` heading so the chips are not read as switches nobody finished wiring |
+| 9 | **Three N/A chips** for the settings a phone does not have | A missing switch and an unbuilt screen look identical without them. The phone's live switches sit under their own `THIS PHONE` heading so the chips are not read as switches nobody finished wiring |
 | 10 | **Insets are applied once, at the app root** | Android 15 draws edge to edge whether or not the app asked |
 | 11 | **No vendored fonts** | Same call as the desktop: Share Tech Mono's `0/O` and `1/l` are wrong for `ss://` URLs |
 | 12 | **No light scheme** | A HUD is emitted light on a void; a light rendering is a different design and a second audit |
@@ -204,12 +204,13 @@ architecture change, not a routing one, and renaming a symbol nobody reads so it
 agrees with a title is churn dressed as tidiness.
 
 Four sections, in order: the Pairing cards, `ADD ANOTHER PAIRING`, `THIS PHONE`,
-`ABOUT THIS PHONE`. `THIS PHONE` holds the only thing this phone can be told —
-*show what was recalled* (ADR 0009) — and holds it alone. That separation is
-decision 9 still doing its work: a live switch three lines above
-`WATCHED CAPTURE · N/A` makes the chips read as switches somebody stopped wiring
-up, which is the exact misreading the chips exist to prevent. Kept apart, under
-a heading about what the phone *is* rather than about what it can do,
+`ABOUT THIS PHONE`. `THIS PHONE` holds the two things this phone can be told —
+*show what was recalled* (ADR 0009) and *confirm offers*
+([ADR 0018](adr/0018-silence-is-per-verb.md)), one per verb — and holds them
+alone. That separation is decision 9 still doing its work: a live switch three
+lines above `WATCHED CAPTURE · N/A` makes the chips read as switches somebody
+stopped wiring up, which is the exact misreading the chips exist to prevent. Kept
+apart, under a heading about what the phone *is* rather than about what it can do,
 `WATCHED CAPTURE · N/A`, `DENY-LIST · N/A` and `UPDATE CHECK · NONE` still read
 as absences with reasons. The third is the one the desktop cannot show: a phone
 carries no update code at all (ADR 0008), so the Relay is its only counterparty.
@@ -255,15 +256,21 @@ refusal at all: under [ADR 0012](adr/0012-a-repeat-copy-is-a-use.md) a repeat
 copy is a **Use** of the Entry the phone already holds, and it draws the
 `ALREADY SAVED` Receipt rather than a Notice.
 
-**Only the Recall Receipt names an Entry**, and only while the `THIS PHONE`
-switch allows it. The Offer Receipt does not: the person supplied that content a
-second ago, and only Recall hands back something they did not choose (ADR 0009).
-**The log line names none**, on either path. `receiptLogged` is a separate,
-preview-free sentence from the one the Toast draws, because a Toast is transient
-and aimed at the person who just pressed the control, while a log is durable and
-readable by anything holding `READ_LOGS` or a cable. That asymmetry is a
-contract with `StandingActionsNotificationTest` and with the acceptance
-sequence.
+**Only the Recall Receipt names an Entry**, and only while the `THIS PHONE` switch
+allows it. The Offer Receipt does not: the person supplied that content a second
+ago, and only Recall hands back something they did not choose (ADR 0009). It is
+conditional all the same, on a switch of its own — `THIS PHONE` carries two now,
+one per verb, and silencing an Offer says nothing about what a Recall may say
+([ADR 0018](adr/0018-silence-is-per-verb.md)). `ALREADY SAVED` is exempt from
+both: nothing was saved, and going quiet there would state the one thing the
+separate Receipt exists not to state. So is every `Receipt.Aloud`, which is a
+Notice on a surface with no band.
+**The log line names none**, on either path, at any switch position.
+`receiptLogged` is a separate, preview-free sentence from the one the Toast draws,
+because a Toast is transient and aimed at the person who just pressed the control,
+while a log is durable and readable by anything holding `READ_LOGS` or a cable.
+That asymmetry is a contract with `StandingActionsNotificationTest` and with the
+acceptance sequence.
 
 ---
 

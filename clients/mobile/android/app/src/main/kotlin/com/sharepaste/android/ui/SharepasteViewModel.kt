@@ -88,9 +88,9 @@ class SharepasteViewModel(
      *
      * An event and not a [UiState] field, for the reason the Receipts are: it
      * is consumed once and a snapshot would re-deliver it on every
-     * recomposition. Not [Receipt.Recalled] either — [confirmRecall] suppresses
-     * that one whole when `SHOW WHAT WAS RECALLED` is off, and where the list
-     * scrolls to must not become a function of a display preference.
+     * recomposition. Not [Receipt.Recalled] either — [confirm] suppresses that
+     * one whole when `SHOW WHAT WAS RECALLED` is off, and where the list scrolls
+     * to must not become a function of a display preference.
      *
      * Buffered by one and `DROP_OLDEST`, like [_receipts], so [tryEmit] always
      * takes and a backfill arriving with no screen collecting is dropped rather
@@ -111,6 +111,7 @@ class SharepasteViewModel(
                 _state.update {
                     it.copy(
                         showRecalled = values.showRecalled,
+                        confirmOffers = values.confirmOffers,
                         foregroundNoteDismissed = values.foregroundNoteDismissed,
                     )
                 }
@@ -437,8 +438,8 @@ class SharepasteViewModel(
                         // returned, and `PendingCount` is on its way through the
                         // sink behind it.
                         is OfferOutcome.Queued -> {
-                            _state.update { it.copy(notice = null, pending = settled.pending) }
-                            _receipts.emit(Receipt.Offered(settled.pending))
+                            _state.update { it.copy(pending = settled.pending) }
+                            confirm(Receipt.Offered(settled.pending))
                         }
 
                         // A Receipt and not a Notice: the phone already held
@@ -448,9 +449,15 @@ class SharepasteViewModel(
                         // same reason as above — recognition queues a Use when
                         // the Relay is out of reach, and that is a depth this
                         // arm knows before any event does.
+                        //
+                        // Through [confirm] like every other Receipt, and it
+                        // comes out the far side whatever the switches say:
+                        // `CONFIRM OFFERS` does not reach this one, because
+                        // nothing was saved and silence here would say it was.
+                        // That exemption is [silences]', not this arm's.
                         is OfferOutcome.Recognised -> {
-                            _state.update { it.copy(notice = null, pending = settled.pending) }
-                            _receipts.emit(Receipt.Recognised(settled.pending))
+                            _state.update { it.copy(pending = settled.pending) }
+                            confirm(Receipt.Recognised(settled.pending))
                         }
 
                         is OfferOutcome.Rejected -> raise(Notice.OfferRefused(settled.reason))
@@ -485,7 +492,7 @@ class SharepasteViewModel(
                 return@launch
             }
             _headMoves.tryEmit(entry.id)
-            confirmRecall(entry.preview)
+            confirm(Receipt.Recalled(entry.preview))
         }
     }
 
@@ -495,21 +502,35 @@ class SharepasteViewModel(
     }
 
     /**
-     * Say what was recalled, unless the person has asked not to be told.
+     * Say what a verb did, unless the person has asked not to be told.
      *
-     * The Receipt is suppressed **whole**, not merely stripped of its Preview:
-     * `SHOW WHAT WAS RECALLED` off means the Entry reaches the clipboard and
-     * Sharepaste says nothing, which is the switch's own sentence. Only this
-     * confirmation goes quiet — a stale Recall, a refusal and a failure are
-     * Notices and are not the switch's to silence.
+     * **Every** Receipt goes through here, including the two no switch may
+     * silence. [silences] is the only thing that decides, so a call site that
+     * emitted directly would be a third copy of a rule that already has one home
+     * — and the exemptions are then a fact about that function rather than a
+     * claim about which arms of a `when` elsewhere remembered to ask.
      *
-     * The band is cleared either way. Without that, a `MAY BE STALE` from the
-     * Recall before this one would still be on screen describing what is no
-     * longer on the clipboard.
+     * **The switches are read from the store, not from [state].** `UiState` holds
+     * both, and they are there for the Settings Screen to draw switches from. This
+     * asks [com.sharepaste.android.platform.UiPreferences.snapshot] anyway — the
+     * same call the two closed-phone paths make — so that "may Sharepaste speak
+     * about this" has one answer on an open phone and a closed one. Reading the
+     * folded copy would cost nothing today and would be a second way to answer
+     * one question.
+     *
+     * Suppression is **whole**, not a stripped Preview: a switch that is off
+     * means the verb happens and Sharepaste says nothing, which is the switch's
+     * own sentence. The [Notice]s are untouched, because they are raised to be
+     * acted on rather than to be read.
+     *
+     * The band is cleared either way, and that is why this is one function and
+     * not a condition at each emit. Without it a `MAY BE STALE` from the Recall
+     * before this one would still be on screen describing what is no longer on
+     * the clipboard.
      */
-    private suspend fun confirmRecall(preview: String?) {
+    private suspend fun confirm(receipt: Receipt) {
         _state.update { it.copy(notice = null) }
-        if (_state.value.showRecalled) _receipts.emit(Receipt.Recalled(preview))
+        if (!preferences.snapshot().silences(receipt)) _receipts.emit(receipt)
     }
 
     /**
@@ -576,12 +597,23 @@ class SharepasteViewModel(
      * Whether a Recall says what it put on the clipboard.
      *
      * Written straight to the store and never to [UiState]: the collector in
-     * `init` is the only writer of either preference field, so the switch on
+     * `init` is the only writer of any preference field, so the switch on
      * screen shows what was persisted rather than what was pressed. On a write
      * that fails there is nothing to un-say.
      */
     fun setShowRecalled(show: Boolean) {
         viewModelScope.launch { preferences.setShowRecalled(show) }
+    }
+
+    /**
+     * Whether a taken Offer says so. See ADR 0018.
+     *
+     * The same shape as [setShowRecalled] for the same reason, and a separate
+     * write because it is a separate switch: silencing one verb says nothing
+     * about the other.
+     */
+    fun setConfirmOffers(confirm: Boolean) {
+        viewModelScope.launch { preferences.setConfirmOffers(confirm) }
     }
 
     /**

@@ -13,9 +13,9 @@
   greppable and keeps a locale's casing rules out of it. **Whole sentences stay
   sentence case**, at full length, wherever the app has something to explain:
   the foreground-only note, the stale-Recall warning, the blocked-notification
-  note, the two erasures, the two absent settings and what the one switch this
-  phone has actually decides are the load-bearing ones, and none of them is
-  shortened to fit a band.
+  note, the two erasures, the two absent settings and what each of the two
+  switches this phone has actually decides are the load-bearing ones, and none of
+  them is shortened to fit a band.
 -->
 <resources>
     <string name="app_name">Sharepaste</string>
@@ -487,14 +487,24 @@
     <string name="settings_heading">ABOUT THIS PHONE</string>
     <string name="settings_this_phone_heading">THIS PHONE</string>
     <!--
-      The only switch on this screen. A Recall reaches the clipboard whichever
-      way this is set; all it decides is whether the receipt names what arrived,
-      which is the part a person may not want on screen in company. Capitals for
-      the switch because it is a control, sentence case for what it means.
+      Two switches, one per verb, and both say only whether Sharepaste speaks
+      after the verb rather than whether the verb happens. A Recall reaches the
+      clipboard and an Offer is taken whichever way either is set; what they
+      decide is the part a person may not want on screen in company. Capitals for
+      a control, sentence case for what it means.
+
+      The Offer note carries the one exception either switch has (ADR 0018): a
+      recognised Offer saved nothing and still says so, because silence there
+      reads exactly like the Offer that did save. The label cannot state that, so
+      the note does.
     -->
     <string name="settings_show_recalled">SHOW WHAT WAS RECALLED</string>
     <string name="settings_show_recalled_note">A Recall puts the Entry on the clipboard either
         way. This only decides whether Sharepaste tells you what it was.</string>
+    <string name="settings_confirm_offers">CONFIRM OFFERS</string>
+    <string name="settings_confirm_offers_note">Sharepaste takes the Offer either way. This only
+        decides whether it says so — and it still speaks up when it recognised the text and saved
+        nothing.</string>
     <!--
       The two settings a computer has and a phone does not. Both are inert here
       rather than missing: `capture_enabled` governs Watched Capture, which a

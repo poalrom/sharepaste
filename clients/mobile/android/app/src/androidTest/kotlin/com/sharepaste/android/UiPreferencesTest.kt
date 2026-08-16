@@ -15,7 +15,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Both UI preferences leave memory, and an instance that did not write them
+ * All three UI preferences leave memory, and an instance that did not write them
  * reads them back.
  *
  * Ticket 02 asks that "both preferences survive process death" and ticket 04
@@ -58,10 +58,10 @@ class UiPreferencesTest {
      * runs on both ends of every test.
      *
      * There is exactly one DataStore file named `ui` in this process. Leaving
-     * `showRecalled = false` behind would silence the Receipt for every test
-     * that ran afterwards, and leaving `foregroundNoteDismissed = true` behind
-     * would take the History Screen's foreground band away from them — neither
-     * failure would look like this class's fault. Clearing beforehand as well
+     * either switch off would silence a confirmation for every test that ran
+     * afterwards, and leaving `foregroundNoteDismissed = true` behind would take
+     * the History Screen's foreground band away from them — none of those
+     * failures would look like this class's fault. Clearing beforehand as well
      * means a previous run that crashed between the write and the teardown
      * cannot poison this one.
      */
@@ -72,26 +72,32 @@ class UiPreferencesTest {
     fun leaveTheDefaults() = clearTheStore()
 
     /**
-     * A store nobody has written answers `true` and `false`, in that order.
+     * A store nobody has written answers `true`, `true` and `false`, in that
+     * order.
      *
-     * Both defaults are load-bearing and in opposite directions. A fresh
-     * install must behave as the app did before these preferences existed, plus
-     * the new note: the Receipt drawn, the band shown. A store that failed open
-     * to `showRecalled = false` would disable the Recall Receipt on every fresh
-     * install and look like nothing at all was wrong — the Entry still reaches
-     * the clipboard, so the only symptom is silence.
+     * All three defaults are load-bearing and the note's is in the opposite
+     * direction to the two switches. A fresh install must behave as the app did
+     * before these preferences existed, plus the new note: both confirmations
+     * drawn, the band shown. A store that failed open to a switch off would
+     * disable that confirmation on every fresh install and look like nothing at
+     * all was wrong — the verb still happens, so the only symptom is silence.
      */
     @Test
-    fun an_unwritten_store_reads_the_receipt_on_and_the_note_undismissed() {
+    fun an_unwritten_store_reads_both_confirmations_on_and_the_note_undismissed() {
         val values = runBlocking { UiPreferences(context).values.first() }
         Evidence.log(
             "defaults      = showRecalled=${values.showRecalled} " +
+                "confirmOffers=${values.confirmOffers} " +
                 "noteDismissed=${values.foregroundNoteDismissed}",
         )
 
         assertTrue(
             "a fresh install must draw the Recall Receipt; failing open to off is silent",
             values.showRecalled,
+        )
+        assertTrue(
+            "a fresh install must draw the Offer Receipt; failing open to off is silent",
+            values.confirmOffers,
         )
         assertFalse(
             "a fresh install must be shown the foreground-only note at least once",
@@ -140,6 +146,53 @@ class UiPreferencesTest {
             "the switch does not come back on; a one-way switch is not a switch",
             runBlocking { UiPreferences(context).values.first().showRecalled },
         )
+    }
+
+    /**
+     * Turning the Offer Receipt off reaches a new reader, and leaves the Recall
+     * switch exactly where it was.
+     *
+     * The independence is the half worth a test of its own. Both switches are
+     * keys in one file, and the failure a person cannot diagnose is the
+     * half-applied setting: they silence their Offers, their Recalls go quiet
+     * too, and nothing on the Settings Screen admits it. The share target reads
+     * this value with no state holder anywhere near it, which is why a write only
+     * the writer could see would be invisible on exactly the path that has no
+     * other way to be told.
+     */
+    @Test
+    fun turning_the_offer_receipt_off_is_visible_to_a_new_instance_and_moves_nothing_else() {
+        runBlocking { UiPreferences(context).setConfirmOffers(false) }
+
+        val values = runBlocking { UiPreferences(context).values.first() }
+        Evidence.log(
+            "offers off    = confirmOffers=${values.confirmOffers} " +
+                "showRecalled=${values.showRecalled} from a second UiPreferences",
+        )
+        assertFalse(
+            "a second UiPreferences did not see CONFIRM OFFERS go off; the share target and the " +
+                "notification's Offer would both keep reporting",
+            values.confirmOffers,
+        )
+        assertTrue(
+            "silencing Offers moved the Recall switch. One switch per verb: two keys in one file " +
+                "must not share a value, or the setting is half-applied and undiagnosable.",
+            values.showRecalled,
+        )
+
+        // And the reverse direction, so neither key is merely being read back as
+        // the other one's default.
+        runBlocking {
+            UiPreferences(context).setConfirmOffers(true)
+            UiPreferences(context).setShowRecalled(false)
+        }
+        val swapped = runBlocking { UiPreferences(context).values.first() }
+        Evidence.log(
+            "swapped       = confirmOffers=${swapped.confirmOffers} " +
+                "showRecalled=${swapped.showRecalled}",
+        )
+        assertTrue("the Offer switch does not come back on", swapped.confirmOffers)
+        assertFalse("and silencing Recalls did not move the Offer switch", swapped.showRecalled)
     }
 
     /**
@@ -195,45 +248,55 @@ class UiPreferencesTest {
     }
 
     /**
-     * `showRecalledNow()` never disagrees with the flow, in either position.
+     * `snapshot()` never disagrees with the flow, on either switch, in either
+     * position.
      *
-     * These are the two ways the same preference is read and they serve the two
-     * halves of one feature: the flow feeds `UiState` for the open app, and
-     * `showRecalledNow()` is the single read a Standing Action makes on a closed
-     * phone, where there is no state holder to ask. A disagreement would not
-     * look like a bug in either one — it would look like the switch silencing
+     * These are the two ways the same store is read, and every path that reports a
+     * verb takes the second: the flow feeds `UiState` for the switches to draw
+     * from, and `snapshot()` is what decides whether Sharepaste speaks — on a
+     * closed phone because there is no state holder to ask, and on an open one so
+     * that the answer comes from the same place either way. A disagreement would
+     * not look like a bug in either one — it would look like a switch silencing
      * the in-app Receipt and leaving the notification's alone, or the reverse,
      * which is precisely the half-applied setting the User cannot diagnose.
+     *
+     * **One read for both switches is what makes this one test rather than two.**
+     * There is no point read per switch to keep in step, so the way this could
+     * fail is a `snapshot()` that stopped reading the same values the flow does.
      */
     @Test
-    fun show_recalled_now_agrees_with_the_flow_in_both_positions() {
+    fun snapshot_agrees_with_the_flow_on_both_switches_in_both_positions() {
         runBlocking {
             val on = UiPreferences(context)
             assertEquals(
-                "the two reads disagree with the Receipt on",
-                on.values.first().showRecalled,
-                on.showRecalledNow(),
+                "the two reads disagree with both confirmations on",
+                on.values.first(),
+                on.snapshot(),
             )
-            assertTrue("and the agreed value must be the default, `true`", on.showRecalledNow())
+            assertTrue("and the Recall switch must default on", on.snapshot().showRecalled)
+            assertTrue("and the Offer switch must default on", on.snapshot().confirmOffers)
 
             UiPreferences(context).setShowRecalled(false)
+            UiPreferences(context).setConfirmOffers(false)
 
             // A fresh instance for the off position, so this is also the
-            // closed-phone case: a Standing Action reads a switch it never saw
+            // closed-phone case: a Standing Action reads switches it never saw
             // set.
             val off = UiPreferences(context)
             assertEquals(
-                "the two reads disagree with the Receipt off; the switch would silence one path only",
-                off.values.first().showRecalled,
-                off.showRecalledNow(),
+                "the two reads disagree with both confirmations off; a switch would silence one " +
+                    "path only",
+                off.values.first(),
+                off.snapshot(),
             )
-            assertFalse("and the agreed value must be `false`", off.showRecalledNow())
-            Evidence.log("agreement     = showRecalledNow() matched values.first() at true and at false")
+            assertFalse("and the Recall switch must read `false`", off.snapshot().showRecalled)
+            assertFalse("and the Offer switch must read `false`", off.snapshot().confirmOffers)
+            Evidence.log("agreement     = snapshot() matched values.first() at both positions")
         }
     }
 
     /**
-     * Puts both keys back to absent, which is what the defaults are made of.
+     * Puts all three keys back to absent, which is what the defaults are made of.
      *
      * `UiPreferences.resetToDefaults` is `@VisibleForTesting` and carries its
      * own reasons: there is one DataStore per file and a second over the same

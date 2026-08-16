@@ -1,13 +1,20 @@
 package com.sharepaste.android.standing
 
+import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import com.sharepaste.android.MainActivity
 import com.sharepaste.android.R
+import com.sharepaste.android.SharepasteApplication
+import com.sharepaste.android.ui.Receipt
+import com.sharepaste.android.ui.receiptLogged
+import com.sharepaste.android.ui.showReceipt
+import com.sharepaste.android.ui.silences
 
 /**
  * The two verbs, reachable without opening the app.
@@ -224,4 +231,39 @@ object StandingActions {
 
     /** See [REQUEST_OFFER]. */
     internal const val REQUEST_RECALL = 2
+}
+
+/**
+ * Say what a verb did, from a window that has no screen to say it on.
+ *
+ * The one surface a Standing Action or a share has, and the one place either
+ * consults the switches. It is shared for the same reason [StandingActions.TAG]
+ * is: this was written out twice, once in each activity, and two copies of a rule
+ * about a person's settings are two ways for those settings to end up
+ * half-applied. `ShareTargetActivity` is the proof that matters — it went ungated
+ * for as long as one verb had one switch, so it is exactly the site a third copy
+ * would be forgotten at next time.
+ *
+ * The Toast goes to the **application** context, from [showReceipt], and is shown
+ * *before* either caller finishes: a Toast is queued by the system rather than
+ * drawn by the window that asked for it, but one asked for after `finish` has run
+ * is one the system may drop.
+ *
+ * **The log line is never the Toast, and never silent.** It is [receiptLogged],
+ * which for a Recall is the fixed sentence that names no Entry — see ADR 0009 for
+ * what the Toast is allowed to say and why a durable log is not allowed to say it.
+ * It is outside the branch because it is a diagnostic rather than something the
+ * person is being told, and because the acceptance sequence reads it with the app
+ * force-stopped. `StandingActionsNotificationTest` and that sequence both expect
+ * one of this app's own fixed sentences here.
+ *
+ * [action] is passed in rather than read back off `getIntent`, because that
+ * answers with whatever was delivered *most recently* — a second press arriving
+ * while this one is still working would otherwise relabel this line as the other
+ * verb.
+ */
+internal suspend fun Activity.reportReceipt(action: String?, receipt: Receipt) {
+    val prefs = (application as SharepasteApplication).uiPreferences.snapshot()
+    if (!prefs.silences(receipt)) showReceipt(this, receipt)
+    Log.i(StandingActions.TAG, "$action: ${getString(receiptLogged(receipt))}")
 }

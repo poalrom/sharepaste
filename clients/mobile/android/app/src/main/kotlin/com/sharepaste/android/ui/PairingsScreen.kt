@@ -48,10 +48,10 @@ import com.sharepaste.core.PairingSummary
  * screen admits it.
  *
  * **The order is the cards, adding one, [ThisPhoneSection], [PhoneSettings].**
- * The one live switch sits under a heading of its own rather than among the
- * inert `N/A` chips, because a switch three lines above `WATCHED CAPTURE · N/A`
- * makes the chips read as switches somebody stopped wiring up — which is the
- * exact misreading the chips exist to prevent.
+ * The live switches sit under a heading of their own rather than among the inert
+ * `N/A` chips, because a switch three lines above `WATCHED CAPTURE · N/A` makes
+ * the chips read as switches somebody stopped wiring up — which is the exact
+ * misreading the chips exist to prevent.
  */
 @Composable
 fun PairingsScreen(state: UiState, actions: AppActions, modifier: Modifier = Modifier) {
@@ -329,40 +329,91 @@ private fun AddPairingSection(onAdd: () -> Unit) {
 }
 
 /**
- * The one thing this phone can actually be told.
+ * The two things this phone can actually be told.
  *
- * A Recall reaches the clipboard whichever way the switch is set; all it decides
- * is whether the Receipt names what arrived. That earns a control because the
- * Receipt is the only part of a Recall legible to whoever is standing next to
- * you — and it earns *only* this control. Silencing the Recall Receipt while the
- * Offer's still speaks is the whole feature, so this is not a quiet mode and is
- * not worded as one.
+ * One switch per verb, and each says only whether Sharepaste speaks after that
+ * verb: the Entry still reaches the clipboard, the Offer is still taken. That
+ * earns a control because the confirmation is the part of either verb legible to
+ * whoever is standing next to you — and a Recall's names an Entry the person did
+ * not choose, which is why it was the first one and is still the one ADR 0009
+ * argues for.
  *
- * Its own section rather than a row inside [PhoneSettings] — see this file's
- * header for why a live switch may not stand next to the inert chips.
+ * **Two switches rather than one that covers both**, and not a quiet mode. A
+ * **Notice** cannot be silenced from this screen at all, and a recognised Offer
+ * still speaks because nothing was saved and silence would say otherwise. See
+ * ADR 0018.
+ *
+ * Its own section rather than rows inside [PhoneSettings] — see this file's
+ * header for why a live switch may not stand next to the inert chips — and each
+ * switch is grouped with its own sentence by [SwitchAndNote], because two of each
+ * at one spacing says nothing about which note explains which control.
  */
 @Composable
 private fun ThisPhoneSection(state: UiState, actions: AppActions) {
     Column(
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.testTag(TAG_THIS_PHONE),
     ) {
         SectionHeading(stringResource(R.string.settings_this_phone_heading))
-        SettingSwitch(
+        SwitchAndNote(
             label = stringResource(R.string.settings_show_recalled),
+            note = stringResource(R.string.settings_show_recalled_note),
             checked = state.showRecalled,
             onCheckedChange = actions.setShowRecalled,
-            modifier = Modifier.testTag(TAG_SHOW_RECALLED),
+            switchTag = TAG_SHOW_RECALLED,
+            noteTag = TAG_SHOW_RECALLED_NOTE,
         )
-        // Not a [QuotedNote]: the rule down its left edge would cut the sentence
-        // away from the switch it explains, and two short sentences do not need
-        // an idiom built for prose a box would make look like an alert.
-        // `ADD ANOTHER PAIRING` states its own body exactly this way.
+        SwitchAndNote(
+            label = stringResource(R.string.settings_confirm_offers),
+            // The third sentence is the one exception either switch has, and it is
+            // here because the label cannot carry it: `CONFIRM OFFERS` off still
+            // leaves `ALREADY SAVED` speaking.
+            note = stringResource(R.string.settings_confirm_offers_note),
+            checked = state.confirmOffers,
+            onCheckedChange = actions.setConfirmOffers,
+            switchTag = TAG_CONFIRM_OFFERS,
+            noteTag = TAG_CONFIRM_OFFERS_NOTE,
+        )
+    }
+}
+
+/**
+ * One switch and the sentence that explains it, grouped.
+ *
+ * The grouping is the whole reason this exists rather than four children of
+ * [ThisPhoneSection]. At one even spacing a note sits as far from the switch it
+ * explains as from the switch below it, so with two of each there is nothing on
+ * screen saying which sentence belongs to which control. So: 4dp inside a pair,
+ * which is the tightest gap on this screen and is what the one switch already
+ * used, against 12dp between pairs — just under the 14dp the list puts between
+ * two Pairing cards, because two switches are closer kin than two Pairings.
+ *
+ * Not a [QuotedNote]: the rule down its left edge would cut the sentence away
+ * from the switch it explains, and two short sentences do not need an idiom built
+ * for prose a box would make look like an alert. `ADD ANOTHER PAIRING` states its
+ * own body exactly this way.
+ */
+@Composable
+private fun SwitchAndNote(
+    label: String,
+    note: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    switchTag: String,
+    noteTag: String,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        SettingSwitch(
+            label = label,
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.testTag(switchTag),
+        )
         Text(
-            text = stringResource(R.string.settings_show_recalled_note),
+            text = note,
             style = Fui.Prose,
             color = Fui.TextBody,
-            modifier = Modifier.testTag(TAG_SHOW_RECALLED_NOTE),
+            modifier = Modifier.testTag(noteTag),
         )
     }
 }
@@ -483,6 +534,8 @@ const val TAG_ADD_PAIRING = "pairings-add"
 const val TAG_THIS_PHONE = "this-phone"
 const val TAG_SHOW_RECALLED = "settings-show-recalled"
 const val TAG_SHOW_RECALLED_NOTE = "settings-show-recalled-note"
+const val TAG_CONFIRM_OFFERS = "settings-confirm-offers"
+const val TAG_CONFIRM_OFFERS_NOTE = "settings-confirm-offers-note"
 const val TAG_PHONE_SETTINGS = "phone-settings"
 const val TAG_SETTINGS_FOREGROUND_NOTE = "settings-foreground-note"
 const val TAG_SETTINGS_ABSENT_NOTE = "settings-absent-note"

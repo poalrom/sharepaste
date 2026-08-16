@@ -88,6 +88,8 @@ class AppActions(
     // -- what this phone remembers about its own chrome ---------------------
     /** Whether a Recall says what it put on the clipboard. See ADR 0009. */
     val setShowRecalled: (Boolean) -> Unit,
+    /** Whether a taken Offer says so. See ADR 0018. */
+    val setConfirmOffers: (Boolean) -> Unit,
     /** Close the foreground-only band for good. Only `▴ CLOSE` may call it. */
     val dismissForegroundNote: () -> Unit,
     // -- the Standing Actions -----------------------------------------------
@@ -136,6 +138,7 @@ fun appActions(
     clearHistory = model::clearHistory,
     forgetPairing = model::forgetPairing,
     setShowRecalled = model::setShowRecalled,
+    setConfirmOffers = model::setConfirmOffers,
     dismissForegroundNote = model::dismissForegroundNote,
     // The one member the state holder cannot supply. `MainActivity` passes a
     // permission request; every other caller leaves it doing nothing, which is

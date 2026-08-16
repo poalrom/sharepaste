@@ -48,6 +48,16 @@ class PhoneUnderTest private constructor(
     private val compose: AndroidComposeTestRule<*, ComponentActivity>,
     val repo: SharepasteRepository,
     val model: SharepasteViewModel,
+    /**
+     * The same store the state holder was built over, for a test that drives one
+     * of the two switches.
+     *
+     * There is one DataStore per file in a process, so this is not a second view
+     * of the preferences — it is the one the app is using. [close] puts it back to
+     * the defaults, which is what keeps a switch a test turned off from silencing
+     * a confirmation in every test that runs after it.
+     */
+    val preferences: UiPreferences,
 ) {
 
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -221,14 +231,26 @@ class PhoneUnderTest private constructor(
      * the only safe thing is to wait for it. The shipped app never closes its
      * facade — the process dying is the teardown — so this is a test-lifecycle
      * obligation, and it is `ViewModelStore.clear()` by another name.
+     *
+     * **The preference store goes back to the defaults too**, in a `finally`. One
+     * file serves the whole process, so a switch left off here would silence a
+     * confirmation for every test that ran afterwards — and that failure would not
+     * look like this class's fault, or like anybody's. The `finally` is the point:
+     * the two lines above it are known to throw, which is why the `forgetPairing`
+     * loop is wrapped in `runCatching`, and a teardown that gave up before the
+     * reset would leave exactly the poisoning this exists to prevent.
      */
     fun close(forgetPairings: Boolean = true) {
         runBlocking {
-            model.viewModelScope.coroutineContext.job.cancelAndJoin()
-            if (forgetPairings) {
-                pairedUserIds.forEach { runCatching { repo.forgetPairing(it) } }
+            try {
+                model.viewModelScope.coroutineContext.job.cancelAndJoin()
+                if (forgetPairings) {
+                    pairedUserIds.forEach { runCatching { repo.forgetPairing(it) } }
+                }
+                repo.close()
+            } finally {
+                preferences.resetToDefaults()
             }
-            repo.close()
         }
     }
 
@@ -267,15 +289,16 @@ class PhoneUnderTest private constructor(
             // A `ViewModel` wants a main looper for `viewModelScope`, so it is
             // built on the main thread exactly as the activity builds it.
             //
-            // The preference store is the process's real one. Both its values
-            // default to what a fresh install has, and no test here changes
-            // either, so sharing it costs nothing and keeps this the production
-            // object it claims to be.
+            // The preference store is the process's real one, held rather than
+            // constructed inline so that a test which drives a switch drives the
+            // store the app is actually reading — and so `close` can put all three
+            // values back to what a fresh install has.
+            val preferences = UiPreferences(context)
             lateinit var model: SharepasteViewModel
             InstrumentationRegistry.getInstrumentation().runOnMainSync {
-                model = SharepasteViewModel(repo, UiPreferences(context))
+                model = SharepasteViewModel(repo, preferences)
             }
-            val phone = PhoneUnderTest(compose, repo, model)
+            val phone = PhoneUnderTest(compose, repo, model, preferences)
             // `receipts` replays nothing, so the collector has to be running
             // before a verb is pressed. This only *schedules* it — the launch
             // dispatches onto the main looper rather than subscribing here — but

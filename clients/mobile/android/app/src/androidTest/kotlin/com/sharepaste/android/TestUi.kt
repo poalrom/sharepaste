@@ -34,6 +34,7 @@ fun noActions(
     clearHistory: (String) -> Unit = {},
     forgetPairing: (String) -> Unit = {},
     setShowRecalled: (Boolean) -> Unit = {},
+    setConfirmOffers: (Boolean) -> Unit = {},
     dismissForegroundNote: () -> Unit = {},
     enableStandingActions: () -> Unit = {},
 ) = AppActions(
@@ -58,6 +59,7 @@ fun noActions(
     clearHistory = clearHistory,
     forgetPairing = forgetPairing,
     setShowRecalled = setShowRecalled,
+    setConfirmOffers = setConfirmOffers,
     dismissForegroundNote = dismissForegroundNote,
     enableStandingActions = enableStandingActions,
 )

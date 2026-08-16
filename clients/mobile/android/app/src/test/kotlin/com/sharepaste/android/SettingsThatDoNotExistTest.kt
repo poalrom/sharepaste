@@ -22,9 +22,10 @@ import java.io.File
  * asks the platform for. A device sees neither as text.
  * `PairingsScreenTest.no_plaintext_toggle_and_no_biometric_gate_were_added` covers
  * the runtime half. It is a census rather than a count of zero: the Settings
- * Screen now has exactly one switch, `SHOW WHAT WAS RECALLED`, which decides
- * whether a Recall says what it handed over and touches no stored byte. Any
- * other switch, and any biometric API on the classpath, is a failure there.
+ * Screen now has exactly two switches, `SHOW WHAT WAS RECALLED` and `CONFIRM
+ * OFFERS`, which decide only whether Sharepaste speaks after a verb it performed
+ * either way and touch no stored byte (ADR 0009, ADR 0018). Any other switch, and
+ * any biometric API on the classpath, is a failure there.
  */
 class SettingsThatDoNotExistTest {
 

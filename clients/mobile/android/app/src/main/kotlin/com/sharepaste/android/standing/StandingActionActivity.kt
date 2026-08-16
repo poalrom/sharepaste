@@ -3,7 +3,6 @@ package com.sharepaste.android.standing
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
-import android.util.Log
 import com.sharepaste.android.OfferAttempt
 import com.sharepaste.android.R
 import com.sharepaste.android.RecallAttempt
@@ -12,8 +11,6 @@ import com.sharepaste.android.SharepasteRepository
 import com.sharepaste.android.ui.Receipt
 import com.sharepaste.android.ui.offerRefusalLabel
 import com.sharepaste.android.ui.offerRefusalMessage
-import com.sharepaste.android.ui.receiptLogged
-import com.sharepaste.android.ui.showReceipt
 import com.sharepaste.core.AppException
 import com.sharepaste.core.OfferOutcome
 import kotlinx.coroutines.MainScope
@@ -130,7 +127,7 @@ class StandingActionActivity : Activity() {
                         val (receipt, queuedOn) = offer()
                         // Reported first: the person pressed a control and is
                         // owed an answer now, not when the network has finished.
-                        report(action, receipt)
+                        reportReceipt(action, receipt)
                         // And then actually sent. `offer` only enqueues — the
                         // uploader lives on a session, which a phone with no
                         // screen open does not have, so without this "Offer
@@ -141,7 +138,8 @@ class StandingActionActivity : Activity() {
                         // before this window closes.
                         queuedOn?.let { repository.sendPending(it) }
                     }
-                    StandingActions.ACTION_RECALL_LATEST -> report(action, recallLatest())
+                    StandingActions.ACTION_RECALL_LATEST ->
+                        reportReceipt(action, recallLatest())
                     // Not reachable from the notification, and the activity is not
                     // exported. Nothing to say, so nothing is said.
                     else -> Unit
@@ -245,39 +243,6 @@ class StandingActionActivity : Activity() {
         Receipt.Aloud(R.string.notice_nothing_to_recall, R.string.recall_nothing_to_recall)
     } catch (e: AppException) {
         Receipt.Aloud(R.string.notice_failed, R.string.recall_failed)
-    }
-
-    /**
-     * The one surface a Standing Action has.
-     *
-     * The Toast goes to the **application** context and is shown *before*
-     * [finish]. Both matter: a Toast is queued by the system rather than drawn
-     * by the activity, so it outlives the window that asked for it — but a Toast
-     * asked for after `finish` has already run is one the system may drop, and a
-     * cache-fallback warning that is silently swallowed turns a correct
-     * operation into a wrong one.
-     *
-     * **The log line is never the Toast.** It is [receiptLogged], which for a
-     * Recall is the fixed sentence that names no Entry — see ADR 0009 for what
-     * the Toast is allowed to say and why a durable log is not allowed to say
-     * it. `StandingActionsNotificationTest` and the acceptance sequence both
-     * read this line expecting one of the app's own fixed sentences.
-     *
-     * The verb is passed in rather than read back off [getIntent], because
-     * [intent] answers with whatever was delivered *most recently* — a second
-     * press arriving while this one is still working would otherwise relabel
-     * this line as the other verb.
-     */
-    private suspend fun report(action: String?, receipt: Receipt) {
-        // Suppressed whole, not merely stripped of its Preview: `SHOW WHAT WAS
-        // RECALLED` off means Sharepaste says nothing about a Recall on either
-        // path. The log line still goes, because it is a diagnostic rather than
-        // something the person is being told, and because the acceptance
-        // sequence reads it with the app force-stopped.
-        val silenced = receipt is Receipt.Recalled &&
-            !(application as SharepasteApplication).uiPreferences.showRecalledNow()
-        if (!silenced) showReceipt(this, receipt)
-        Log.i(StandingActions.TAG, "$action: ${getString(receiptLogged(receipt))}")
     }
 }
 

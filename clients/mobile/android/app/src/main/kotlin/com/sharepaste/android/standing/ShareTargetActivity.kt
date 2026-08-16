@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.ClipDescription
 import android.content.Intent
 import android.os.Bundle
-import android.util.Log
 import com.sharepaste.android.OfferAttempt
 import com.sharepaste.android.R
 import com.sharepaste.android.SharepasteApplication
@@ -12,8 +11,6 @@ import com.sharepaste.android.SharepasteRepository
 import com.sharepaste.android.ui.Receipt
 import com.sharepaste.android.ui.offerRefusalLabel
 import com.sharepaste.android.ui.offerRefusalMessage
-import com.sharepaste.android.ui.receiptLogged
-import com.sharepaste.android.ui.showReceipt
 import com.sharepaste.core.AppException
 import com.sharepaste.core.OfferOutcome
 import kotlinx.coroutines.MainScope
@@ -93,7 +90,7 @@ class ShareTargetActivity : Activity() {
                 // share is an Offer made by somebody who is standing in another
                 // app waiting to get on with something, so the answer comes now
                 // and the upload happens behind it.
-                report(receipt)
+                reportReceipt("share", receipt)
                 queuedOn?.let { repository.sendPending(it) }
             } finally {
                 if (working.finished() && !isFinishing) finish()
@@ -148,18 +145,6 @@ class ShareTargetActivity : Activity() {
         }
     } catch (e: AppException) {
         Receipt.Aloud(R.string.notice_failed, R.string.offer_failed) to null
-    }
-
-    /**
-     * See [StandingActionActivity.report] — same surface, same rules.
-     *
-     * No share can produce a [Receipt.Recalled], so there is nothing here for
-     * `SHOW WHAT WAS RECALLED` to silence and nothing that could put an Entry's
-     * text in the log.
-     */
-    private fun report(receipt: Receipt) {
-        showReceipt(this, receipt)
-        Log.i(StandingActions.TAG, "share: ${getString(receiptLogged(receipt))}")
     }
 }
 

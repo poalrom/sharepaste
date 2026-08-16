@@ -121,10 +121,10 @@ data class UiState(
     /**
      * Whether a Recall says what it put on the clipboard.
      *
-     * The phone's first real preference, and the only one it has that the
-     * desktop does not. Off means no Recall [Receipt] at all — the Entry still
-     * reaches the clipboard, and the six [Notice]s are untouched, because this
-     * switch is about being told and not about being warned.
+     * The first preference this phone had, and one the desktop still does not.
+     * Off means no Recall [Receipt] at all — the Entry still reaches the
+     * clipboard, and the six [Notice]s are untouched, because this switch is
+     * about being told and not about being warned.
      *
      * Persisted, so it arrives here from
      * [com.sharepaste.android.platform.UiPreferences] rather than from a core
@@ -132,6 +132,20 @@ data class UiState(
      * Settings Screen draws a switch from it.
      */
     val showRecalled: Boolean = true,
+    /**
+     * Whether a taken Offer says so.
+     *
+     * The second switch, one per verb, and it reaches nothing the first one
+     * reaches (ADR 0018). Off means no [Receipt.Offered] — the Offer is still
+     * taken and still queued, and [Receipt.Recognised] still speaks, because an
+     * Offer that saved nothing going quiet would read as one that saved.
+     *
+     * Here for the same reason as its neighbour, and read for nothing else: what
+     * the two switches silence is [silences]' business, and it asks the store
+     * rather than this snapshot so that a closed phone and an open one cannot
+     * answer differently.
+     */
+    val confirmOffers: Boolean = true,
     /**
      * Whether the History Screen's foreground-only band has been closed for
      * good.

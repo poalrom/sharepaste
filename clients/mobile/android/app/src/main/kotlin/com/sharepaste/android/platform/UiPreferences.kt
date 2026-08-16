@@ -15,7 +15,7 @@ import java.io.IOException
 /**
  * What this phone has been told to do about its own chrome.
  *
- * Two booleans, and they have nothing in common with the core's key material —
+ * Three booleans, and they have nothing in common with the core's key material —
  * which is why they are here and not in [AndroidKeychain]'s
  * `EncryptedSharedPreferences`. That store is guarded by a hardware-backed key
  * because what it holds would decrypt somebody's Entries; a switch position and
@@ -23,8 +23,8 @@ import java.io.IOException
  * same key would say otherwise.
  *
  * DataStore rather than plain `SharedPreferences` for the shape of the read.
- * Both preferences are on screen — one is a switch, one decides whether a band
- * is composed at all — so the state holder wants them as a [Flow] it can fold
+ * All three are on screen — two are switches, one decides whether a band is
+ * composed at all — so the state holder wants them as a [Flow] it can fold
  * into [com.sharepaste.android.ui.UiState] the same way it folds core events,
  * rather than as a blocking read it has to remember to repeat.
  */
@@ -33,18 +33,19 @@ class UiPreferences(context: Context) {
     private val store = context.applicationContext.uiPreferences
 
     /**
-     * Both values, as one snapshot, from the moment there is one.
+     * All three values, as one snapshot, from the moment there is one.
      *
      * A corrupt or unreadable file reads as the defaults rather than as a crash.
-     * Neither preference is load-bearing: losing them turns the Receipt back on
-     * and brings the foreground note back, which is exactly the state a fresh
-     * install is in and is the safe direction for both.
+     * None of the three is load-bearing: losing them turns both confirmations back
+     * on and brings the foreground note back, which is exactly the state a fresh
+     * install is in and is the safe direction for all three.
      */
     val values: Flow<UiPreferenceValues> = store.data
         .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
         .map {
             UiPreferenceValues(
                 showRecalled = it[SHOW_RECALLED] ?: true,
+                confirmOffers = it[CONFIRM_OFFERS] ?: true,
                 foregroundNoteDismissed = it[FOREGROUND_NOTE_DISMISSED] ?: false,
             )
         }
@@ -53,21 +54,38 @@ class UiPreferences(context: Context) {
         store.edit { it[SHOW_RECALLED] = show }
     }
 
+    suspend fun setConfirmOffers(confirm: Boolean) {
+        store.edit { it[CONFIRM_OFFERS] = confirm }
+    }
+
     suspend fun dismissForegroundNote() {
         store.edit { it[FOREGROUND_NOTE_DISMISSED] = true }
     }
 
     /**
-     * The one preference a closed phone has to read.
+     * The switch positions as they stand, for whoever is about to report a verb.
      *
-     * A Standing Action has no state holder and no composition, so it cannot
-     * take the value off [com.sharepaste.android.ui.UiState] the way the screen
-     * does. It asks here instead, once, on the way to reporting.
+     * Read by all three reporting paths, and the closed-phone two have no choice:
+     * a Standing Action and a share have no state holder and no composition, so
+     * neither can take these off [com.sharepaste.android.ui.UiState] the way the
+     * screen does. The state holder *could* — it folds this very snapshot into
+     * `UiState` for the switches to draw from — and asks here anyway, so that
+     * whether Sharepaste speaks is decided from one place on an open phone and a
+     * closed one alike. The alternative is a rule that reads a preference two
+     * ways and can be made to disagree with itself.
+     *
+     * **One read, not one per switch.** Both positions come out of the same
+     * snapshot and go into the same predicate
+     * ([com.sharepaste.android.ui.silences]), so there is no arrangement of
+     * point reads that can leave a person's two switches half-applied.
+     *
+     * Named for what it answers rather than when: [values] is the flow, this is
+     * one of its values.
      */
-    suspend fun showRecalledNow(): Boolean = values.first().showRecalled
+    suspend fun snapshot(): UiPreferenceValues = values.first()
 
     /**
-     * Put both preferences back to what a fresh install has.
+     * Put all three preferences back to what a fresh install has.
      *
      * The shipped app never calls this, and there is deliberately no un-dismiss
      * on the surface a screen can reach: closing the foreground note for good is
@@ -79,7 +97,7 @@ class UiPreferences(context: Context) {
      * hands the whole process **one** store per file and refuses a second over
      * the same path, so a test cannot get a clean one by constructing its own,
      * and deleting the file underneath the live instance would leave its cache
-     * ahead of the disk. Every test that writes either value has to hand the
+     * ahead of the disk. Every test that writes any of them has to hand the
      * suite back its defaults, and this is the honest way to do it —
      * `SharepasteRepository.close` exists for the same kind of reason.
      */
@@ -90,14 +108,25 @@ class UiPreferences(context: Context) {
 
     private companion object {
         val SHOW_RECALLED = booleanPreferencesKey("show_recalled")
+        val CONFIRM_OFFERS = booleanPreferencesKey("confirm_offers")
         val FOREGROUND_NOTE_DISMISSED = booleanPreferencesKey("foreground_note_dismissed")
     }
 }
 
-/** Both preferences as the app reads them: never absent, only defaulted. */
+/** All three preferences as the app reads them: never absent, only defaulted. */
 data class UiPreferenceValues(
     /** Whether a Recall says what it put on the clipboard. See ADR 0009. */
     val showRecalled: Boolean = true,
+    /**
+     * Whether a taken Offer says so. See ADR 0018.
+     *
+     * Its own switch rather than the Recall one widened, because the two are off
+     * for different reasons: a Recall Receipt names an Entry the person did not
+     * choose, and an Offer Receipt names nothing and is merely the app speaking
+     * over whatever they were doing. Silences [com.sharepaste.android.ui.Receipt.Offered]
+     * and nothing else — a recognised Offer saved nothing and still says so.
+     */
+    val confirmOffers: Boolean = true,
     /**
      * Whether the History Screen's foreground-only band has been closed for
      * good.

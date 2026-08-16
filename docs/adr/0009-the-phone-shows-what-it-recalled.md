@@ -39,6 +39,13 @@ enforces it. What changed is what is visible *after* the action fires.
 three inert `N/A` chips precisely because a phone had nothing to switch. This one exists
 because the vendor variance is undetectable — not as a way to avoid making the call.
 
+A later decision leaves every word above standing and adds a second switch beside this one:
+`CONFIRM OFFERS`, which silences the Offer Receipt. It is not this switch widened, and the
+reasoning is deliberately not the reasoning here — an Offer Receipt names no Entry, so what that
+control is about is the app speaking over the foreground rather than a Preview on screen. See
+[ADR 0018](0018-silence-is-per-verb.md), which also records what it costs the paragraph opening
+this one: the Settings Screen no longer carries a single switch.
+
 ## Considered Options
 
 **Keep the flag; let the Receipt carry the Preview anyway.** The closest alternative, and
