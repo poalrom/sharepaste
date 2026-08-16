@@ -3,7 +3,7 @@ name = "sharepaste-ffi"
 # Pinned to the core's version, which is pinned to the desktop's. One artefact
 # version across the whole client side; `.github/scripts/check-versions.mjs`
 # refuses a release where any two disagree.
-version = "0.8.3"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.87"
 publish = false

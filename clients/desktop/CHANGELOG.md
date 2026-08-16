@@ -7,6 +7,32 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.9.0
+
+**Android only.** Nothing on this machine changes and the relay is not involved, so if you do
+not use the phone there is no reason to install this. The phone can now be told to stop
+confirming an offer, the same way it can already be told to stop naming what it recalled.
+
+- **A second switch: `CONFIRM OFFERS`.** Under `THIS PHONE` on the settings screen, on by
+  default, beside the one that has been there since 0.5.0. Turn it off and offering the
+  clipboard — from the button, from the notification, or by sharing text to Sharepaste from
+  another app — stops putting a line over whatever you were looking at. The offer itself is
+  unchanged: the entry is still captured, still encrypted, still queued or sent, and still
+  arrives on your other machines. Only the message goes.
+- **One switch per verb, so neither speaks for the other.** Silencing your offers says nothing
+  about what a recall may say, and the reverse. They are off for different reasons — a recall
+  hands you back something you did not choose and its message names it, while an offer names
+  nothing and is only the app talking over you — and one control would have made you accept
+  both to get either.
+- **A repeat still speaks, on purpose.** Offering text the phone already has does not save
+  anything; it moves the entry you already had to the top. That one still says `ALREADY SAVED`
+  whatever the switch is set to, because going quiet there would look exactly like the offer
+  that did save something, on a list you can check a second later.
+- **Nothing that needs doing has been silenced.** A refusal, a warning that a recall came off
+  this phone's own copy rather than the relay, an unpaired phone, a failure — all unchanged.
+  Neither switch can take away a message that exists to be acted on, and the ongoing
+  notification still shows no entry text at all.
+
 ## 0.8.3
 
 **Only this machine changes, and only what it says about itself.** A patch over 0.8.2 for one
