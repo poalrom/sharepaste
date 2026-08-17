@@ -7,6 +7,42 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.10.0
+
+**Android only.** Nothing on this machine changes and the relay is not involved, so if you do
+not use the phone there is no reason to install this. Open the phone after it has been away and
+the history is at the top, where anything that arrived while you were gone is.
+
+- **A phone that was away opens at the top.** Copy something on the computer, pick the phone up
+  an hour later, and the entry is the first row you see. Until now the phone came back exactly
+  where you had left it — often twenty rows down, with the new entries sitting above the screen
+  and nothing saying they had arrived. The jump happens once per opening, on the first news the
+  phone gets, and it is a jump rather than a scroll because nobody was looking at the list for
+  anything to move under.
+- **Unless you have already started reading.** Touch the list before that news arrives and the
+  phone leaves you exactly where you are, however late the news is. There is no timer in this:
+  the phone is out of contact most of the time by design, so it may be minutes after opening
+  before it hears anything, and the only thing that decides is whether you have moved the list
+  yourself since.
+- **An entry arriving while you are watching no longer moves the list.** This is the part that
+  is taken away rather than added, and it is deliberate: scrolling somebody who is reading, to
+  show them a row they can reach themselves, costs them their place for news the list already
+  carries. The cost is that a phone left open on the table now goes quietly out of date until
+  you scroll up or open it again. Nothing was added to announce it — no banner, no count, and
+  still no notification for a new clipboard item, which this app has never had and does not
+  want. Your own offers and recalls still bring their row to the top, as they always did.
+- **What you typed in the filter survives putting the phone down.** Flip to another app for a
+  moment and come back and the box still holds it, where it used to be emptied. Two honest
+  consequences: a filter typed against one pairing's history is still there if you come back
+  looking at another one — labelled `NO MATCHES` over a list you did not filter here, one tap on
+  the `✕` to clear — and force-stopping the app or leaving it long enough to be killed still
+  empties it, because nothing writes it down. Which pairing you were looking at is still
+  forgotten when you put the phone down, exactly as before.
+- **Switching which pairing you are looking at goes to the top too.** Those are different
+  entries, so the row you were reading is not in the new list; the phone used to keep the rough
+  position anyway, which meant landing somewhere arbitrary in a history you had not read a word
+  of.
+
 ## 0.9.0
 
 **Android only.** Nothing on this machine changes and the relay is not involved, so if you do
