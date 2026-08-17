@@ -93,7 +93,9 @@ _Avoid_: bumped at, updated at, modified, sort key, last accessed
 **Filter**:
 A narrowing of the history on screen to the entries whose text contains what
 was typed. Never asks the relay: it hides rows a device already holds, so it can
-only ever find what has already reached that device.
+only ever find what has already reached that device. It narrows whichever history
+is shown rather than choosing which one that is, so unlike the viewed pairing it
+outlives the surface being put down and picked up again.
 _Avoid_: search, query, find, lookup
 
 **Capture**:
@@ -158,6 +160,13 @@ pending uploads, and nothing a device sends to the update source counts toward
 it.
 _Avoid_: sync, last seen, heartbeat, online since
 
+**Catch-Up**:
+Everything a device asks the relay for on connecting, being the acts it missed
+while it was not connected. One request and one answer, not a stream: a device
+that was away learns what changed in a single step, and only then does it start
+hearing about acts as they happen.
+_Avoid_: backfill, resync, replay, initial load
+
 ### Surfaces
 
 **Popover**:
@@ -180,6 +189,14 @@ _Avoid_: main screen, home, feed
 The phone's second surface: this phone's pairings, and what is true of the phone
 itself rather than of any one pairing. Reached only from the History Screen.
 _Avoid_: settings menu, preferences, pairings screen, about
+
+**Place**:
+Where in a history a surface is scrolled to: the rows a person can see, and the
+one their eyes are on. A fact about a screen and not about an entry, so never
+the head — the head is which entry leads the history and is the same on every
+device at once, while a place is one surface's own. Never on the relay: nothing
+anywhere records where anybody was looking.
+_Avoid_: scroll position, viewport, offset, index
 
 **Standing Actions**:
 The verbs a device exposes without being opened: offer the clipboard, recall the

@@ -77,14 +77,24 @@ class SharepasteViewModel(
     val receipts: SharedFlow<Receipt> = _receipts.asSharedFlow()
 
     /**
-     * The id of the Entry that has just taken the head of the Viewed Pairing's
-     * History, when the list should follow it there.
+     * How the list should get to the head of the Viewed Pairing's History, when
+     * something has put a row there and the list is to be there too.
      *
-     * Two things put a row at the head and only these two are worth chasing: an
-     * **arrival** — a new Entry, which is `CoreEvent.EntryAdded` and nothing
-     * else — and a **Use this device made**. A Use from another device raises
-     * neither: nothing new exists, and reordering somebody's viewport to show
-     * them a row they already had costs them their place for no news.
+     * Two causes and one each (ADR 0019): the open's first **Catch-Up** that
+     * found anything, which [HeadMove.Jump]s, and a **Use this phone made**,
+     * which [HeadMove.Follow]s. A Viewed Pairing switch jumps as well, for a
+     * different reason — the rows are a different list.
+     *
+     * **Everything else is silent.** An Entry arriving over the live stream
+     * mid-session moves nothing, and neither does a remote Use, a delete, the
+     * hundred-row prune or a flush. Once the open's jump is spent, the only
+     * thing that costs anybody their **Place** for the rest of the foreground is
+     * something they did themselves.
+     *
+     * It carries the motion rather than an Entry id because the id was never
+     * read: index 0 is the destination whichever Entry took it. What the screen
+     * cannot derive is *which* motion, so that is what it is told — see
+     * [HeadMove].
      *
      * An event and not a [UiState] field, for the reason the Receipts are: it
      * is consumed once and a snapshot would re-deliver it on every
@@ -93,14 +103,27 @@ class SharepasteViewModel(
      * to must not become a function of a display preference.
      *
      * Buffered by one and `DROP_OLDEST`, like [_receipts], so [tryEmit] always
-     * takes and a backfill arriving with no screen collecting is dropped rather
+     * takes and a motion raised with no screen collecting is dropped rather
      * than replayed.
      */
-    private val _headMoves = MutableSharedFlow<Long>(
+    private val _headMoves = MutableSharedFlow<HeadMove>(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
-    val headMoves: SharedFlow<Long> = _headMoves.asSharedFlow()
+    val headMoves: SharedFlow<HeadMove> = _headMoves.asSharedFlow()
+
+    /**
+     * The one jump this foreground is owed, and whether it is still owed.
+     *
+     * Held here rather than in the screen because the two facts the rule needs
+     * live on opposite sides of that seam: only this class knows a foreground
+     * has just begun, and only the `LazyListState` inside
+     * [com.sharepaste.android.ui.HistoryScreen] knows a hand has been on the
+     * list. The screen reports the second through [handOnTheList] — the fact
+     * that somebody scrolled, never where to — so the **Place** itself stays
+     * where CONTEXT.md puts it: one surface's own, recorded nowhere.
+     */
+    private val openJump = OpenJump()
 
     init {
         viewModelScope.launch {
@@ -170,6 +193,9 @@ class SharepasteViewModel(
      * it can usefully do. A failure to resume is *not* an error screen — being
      * out of contact is the nominal case, and a phone that cannot reach the
      * Relay right now is a phone that will try again next time it is opened.
+     *
+     * It is also where the open's one jump is armed (ADR 0019), which is a fact
+     * only this method has — see [OpenJump] for why the core cannot supply it.
      */
     fun onEnterForeground() {
         // Recorded before the coroutine, not inside it, for the same reason
@@ -177,6 +203,10 @@ class SharepasteViewModel(
         // apart from a resting one, and a window where the app is in front but
         // does not think so would read as "resting" on screen.
         _state.update { it.copy(foreground = true, session = SessionPhase.Looking) }
+        // Before the coroutine too, and for a sharper reason: `startSession` is
+        // below and the Catch-Up this gate exists to catch is that session's
+        // first act. Arming after it is arming after the thing it gates.
+        openJump.opened()
         viewModelScope.launch {
             val userId = try {
                 repo.resumeActivePairing()
@@ -240,23 +270,10 @@ class SharepasteViewModel(
      * same outcome by a shorter route.
      */
     fun onLeaveForeground() {
-        // The Viewed Pairing goes with it, and so does the Filter. Both are
-        // transient view choices — CONTEXT.md: "forgotten when the window
-        // closes" — and a phone's equivalent of closing the window is being put
-        // down. Nothing persists either, so forgetting is simply dropping them,
-        // which is the desktop's rule for the same two (`store/ui.ts`).
-        _state.update {
-            it.copy(
-                foreground = false,
-                viewedUserId = null,
-                filter = "",
-                confirming = null,
-                // The rows belonged to the Pairing being stopped looking at, so
-                // they would otherwise be read as the Active Pairing's on the way
-                // back in, until the next refresh replaced them.
-                entries = if (it.diverged) emptyList() else it.entries,
-            )
-        }
+        // What a put-down forgets is [UiState.putDown]'s, so that the one
+        // surprising part of it — the Filter survives, the Viewed Pairing does
+        // not — is stated where a JVM test can pin it.
+        _state.update { it.putDown() }
         viewModelScope.launch {
             repo.stopAllSessions()
             // [SessionPhase.Looking] carries no user id, because `onEnterForeground`
@@ -482,18 +499,46 @@ class SharepasteViewModel(
      * Entry at the head of the History and every device reorders with it — and
      * this is where the screen is told that the Use was *this* device's, because
      * `HistoryChanged` arrives carrying only a `user_id` and cannot say.
+     *
+     * This is the one motion that survives the open (ADR 0019), and it is still
+     * the animated one — see [HeadMove.Follow] for why.
      */
     fun recall(entry: Entry) {
         viewModelScope.launch {
+            // Before the call, because the Use the core is about to record comes
+            // back as a `HistoryChanged` of its own. Left armed, the open's jump
+            // would answer this Recall first and teleport the list where the
+            // follow was about to animate it. The accepted cost is that a Recall
+            // that *fails* has spent the jump for nothing: the Notice below is
+            // then the only thing that happens, and a Catch-Up landing afterwards
+            // leaves the list where it is. Closing after the call instead would
+            // lose the race it exists to win, and pressing a verb is a better
+            // reading of "I am here and looking" than a failure is of "I am not".
+            openJump.close()
             try {
                 repo.recall(entry.userId, entry.id)
             } catch (e: AppException) {
                 raise(recallFailureFor(e))
                 return@launch
             }
-            _headMoves.tryEmit(entry.id)
+            _headMoves.tryEmit(HeadMove.Follow)
             confirm(Receipt.Recalled(entry.preview))
         }
+    }
+
+    /**
+     * The History Screen reports that a hand moved the list.
+     *
+     * The second of the two things that spend the open's jump — see [OpenJump]
+     * for why the gate has that edge instead of a clock.
+     *
+     * It carries the *fact* and not the position. Where a surface is scrolled to
+     * is that surface's own and is recorded nowhere (CONTEXT.md — **Place**), so
+     * the `LazyListState` stays inside the screen and this hears only that
+     * something in it moved under a finger.
+     */
+    fun handOnTheList() {
+        openJump.close()
     }
 
     /** Put one Notice in the band, replacing whatever was there. */
@@ -681,6 +726,12 @@ class SharepasteViewModel(
      * an override held in memory and dropped when the app is put down. Offer and
      * Recall Latest continue to act on the Active Pairing, which is what the
      * divergence band is on screen to admit.
+     *
+     * It gives up the **Place** as well, and independently of the open's jump
+     * (ADR 0019): the rows are a different list and the row somebody was reading
+     * is not in it. Named here at the source, like every other cause this screen
+     * acts on — never derived from a row having gone missing, which is the proxy
+     * ADR 0011 broke.
      */
     fun viewPairing(userId: String) {
         _state.update { current ->
@@ -698,6 +749,9 @@ class SharepasteViewModel(
                 ownDeviceId = current.pairings.firstOrNull { it.userId == userId }?.deviceId,
             )
         }
+        // A jump and not a follow: nothing changed under anybody's eyes, because
+        // what is under them is about to be replaced wholesale.
+        _headMoves.tryEmit(HeadMove.Jump)
         viewModelScope.launch { refreshHistory(userId) }
     }
 
@@ -784,6 +838,9 @@ class SharepasteViewModel(
         _state.update { it.copy(confirming = null) }
         viewModelScope.launch {
             val name = _state.value.nameOf(userId)
+            // Read before anything is dropped: whether the list on screen belongs
+            // to the Pairing about to be forgotten is not answerable afterwards.
+            val wasViewing = _state.value.viewedPairing == userId
             try {
                 repo.forgetPairing(userId)
             } catch (e: AppException) {
@@ -817,7 +874,16 @@ class SharepasteViewModel(
                     ownDeviceId = current.pairings.firstOrNull { it.userId == viewed }?.deviceId,
                 )
             }
-            if (viewed != null) refreshHistory(viewed)
+            if (viewed != null) {
+                refreshHistory(viewed)
+                // The Pairing that was being looked at has just been forgotten,
+                // so the list is now another Pairing's. A Viewed Pairing change
+                // like any other, and it gives up the Place with it (ADR 0019):
+                // the rows are a different list and the row somebody was reading
+                // is not in it. After the refresh, so the jump lands on the rows
+                // it is about.
+                if (wasViewing) _headMoves.tryEmit(HeadMove.Jump)
+            }
         }
     }
 
@@ -844,19 +910,35 @@ class SharepasteViewModel(
             // appear in a list they are not part of and be attributed to the
             // wrong User.
             is CoreEvent.EntryAdded -> {
-                // Newest first, and de-duplicated by id: the backfill and the
-                // live SSE stream can both deliver the same Entry across a
-                // reconnect.
+                // Newest first, and de-duplicated by id. This event has one site
+                // — the live SSE receive loop — and the Catch-Up has another: it
+                // ingests its whole burst under one database guard and announces
+                // it as a single `HistoryChanged`, which lands here as a
+                // wholesale `refreshHistory`. Across a reconnect the two windows
+                // overlap, so a row this list already holds can arrive again.
                 val current = _state.value
                 val arrived = event.userId == current.viewedPairing &&
                     current.entries.none { it.id == event.entry.id }
                 if (arrived) {
                     _state.update { it.copy(entries = listOf(event.entry) + it.entries) }
-                    // **This event is the arrival.** Nothing derived from the
-                    // list can be: under Last Use ordering a Use changes the
-                    // head too, on this device and on any other, and neither is
-                    // something new to be shown. Only a capture raises this.
-                    _headMoves.tryEmit(event.entry.id)
+                    // **An Entry from another Device moves nothing.** It lands
+                    // above somebody who is reading, and chasing it would cost
+                    // them their Place to show them a row they can reach by
+                    // scrolling (ADR 0019). It is silent as well as still: ADR
+                    // 0007 rules out a "new clipboard item" notification, and ADR
+                    // 0002 charges rent for a band that only informs.
+                    //
+                    // **An Entry this phone captured itself follows.** A capture
+                    // is a **Use** (CONTEXT.md), so this is the Offer's half of
+                    // the same rule `recall` states, and `RECALL FIRST` hands
+                    // over the first *displayed* row — an Offer whose own row
+                    // landed off screen is a verb bar pointing at something
+                    // nobody can see. Which of the two this is, is
+                    // [UiState.capturedHere]'s answer and not a cause guessed
+                    // from the list.
+                    if (current.capturedHere(event.entry)) {
+                        _headMoves.tryEmit(HeadMove.Follow)
+                    }
                 }
             }
 
@@ -902,7 +984,28 @@ class SharepasteViewModel(
 
             is CoreEvent.HistoryChanged -> {
                 if (event.userId == _state.value.viewedPairing) {
-                    viewModelScope.launch { refreshHistory(event.userId) }
+                    // The fact the open's jump reads, and the only one there is.
+                    // The core announces this for **any** reorder it has been
+                    // told about — a Catch-Up that found something, a live
+                    // arrival, a Use from any Device, a resend, a cleared
+                    // History — and it cannot say which. Row 18 forbids adding an
+                    // event that could, and at an open the distinction is one the
+                    // person cannot make either: whatever moved the rows, the top
+                    // one is not the one they left. Nothing can cost anybody a
+                    // **Place** here, because while this gate is armed the only
+                    // Place there is to lose is the one ADR 0019 declares forfeit.
+                    //
+                    // Spent now and emitted later: `refreshHistory` reads the
+                    // database, so the rows land frames after this event, and a
+                    // jump asked for before them would be undone by the
+                    // `LazyColumn` re-anchoring on the old head's key. Spending
+                    // here rather than in the coroutine is what keeps "the first
+                    // change of the foreground" true when two arrive together.
+                    val jump = openJump.spend()
+                    viewModelScope.launch {
+                        refreshHistory(event.userId)
+                        if (jump) _headMoves.tryEmit(HeadMove.Jump)
+                    }
                 }
             }
 

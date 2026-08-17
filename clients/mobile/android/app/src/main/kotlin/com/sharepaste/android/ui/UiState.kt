@@ -161,9 +161,11 @@ data class UiState(
      *
      * Held here and not in the band's own `remember` for the reason everything
      * else is: it survives a rotation with the rest of the snapshot. It is
-     * cleared on a Viewed Pairing switch and when the app goes to the back —
-     * the desktop's rule (`store/ui.ts`), ported — because a needle left over
-     * from the last visit is a needle silently hiding rows.
+     * cleared on a Viewed Pairing switch, because a needle typed against one
+     * Pairing's History narrows another's to rows it was never asked about — and
+     * it **survives the app going to the back** (ADR 0019), which is where it
+     * parts company with the desktop's rule and with [viewedUserId]. See
+     * [putDown].
      *
      * Untrimmed, because it is what the person typed and the field draws it
      * back. Trimming happens once, in [shown], where the needle is made.
@@ -203,6 +205,23 @@ data class UiState(
     }
 
     /**
+     * Whether this phone is the Entry's **Origin** — that it captured it itself.
+     *
+     * The one distinction that tells the two halves of `CoreEvent.EntryAdded`
+     * apart, and it is a fact rather than a guess: the core stamps the Device an
+     * Entry was captured on, and this compares it to the Device this phone is on
+     * the Pairing being viewed. An Entry from another Device is news that arrived
+     * while somebody was reading and moves nothing; one captured here is a
+     * **Capture**, which is a **Use** (CONTEXT.md), and a Use this phone made
+     * follows its row to the head (ADR 0019).
+     *
+     * `false` while [ownDeviceId] is still unread, which is the safe direction:
+     * the cost is an Offer that does not scroll on the first frames after an
+     * open, against a stranger's Entry hauling a reader to the top.
+     */
+    fun capturedHere(entry: Entry): Boolean = entry.deviceId == ownDeviceId
+
+    /**
      * Change what one row says about itself, leaving its place alone.
      *
      * Gated on the **Viewed** Pairing for the reason `EntryAdded` is: a live
@@ -223,6 +242,42 @@ data class UiState(
     }
 
     /**
+     * The snapshot a phone that has just been put down is holding.
+     *
+     * Every transient view choice this surface made, resolved in one place
+     * rather than in an `onStop` handler, because the interesting half is what
+     * is *absent* from it: [filter] survives (ADR 0019). Both it and
+     * [viewedUserId] are transient, so the difference cannot be read off what
+     * they are — a needle narrows whichever History is shown, while a Viewed
+     * Pairing chooses which one that is, and only the second can leave rows on
+     * screen attributed to the wrong User.
+     *
+     * The honest remainder: nothing persists the needle, so its real lifetime
+     * ends at process death. A warm resume keeps it and a cold start does not,
+     * which is a lifetime no test here can pin without killing the process.
+     *
+     * **[scanned] goes with [entries] or not at all.** [shown] hands the last
+     * scan back verbatim while a needle is on and the list is not empty, so a
+     * scan of a Pairing this phone has stopped looking at would be drawn under
+     * the Active Pairing's name for the frame between `refreshHistory` filling
+     * the list and the next scan answering it.
+     *
+     * The session phase is not here. It is settled after the teardown that
+     * actually stops the sessions — see [SharepasteViewModel.onLeaveForeground],
+     * where a phone still `Looking` has to be told which Pairing it is resting
+     * about.
+     */
+    fun putDown(): UiState = copy(
+        foreground = false,
+        viewedUserId = null,
+        // A destructive question waiting through a put-down is one stray tap
+        // from an answer nobody remembers being asked for.
+        confirming = null,
+        entries = if (diverged) emptyList() else entries,
+        scanned = if (diverged) Filtered() else scanned,
+    )
+
+    /**
      * The rows on screen, and the needle that left them.
      *
      * The screen reads this and never [entries]: the list, the `n/m` count and
@@ -233,11 +288,13 @@ data class UiState(
      * matter.** A blank needle is every Entry and an empty History is no
      * Entries, so both are known here without reading a single `plaintext` —
      * and every path that could otherwise mislead goes through one of them.
-     * Switching the Viewed Pairing and going to the back clear the needle;
-     * clearing a History and forgetting the last Pairing empty the list. So no
-     * frame can put one Pairing's rows under another's name, and this holds by
-     * construction rather than by every future edit to [entries] remembering
-     * there is a second field to keep up.
+     * Switching the Viewed Pairing clears the needle; clearing a History,
+     * forgetting the last Pairing and putting a diverged phone down empty the
+     * list. So no frame can put one Pairing's rows under another's name, and
+     * this holds by construction rather than by every future edit to [entries]
+     * remembering there is a second field to keep up. A needle now outlives a
+     * put-down, which is exactly why [putDown] drops [scanned] whenever it
+     * drops the rows the scan was about.
      *
      * The third answer is a real scan, and that is the one case this hands back
      * [scanned] instead: computing it here would run it on whichever thread read

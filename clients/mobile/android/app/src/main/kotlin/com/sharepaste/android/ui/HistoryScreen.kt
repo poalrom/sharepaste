@@ -5,6 +5,7 @@ import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,6 +34,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -99,10 +101,11 @@ fun HistoryScreen(
     state: UiState,
     actions: AppActions,
     modifier: Modifier = Modifier,
-    headMoves: Flow<Long> = emptyFlow(),
+    headMoves: Flow<HeadMove> = emptyFlow(),
 ) {
     val rows = rememberLazyListState()
-    TheNewHeadStaysInView(headMoves, rows)
+    TheListGetsToTheHead(headMoves, rows)
+    AHandOnTheListKeepsItsPlace(rows, actions.handOnTheList)
     // A reorder is legible only if it moves; a re-filter is legible only if it
     // does not. Both re-lay-out the same keyed list, so the difference has to be
     // stated: `shown` answering a different needle than it did last frame is a
@@ -177,7 +180,7 @@ fun HistoryScreen(
 }
 
 /**
- * The row that has just taken the head is where it can be seen.
+ * The list gets to the head of the History, the way the cause calls for.
  *
  * Entries lead the History by **Last Use**, so index 0 is the destination and
  * the destination never changes — but the distance to it does. Everything above
@@ -190,22 +193,83 @@ fun HistoryScreen(
  * capture ordering only an arrival could put a new row on top, so "new head,
  * old head still under it" meant "something arrived". Last Use broke the proxy
  * rather than the rule — a Use changes the head too, from this device and from
- * any other, and neither is an arrival. So the two cases are named at the
- * source instead, and [SharepasteViewModel.headMoves] carries exactly them: a
- * new Entry on the Viewed Pairing, and a Use this device made. A **remote** Use
- * raises nothing, because nothing new exists and chasing it would cost the
- * reader their place to show them a row they already had.
+ * any other, and neither is an arrival. So the causes are named at the source
+ * instead, and [SharepasteViewModel.headMoves] carries what each one calls for.
  *
- * `animateScrollToItem(0)` *is* the "has it left the viewport" check: it does
- * nothing when the top is already in view and follows the row when it is not.
- * No viewport arithmetic, and the two cases the old rule existed to exclude —
- * deleting the newest row, switching the Viewed Pairing — stay excluded for
- * free, because neither is an arrival or a Use.
+ * **Nor is it "did something arrive".** That was this effect's rule until ADR
+ * 0019, and it never once fired at an open: `EntryAdded` has one site and it is
+ * inside the live SSE receive loop, while the **Catch-Up** that runs when a
+ * phone is opened announces its whole burst as a single `HistoryChanged`. So
+ * Entries that landed while the phone was away reached this screen as a
+ * wholesale list replacement that left the **Place** exactly where it was — new
+ * rows above the reader and no sign that anything had happened. The rule is now
+ * about the open, which is the moment nobody's place is worth keeping: mid
+ * session an arrival moves nothing at all.
+ *
+ * **`requestScrollToItem(0)` at an open, and not `scrollToItem(0)`.** Both are
+ * jumps, and the difference is which list they land on. A `LazyColumn` keeps a
+ * person on the row they were on by remembering the key at the top and looking it
+ * up again in the next list — which is the whole reason an arrival used to leave
+ * the Place alone. `scrollToItem` forces a remeasure of the list that is on
+ * screen *now*, so at an open it would jump the pre-Catch-Up rows, record the old
+ * head's key, and then be dragged straight back down when the new rows compose
+ * above it. `requestScrollToItem` asks for index 0 at the next remeasure and
+ * forgets the key, so the one measure that matters is the one carrying the rows
+ * the Catch-Up found. The state holder emits only after those rows are in the
+ * snapshot; this is the half that makes the order it cannot see irrelevant.
+ *
+ * `animateScrollToItem(0)` for a Use this phone made, because there the motion
+ * *is* the message — and an animation needs no such care: it spans frames and
+ * converges on index 0 whatever the list does under it. Either motion is also the
+ * "has it left the viewport" check, since the destination is index 0 and both do
+ * nothing when the top is already in view. The two cases the old rule existed to
+ * exclude — deleting the newest row, a remote Use — stay excluded for free,
+ * because neither is named at the source.
  */
 @Composable
-private fun TheNewHeadStaysInView(headMoves: Flow<Long>, rows: LazyListState) {
+private fun TheListGetsToTheHead(headMoves: Flow<HeadMove>, rows: LazyListState) {
     LaunchedEffect(headMoves, rows) {
-        headMoves.collect { rows.animateScrollToItem(0) }
+        headMoves.collect { move ->
+            when (move) {
+                HeadMove.Jump -> rows.requestScrollToItem(0)
+                HeadMove.Follow -> rows.animateScrollToItem(0)
+            }
+        }
+    }
+}
+
+/**
+ * Somebody who has moved the list has a **Place**, and the open's jump is over.
+ *
+ * The second half of [TheListGetsToTheHead]'s gate, reported upwards because the
+ * two facts the rule composes sit on opposite sides of this seam: only the state
+ * holder knows a foreground has just begun, and only this `LazyListState` knows a
+ * finger has been on the list. Why a hand is the edge at all is [OpenJump]'s
+ * argument, not this one's.
+ *
+ * **A drag and not [LazyListState.isScrollInProgress].** That flag is also true
+ * while this very effect is scrolling, so reading it would have let the screen's
+ * own jump report a hand that was never there — and one such report would close
+ * the gate on every open that followed. A fling is a hand's doing too and is
+ * covered: it can only follow a drag.
+ *
+ * The interactions are collected rather than read as state, because this is an
+ * edge and not a value: `collectIsDraggedAsState` would recompose twice per drag
+ * to hold a `Boolean` nothing on screen draws. [rememberUpdatedState] keeps the
+ * report current without restarting the collection, since a fresh `AppActions`
+ * every recomposition is what a caller that builds one inline hands over.
+ *
+ * Nothing about *where* the list is crosses this boundary. A Place is one
+ * surface's own and is recorded nowhere (CONTEXT.md), so what goes up is that
+ * the list moved and not a single index.
+ */
+@Composable
+private fun AHandOnTheListKeepsItsPlace(rows: LazyListState, onHand: () -> Unit) {
+    val report by rememberUpdatedState(onHand)
+    LaunchedEffect(rows) {
+        rows.interactionSource.interactions.collect {
+            if (it is DragInteraction.Start) report()
+        }
     }
 }
 

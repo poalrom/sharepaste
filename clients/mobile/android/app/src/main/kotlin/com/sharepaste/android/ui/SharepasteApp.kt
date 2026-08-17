@@ -72,6 +72,18 @@ class AppActions(
      * queue this acts on is the one the row is a row of.
      */
     val resend: (Entry) -> Unit,
+    /**
+     * A hand moved the list.
+     *
+     * The one member that reports a fact rather than asking for something. It
+     * spends the open's jump (ADR 0019): somebody who has scrolled has a
+     * **Place**, and the Catch-Up that lands after them must not cost them it.
+     *
+     * It says *that* the list moved and never where to. A Place is one surface's
+     * own and is recorded nowhere (CONTEXT.md), so the `LazyListState` stays
+     * inside [HistoryScreen] and this carries no position across the seam.
+     */
+    val handOnTheList: () -> Unit,
     val dismissNotice: () -> Unit,
     // -- the Pairings screen ------------------------------------------------
     val openPairings: () -> Unit,
@@ -128,6 +140,7 @@ fun appActions(
     recall = model::recall,
     deleteEntry = model::deleteEntry,
     resend = model::resend,
+    handOnTheList = model::handOnTheList,
     dismissNotice = model::dismissNotice,
     openPairings = model::openPairings,
     openHistory = model::openHistory,
@@ -171,17 +184,18 @@ fun appActions(
  * the same void (`themes.xml`), so the inset costs no visible seam.
  *
  * [headMoves] is the state holder's one event stream that is not a [Receipt]:
- * the ids of Entries that have taken the head of the History and that the list
- * should follow there. It is passed rather than read, for the reason everything
- * else here is — no composable sees the state holder — and it defaults to
- * nothing, so a screen rendered to be read composes without one.
+ * how the list should get to the head of the History when something has put a
+ * row there — a jump at an open, a follow for a **Use** this phone made. It is
+ * passed rather than read, for the reason everything else here is — no
+ * composable sees the state holder — and it defaults to nothing, so a screen
+ * rendered to be read composes without one.
  */
 @Composable
 fun SharepasteApp(
     state: UiState,
     actions: AppActions,
     modifier: Modifier = Modifier,
-    headMoves: Flow<Long> = emptyFlow(),
+    headMoves: Flow<HeadMove> = emptyFlow(),
 ) {
     SharepasteTheme {
         Surface(modifier = modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {

@@ -24,8 +24,10 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeUp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.sharepaste.android.ui.HeadMove
 import com.sharepaste.android.ui.HistoryScreen
 import com.sharepaste.android.ui.Notice
 import com.sharepaste.android.ui.SessionPhase
@@ -83,13 +85,28 @@ import org.junit.runner.RunWith
  *    guessing from the Preview can do.
  *  * Origin is shown only for an Entry that came from another Device.
  *
- * And **where the list is** when a row takes the head, which the desktop never
- * had to answer because its History was a pane beside a detail view rather than
- * the whole screen. Here it is the screen, the first row is the one
- * `RECALL FIRST` hands over, and four bands above the list can each appear and
- * push that row under the top of the viewport. So an Entry that arrives has to
- * come to the person — and nothing else may move the list, because a viewport
- * that jumps while somebody is reading loses their place for them.
+ * And **the Place** — where the list is — when a row takes the head, which the
+ * desktop never had to answer because its History was a pane beside a detail
+ * view rather than the whole screen. Here it is the screen, the first row is the
+ * one `RECALL FIRST` hands over, and four bands above the list can each appear
+ * and push that row under the top of the viewport. Two things move it and no
+ * others (ADR 0019): the jump a phone that was away is owed at an open, and a
+ * **Use** this phone made. An arrival mid-session moves nothing, which is the
+ * assertion this file used to make in reverse.
+ *
+ * The motions arrive as [HeadMove]s, so the cases here are about what the screen
+ * does with each one. *Which* cause raises which is the state holder's, and its
+ * gate — armed at an open, spent by the first change or the first hand — is
+ * pinned on the JVM by `OpenJumpTest`, where a sequence can be stated without a
+ * device.
+ *
+ * **What is deliberately not asserted here is jump-versus-animation.** Both end
+ * at index 0, so telling them apart means counting frames rather than reading
+ * behaviour, and a test that passes or fails on how many frames a scroll takes
+ * is a test about Compose. What *is* asserted is that the screen's own motion is
+ * not mistaken for a hand, which is the failure that reading
+ * `isScrollInProgress` would have caused: one programmatic scroll and every
+ * later open would silently stop jumping.
  *
  * And **the Filter**, which is the one control on this screen that changes what
  * the list is rather than what it says: the rows it leaves, the count beside
@@ -138,16 +155,25 @@ class HistoryListTest {
     private val typed = mutableListOf<String>()
 
     /**
-     * The state holder's own scroll signal, driven by hand.
+     * How many times the screen has reported that a hand moved the list.
      *
-     * The list follows the head on an **arrival** and on a **Use this device
-     * made**, and on nothing else — so a test that could only change the state
-     * could not tell those apart from a remote Use, which is exactly the
-     * distinction the rule exists for. Configured as the state holder
-     * configures it, so a signal raised before the screen collects is dropped
-     * here too.
+     * The one member of `AppActions` that reports a fact rather than asking for
+     * something, and the reason it is counted rather than merely observed: it is
+     * what spends the open's jump, so a screen that raised it for its own scrolls
+     * would close the gate on somebody who never touched anything.
      */
-    private val headMoves = MutableSharedFlow<Long>(
+    private var hands = 0
+
+    /**
+     * The state holder's own motion signal, driven by hand.
+     *
+     * Two motions and nothing else moves the list (ADR 0019), so a test that
+     * could only change the state could not tell either of them from a remote
+     * Use, from a delete or from an arrival — which is exactly the set of
+     * distinctions the rule is made of. Configured as the state holder configures
+     * it, so a motion raised before the screen collects is dropped here too.
+     */
+    private val headMoves = MutableSharedFlow<HeadMove>(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
@@ -163,6 +189,7 @@ class HistoryListTest {
                         recall = { recalled += it.id },
                         deleteEntry = { deleted += it.id },
                         resend = { resent += it.id },
+                        handOnTheList = { hands++ },
                     ),
                     headMoves = headMoves,
                 )
@@ -176,12 +203,24 @@ class HistoryListTest {
     }
 
     /**
-     * A row took the head, and the list should follow it there.
+     * A phone that was away opened, and its first Catch-Up found something.
      *
-     * What the state holder emits from `EntryAdded` and from its own `recall`.
+     * What the state holder emits from the first `HistoryChanged` of a
+     * foreground, and from a Viewed Pairing switch.
      */
-    private fun headMovedTo(id: Long) {
-        headMoves.tryEmit(id)
+    private fun jump() {
+        headMoves.tryEmit(HeadMove.Jump)
+        compose.waitForIdle()
+    }
+
+    /**
+     * A **Use this phone made** put a row at the head.
+     *
+     * What the state holder emits from its own `recall`, and the one motion that
+     * outlives the open.
+     */
+    private fun follow() {
+        headMoves.tryEmit(HeadMove.Follow)
         compose.waitForIdle()
     }
 
@@ -985,38 +1024,78 @@ class HistoryListTest {
     }
 
     /**
-     * An Entry that arrives while somebody is twenty rows down is not an Entry
-     * they should have to go looking for.
+     * A phone that was away opens at the head.
      *
-     * This is the whole point of the rule. The first row is the one
-     * `RECALL FIRST` will hand over, and the distance to it is not fixed: the
-     * pending band, the divergence band, the blocked-notifications note and a
-     * notice can each be there or not, and each one pushes index 0 further
-     * under the top of the viewport. An Offer made from this phone has to leave
-     * its own row visible, or the person presses the verb bar on something they
-     * cannot see.
+     * The case ADR 0019 exists for, and the one this screen never used to
+     * answer. Somebody left the list twenty rows down, put the phone in a
+     * pocket, and five Entries landed while it was closed — the composition
+     * survives `onStop`, so the **Place** survived with it and they came back to
+     * new rows above them with nothing saying so. Nobody's place was worth
+     * keeping at that moment: nothing was under their eyes, and whether anything
+     * happened is what they opened the phone to find out.
      *
      * **Without the effect this fails outright**, and not marginally: nothing
-     * else on the screen holds the `LazyListState`, so a prepend leaves the
-     * list exactly where the scroll to index 20 put it, and Entry 41 sits at
-     * index 0 twenty-one rows above the viewport — where a `LazyColumn`
+     * else on the screen holds the `LazyListState`, so a wholesale replacement
+     * leaves the list exactly where the scroll to index 20 put it, and Entry 45
+     * sits at index 0 twenty-one rows above the viewport — where a `LazyColumn`
      * composes nothing, so `awaitRow` times out with no node to fetch rather
      * than fetching one that is off screen.
      */
     @Test
-    fun a_new_entry_brings_the_top_of_the_list_back_into_view() {
+    fun a_phone_that_was_away_opens_at_the_head() {
         show(history(40L downTo 1L))
         scrollTo(readingIndex)
         compose.onNodeWithTag(entryRowTag(20)).assertIsDisplayed()
         compose.onNodeWithTag(entryRowTag(40)).assertDoesNotExist()
 
-        // The Offer lands: the list grows and the state holder says an Entry
-        // arrived. Nobody touches the screen between here and the assertion.
-        show(history(41L downTo 1L))
-        headMovedTo(41)
+        // The open's first Catch-Up: five Entries at once, ingested under one
+        // database guard and announced as one change. Nobody has touched the
+        // list, so the gate still has its jump to spend.
+        show(history(45L downTo 1L))
+        jump()
 
+        awaitRow(45)
+        Evidence.log("open          = five Entries landed while the phone was away; the list is at the head")
+    }
+
+    /**
+     * An Entry from **another Device** that arrives while somebody is reading does
+     * not move them.
+     *
+     * The assertion this file used to make in reverse, and the half of ADR 0019
+     * that costs something: a phone left open on the table is a phone whose list
+     * is quietly stale until the next open or the next scroll up. No band and no
+     * chip is bought to cover it — ADR 0002 charges rent for chrome that only
+     * informs and ADR 0007 rules out a notification — because chasing the row
+     * would cost a reader their place to show them something they can reach by
+     * scrolling.
+     *
+     * The state grows and **nothing is emitted at all**. The mutant this kills is
+     * any rule derived from the list — head id, head identity, length — every one
+     * of which fires here. An Entry *this phone* captured is the other case and is
+     * not this one: a Capture is a **Use**, so an Offer still follows its own row
+     * to the head, which is what
+     * [a_use_this_device_made_follows_the_row_to_the_head] covers. Which of the
+     * two an `EntryAdded` is, is the state holder's to decide from the Origin.
+     */
+    @Test
+    fun an_entry_arriving_mid_session_leaves_the_reader_alone() {
+        show(history(40L downTo 1L))
+        scrollTo(readingIndex)
+        compose.onNodeWithTag(entryRowTag(20)).assertIsDisplayed()
+        compose.onNodeWithTag(entryRowTag(40)).assertDoesNotExist()
+
+        // The Entry lands over the live stream, twenty-one rows above the reader.
+        show(history(41L downTo 1L))
+
+        compose.onNodeWithTag(entryRowTag(20)).assertIsDisplayed()
+        compose.onNodeWithTag(entryRowTag(41)).assertDoesNotExist()
+
+        // And the list can still move, so the two assertions above are about the
+        // rule and not about an effect that does nothing.
+        jump()
         awaitRow(41)
-        Evidence.log("arrival       = Entry 41 landed 21 rows above the reader and came into view")
+        Evidence.log("mid-session   = Entry 41 landed above the reader and Entry 20 stayed under them")
     }
 
     /**
@@ -1030,9 +1109,10 @@ class HistoryListTest {
      * refetches, and this phone's head changes with nothing new in the list.
      *
      * Chasing it costs the reader their place to show them a row they already
-     * had, so nothing is emitted and nothing moves. **The mutant this kills** is
-     * any rule derived from the list itself — head id, head identity, list
-     * length — because every one of them fires here.
+     * had, so nothing is emitted and nothing moves — mid-session and at an open
+     * alike, where it is the Catch-Up rather than the cause that is answered.
+     * **The mutant this kills** is any rule derived from the list itself — head
+     * id, head identity, list length — because every one of them fires here.
      */
     @Test
     fun a_use_on_another_device_reorders_the_list_and_leaves_the_reader_alone() {
@@ -1048,20 +1128,24 @@ class HistoryListTest {
         compose.onNodeWithTag(entryRowTag(20)).assertIsDisplayed()
 
         // And the list can still move, so the two assertions above are about
-        // this reorder and not about an effect that does nothing.
-        show(history(listOf(41L, 7L) + (40L downTo 8L) + (6L downTo 1L)))
-        headMovedTo(41)
-        awaitRow(41)
-        Evidence.log("remote use    = the head changed, Entry 20 stayed; an arrival still scrolls")
+        // this reorder and not about an effect that does nothing: the same row
+        // at the head by a Use *this* phone made is followed there.
+        follow()
+        awaitRow(7)
+        Evidence.log("remote use    = the head changed, Entry 20 stayed; our own Use still scrolls")
     }
 
     /**
      * A **Use this device made** follows the row.
      *
-     * The other half of the pair, and the reason the signal carries the id
-     * rather than being derived: the core cannot say whose Use it was —
-     * `HistoryChanged` carries only a `user_id` — but the state holder can,
-     * because `recall` knows the Entry it just passed.
+     * The other half of the pair, and the reason the motion is carried rather
+     * than derived: the core cannot say whose Use it was — `HistoryChanged`
+     * carries only a `user_id` — but the state holder can, because `recall` knows
+     * the Entry it just passed.
+     *
+     * It is also the one motion that outlives the open (ADR 0019), and the one
+     * that still animates: the person did something, a row moved because of it,
+     * and the animation is what says those are the same fact.
      *
      * `animateScrollToItem(0)` *is* the "has it left the viewport" check: the
      * recalled row always lands at index 0, so following it is a no-op when the
@@ -1076,7 +1160,7 @@ class HistoryListTest {
         // The row under the reader's thumb is recalled here. The same forty
         // Entries in a new order, and the state holder says it was ours.
         show(history(listOf(20L) + (40L downTo 21L) + (19L downTo 1L)))
-        headMovedTo(20)
+        follow()
 
         awaitRow(20)
         Evidence.log("own use       = Entry 20 took the head and the list followed it there")
@@ -1109,42 +1193,74 @@ class HistoryListTest {
         compose.onNodeWithTag(entryRowTag(20)).assertIsDisplayed()
         compose.onNodeWithTag(entryRowTag(39)).assertDoesNotExist()
 
-        show(history(listOf(41L) + (39L downTo 1L)))
-        headMovedTo(41)
-        awaitRow(41)
-        Evidence.log("deletion      = the head left, Entry 20 stayed; an arrival still scrolls")
+        // And the list can still move, so this is a reading of the rule and not
+        // of an effect that does nothing.
+        follow()
+        awaitRow(39)
+        Evidence.log("deletion      = the head left, Entry 20 stayed; our own Use still scrolls")
     }
 
     /**
-     * A list somebody has not read a word of is not somewhere to drag them to
-     * the top of.
+     * Switching the Viewed Pairing gives up the Place.
      *
-     * Switching the Viewed Pairing replaces every Entry at once, so the head
-     * changes for a fourth distinct reason and shares no id with what was there
-     * before. The `LazyColumn` keeps its index because that is all it has to go
-     * on, and the new Pairing therefore opens roughly where the last one was
-     * left. That is not ideal and it is not this effect's business: what matters
-     * is that nothing here adds a *deliberate* jump on top of it. Somebody who
-     * switched Pairings to look for something is about to scroll anyway;
-     * somebody the app has yanked to the top has lost the only reference point
-     * they had for where they already were.
+     * It replaces every Entry at once, so the head changes for a reason that
+     * shares no id with what was there before, and the row somebody was reading
+     * is not in the list any more. The `LazyColumn` keeps its index because that
+     * is all it has to go on, which used to leave the new Pairing opening roughly
+     * where the last one was left — a place in one History applied to another.
+     * ADR 0019 stopped conceding that: the cause is named at the source, like
+     * every other cause this screen acts on, and it jumps.
+     *
+     * A jump and not a follow, for the same reason the open is one: nothing
+     * changed under anybody's eyes, because what was under them is gone.
      */
     @Test
-    fun switching_the_viewed_pairing_does_not_drag_the_reader_to_the_top() {
+    fun switching_the_viewed_pairing_gives_up_the_place() {
         show(history(40L downTo 1L))
         scrollTo(readingIndex)
         compose.onNodeWithTag(entryRowTag(20)).assertIsDisplayed()
 
         // A different Pairing's Entries, sharing no id with the ones on screen.
         show(history(140L downTo 101L))
+        jump()
 
-        compose.onNodeWithTag(entryRowTag(140)).assertDoesNotExist()
-        compose.onNodeWithTag(entryRowTag(120)).assertIsDisplayed()
+        awaitRow(140)
+        compose.onNodeWithTag(entryRowTag(120)).assertDoesNotExist()
+        Evidence.log("switch        = a wholly new list opened at its own head")
+    }
 
-        show(history(listOf(141L) + (140L downTo 101L)))
-        headMovedTo(141)
-        awaitRow(141)
-        Evidence.log("switch        = a wholly new list did not jump to its own index 0")
+    /**
+     * A drag on the list is reported, and the screen's own scrolling is not.
+     *
+     * Both halves in one case because the pair is the decision. A hand is what
+     * spends the open's jump — there is no clock in the gate, because ADR 0007
+     * makes an open with no signal the nominal case and a late Catch-Up must
+     * still reach somebody who has not touched anything. So the report has to
+     * fire for a finger and must **not** fire for this screen's own motion:
+     * `LazyListState.isScrollInProgress` is true during both, and reading it
+     * would have let one programmatic scroll close the gate on every open that
+     * followed. A drag interaction is the honest reading, and a fling is covered
+     * because a fling can only follow a drag.
+     */
+    @Test
+    fun a_finger_on_the_list_is_a_hand_and_the_screens_own_motion_is_not() {
+        show(history(40L downTo 1L))
+
+        // Semantics-driven, which is how every other case here moves the list:
+        // it reaches `scrollToItem` without a pointer anywhere near the screen.
+        scrollTo(readingIndex)
+        follow()
+        awaitRow(40)
+        assertEquals(
+            "the screen's own scrolling is not a hand. Reported as one, the first jump of a " +
+                "foreground would close the gate on the Catch-Up it was armed for",
+            0,
+            hands,
+        )
+
+        compose.onNodeWithTag(TAG_HISTORY_LIST).performTouchInput { swipeUp() }
+        compose.waitUntil(5_000) { hands > 0 }
+        Evidence.log("a hand        = a drag reported one; a semantics scroll and a follow reported none")
     }
 
     // -- the Filter -----------------------------------------------------------
