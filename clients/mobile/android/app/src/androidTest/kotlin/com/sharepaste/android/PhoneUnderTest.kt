@@ -10,6 +10,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.test.platform.app.InstrumentationRegistry
 import com.sharepaste.android.platform.UiPreferences
+import com.sharepaste.android.ui.HeadMove
 import com.sharepaste.android.ui.HistoryScreen
 import com.sharepaste.android.ui.PairingsScreen
 import com.sharepaste.android.ui.Receipt
@@ -85,6 +86,28 @@ class PhoneUnderTest private constructor(
     val receipts: List<Receipt> get() = synchronized(seen) { seen.toList() }
 
     private val seen = mutableListOf<Receipt>()
+
+    /**
+     * Every motion the state holder asked the list to make, oldest first.
+     *
+     * The [Receipt]s' neighbour, collected for the same reason: a `SharedFlow`
+     * replays nothing, so a motion raised before anything subscribed is gone. It
+     * is what makes the *join* assertable — `OpenJumpTest` pins the gate's
+     * sequence and `HistoryListTest` pins what the screen does with a
+     * [HeadMove], and neither can say that a real open of a real phone raises
+     * one.
+     *
+     * This is a second subscriber beside the screen's own, not a substitute for
+     * it: [open] hands `model.headMoves` to the real [HistoryScreen] as
+     * `MainActivity` does, and both collectors see every emission. The state
+     * holder's `DROP_OLDEST` buffer of one is left as it is, so two motions
+     * raised inside one animation would be dropped here exactly as they would be
+     * on a phone — which no test here arranges, and which is the state holder's
+     * decision to change if one ever needs to.
+     */
+    val headMoves: List<HeadMove> get() = synchronized(moved) { moved.toList() }
+
+    private val moved = mutableListOf<HeadMove>()
 
     /** Pair with a short code the other device minted, exactly as a scan does. */
     fun pairWithCode(inviter: Inviter, label: String): String {
@@ -195,6 +218,23 @@ class PhoneUnderTest private constructor(
             )
         }
         return receipts.first(predicate)
+    }
+
+    /**
+     * Wait for the state holder to ask the list to move, and hand the motion back.
+     *
+     * The motion of an open arrives *after* the rows it is about — the state
+     * holder emits once `refreshHistory` has written them — so
+     * `await { entries.size == n }` can return a moment before it. Waiting for
+     * the snapshot and then reading [headMoves] would read it too early.
+     */
+    fun awaitHeadMove(what: String, timeoutSeconds: Long = TIMEOUT_SECONDS): HeadMove {
+        try {
+            compose.waitUntil(timeoutSeconds * 1_000) { headMoves.isNotEmpty() }
+        } catch (e: Throwable) {
+            throw AssertionError("$what: nothing moved the list in ${timeoutSeconds}s", e)
+        }
+        return headMoves.last()
     }
 
     /**
@@ -310,6 +350,12 @@ class PhoneUnderTest private constructor(
             model.viewModelScope.launch {
                 model.receipts.collect { synchronized(phone.seen) { phone.seen += it } }
             }
+            // The same argument, and the same looper. A motion raised by the
+            // Catch-Up of the first `enterForeground` a test drives would
+            // otherwise be gone before anything could read it.
+            model.viewModelScope.launch {
+                model.headMoves.collect { synchronized(phone.moved) { phone.moved += it } }
+            }
             compose.setContent {
                 SharepasteTheme {
                     val state by model.state.collectAsStateWithLifecycle()
@@ -317,7 +363,14 @@ class PhoneUnderTest private constructor(
                     when (state.screen) {
                         // See the class comment: the camera flow would take window
                         // focus and with it every clipboard read.
-                        Screen.Pairing, Screen.History -> HistoryScreen(state, actions)
+                        //
+                        // `headMoves` is passed because `MainActivity` passes it.
+                        // Left defaulted, this harness rendered the one screen
+                        // whose whole behaviour under ADR 0019 is driven by it
+                        // with an `emptyFlow()` — a wiring a test cannot see is
+                        // exactly what this class exists to refuse.
+                        Screen.Pairing, Screen.History ->
+                            HistoryScreen(state, actions, headMoves = model.headMoves)
                         Screen.Pairings -> PairingsScreen(state, actions)
                     }
                 }
