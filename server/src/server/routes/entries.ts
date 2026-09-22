@@ -21,15 +21,19 @@ export const registerEntryRoutes = (app: FastifyInstance): void => {
         app.deps.maxEntries,
         app.deps.maxEntryAgeMs
       );
-      app.deps.hub.publish(auth.user_id, {
-        type: "entry",
-        id: row.id,
-        ciphertext: row.ciphertext_b64,
-        created_at: row.created_at,
-        device_id: auth.device_id,
-        seq: row.seq,
-        last_use: row.last_use,
-      });
+      // A replay was fanned out when it was first taken, and every device has had
+      // the chance to fetch it since; a second frame would be news of nothing.
+      if (!row.replayed) {
+        app.deps.hub.publish(auth.user_id, {
+          type: "entry",
+          id: row.id,
+          ciphertext: row.ciphertext_b64,
+          created_at: row.created_at,
+          device_id: auth.device_id,
+          seq: row.seq,
+          last_use: row.last_use,
+        });
+      }
       return reply.send({
         id: row.id,
         created_at: row.created_at,

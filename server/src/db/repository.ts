@@ -1,3 +1,4 @@
+import { sha256Hex } from "../crypto.js";
 import type { Db } from "./index.js";
 
 export interface UserRow {
@@ -171,17 +172,39 @@ export class Repository {
   }
 
   readonly entries = {
+    /**
+     * Stores a captured Entry, or answers the one this exact upload already made.
+     *
+     * **A retried upload is not a second Entry.** When the reply to a POST is lost,
+     * the client cannot know the relay took it, and sends the same act again. It
+     * sends the same bytes: every capture is sealed under a fresh random nonce, so
+     * one user's ciphertext names one act, and a match is that act arriving twice.
+     * `replayed` is true then, and nothing is inserted, pruned or re-stamped — the
+     * answer is the row as it stands, which is what the lost reply would have said
+     * plus any use since.
+     */
     insertAndPrune: (
       row: Omit<EntryRow, "id" | "seq" | "last_use">,
       maxCount: number,
       maxAgeMs: number
-    ): EntryRow => {
+    ): EntryRow & { replayed: boolean } => {
       const tx = this.db.transaction(() => {
+        const hash = sha256Hex(row.ciphertext_b64);
+        const taken = this.db
+          .prepare(
+            `SELECT id, user_id, device_id, ciphertext_b64, size, created_at, last_use, seq
+             FROM entries
+             WHERE user_id = ? AND ciphertext_sha256 = ? AND ciphertext_b64 = ?
+             ORDER BY id LIMIT 1`
+          )
+          .get(row.user_id, hash, row.ciphertext_b64) as EntryRow | undefined;
+        if (taken) return { ...taken, replayed: true };
         const seq = this.nextSeq(row.user_id);
         const result = this.db
           .prepare(
-            `INSERT INTO entries (user_id, device_id, ciphertext_b64, size, created_at, last_use, seq)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`
+            `INSERT INTO entries
+               (user_id, device_id, ciphertext_b64, size, created_at, last_use, seq, ciphertext_sha256)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .run(
             row.user_id,
@@ -190,7 +213,8 @@ export class Repository {
             row.size,
             row.created_at,
             row.created_at,
-            seq
+            seq,
+            hash
           );
         const id = Number(result.lastInsertRowid);
         // Both caps read `last_use`, so ciphertext you keep recalling never ages
@@ -212,7 +236,7 @@ export class Repository {
                )`
           )
           .run(row.user_id, row.created_at - maxAgeMs, row.user_id, maxCount);
-        return { id, ...row, last_use: row.created_at, seq };
+        return { id, ...row, last_use: row.created_at, seq, replayed: false };
       });
       return tx();
     },

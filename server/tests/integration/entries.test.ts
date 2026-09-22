@@ -22,6 +22,61 @@ describe("POST /entries", () => {
       expect(repo.entries.countForUser(a.user_id)).toBe(1);
     }));
 
+  /**
+   * The reply to an upload can be lost after the relay stored it, and the client
+   * then sends the same act again. It is the same bytes — every capture is sealed
+   * under a fresh nonce — so the retry has to answer the entry the first attempt
+   * made, and fan out nothing: a second row would be the same text twice on every
+   * device.
+   */
+  it("answers a retried upload with the entry it already made", async () => {
+    const hub = new SseHub();
+    const frames: SseEvent[] = [];
+    await withApp(
+      async ({ app, repo }) => {
+        const a = await provisionDevice(repo);
+        hub.subscribe(a.user_id, (e) => frames.push(e));
+        const post = async (text: string) => {
+          const res = await app.inject({
+            method: "POST",
+            url: "/entries",
+            headers: { authorization: `Bearer ${a.device_token}` },
+            payload: { ciphertext: cipherB64(text) },
+          });
+          expect(res.statusCode).toBe(200);
+          return res.json() as { id: number; created_at: number; seq: number; last_use: number };
+        };
+
+        const first = await post("sealed once");
+        const retry = await post("sealed once");
+        expect(retry).toEqual(first);
+        expect(repo.entries.countForUser(a.user_id)).toBe(1);
+        expect(frames).toHaveLength(1);
+
+        const other = await post("sealed again");
+        expect(other.id).not.toBe(first.id);
+        expect(repo.entries.countForUser(a.user_id)).toBe(2);
+      },
+      { hub }
+    );
+  });
+
+  it("does not take one user's bytes for another user's upload", () =>
+    withApp(async ({ app, repo }) => {
+      const a = await provisionDevice(repo);
+      const b = await provisionDevice(repo, "bob");
+      for (const who of [a, b]) {
+        await app.inject({
+          method: "POST",
+          url: "/entries",
+          headers: { authorization: `Bearer ${who.device_token}` },
+          payload: { ciphertext: cipherB64("same bytes") },
+        });
+      }
+      expect(repo.entries.countForUser(a.user_id)).toBe(1);
+      expect(repo.entries.countForUser(b.user_id)).toBe(1);
+    }));
+
   it("rejects without auth", () =>
     withApp(async ({ app }) => {
       const res = await app.inject({

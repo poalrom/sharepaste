@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { sha256Hex } from "../../src/crypto.js";
 import { cipherB64, openRawTempDb, openTempDb, type TempDb } from "../helpers.js";
 import { migrate } from "../../src/db/migrate.js";
 
@@ -142,6 +143,14 @@ describe("maintenance.sweep", () => {
     expect(indexes).not.toContain("entries_user_id_id");
     expect(indexes).toContain("entries_user_id_seq");
     expect(indexes).toContain("entries_user_last_use");
+    expect(indexes).toContain("entries_user_ciphertext_sha256");
+
+    // Hashed on the upgrade, so a retry of an upload the old relay took is still
+    // recognised by the new one.
+    const hashes = db
+      .prepare("SELECT ciphertext_b64, ciphertext_sha256 FROM entries ORDER BY id")
+      .all() as Array<{ ciphertext_b64: string; ciphertext_sha256: string }>;
+    for (const row of hashes) expect(row.ciphertext_sha256).toBe(sha256Hex(row.ciphertext_b64));
 
     // The counter has to start above every sequence the backfill handed out, or
     // the first capture after the upgrade would wear one a client had passed.

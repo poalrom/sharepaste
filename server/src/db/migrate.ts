@@ -1,3 +1,4 @@
+import { sha256Hex } from "../crypto.js";
 import type { Db } from "./index.js";
 
 const SCHEMA = `
@@ -51,7 +52,8 @@ CREATE TABLE IF NOT EXISTS entries (
   -- add a NOT NULL column without a default, so an installed database would
   -- otherwise end at a different shape from a fresh one.
   last_use       INTEGER NOT NULL DEFAULT 0,
-  seq            INTEGER NOT NULL DEFAULT 0
+  seq            INTEGER NOT NULL DEFAULT 0,
+  ciphertext_sha256 TEXT
 );
 `;
 
@@ -124,6 +126,19 @@ export const migrate = (db: Db): void => {
     // seeded from them starts above anything that client has already fetched.
     db.exec("UPDATE entries SET seq = id WHERE seq = 0");
   }
+  if (!entries.has("ciphertext_sha256")) {
+    db.exec("ALTER TABLE entries ADD COLUMN ciphertext_sha256 TEXT");
+    // Bounded by the retention caps, and paid once, on the upgrade that adds the
+    // column: SQLite has no SHA-256, so this cannot be a single UPDATE.
+    const rows = db.prepare("SELECT id, ciphertext_b64 FROM entries").all() as Array<{
+      id: number;
+      ciphertext_b64: string;
+    }>;
+    const update = db.prepare("UPDATE entries SET ciphertext_sha256 = ? WHERE id = ?");
+    db.transaction(() => {
+      for (const row of rows) update.run(sha256Hex(row.ciphertext_b64), row.id);
+    })();
+  }
   if (!columnsOf(db, "users").has("next_seq")) {
     db.exec("ALTER TABLE users ADD COLUMN next_seq INTEGER NOT NULL DEFAULT 0");
   }
@@ -141,6 +156,12 @@ export const migrate = (db: Db): void => {
   // first, and on an installed database the columns they name do not exist yet.
   db.exec("DROP INDEX IF EXISTS entries_user_id_id");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS entries_user_id_seq ON entries (user_id, seq)");
+  // Not UNIQUE: an installed database may already hold the duplicates a retried
+  // upload made before the relay recognised one.
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS entries_user_ciphertext_sha256
+     ON entries (user_id, ciphertext_sha256)`
+  );
   db.exec(
     `CREATE INDEX IF NOT EXISTS entries_user_last_use
      ON entries (user_id, last_use DESC, id DESC)`
