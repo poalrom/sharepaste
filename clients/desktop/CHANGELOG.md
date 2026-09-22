@@ -7,6 +7,31 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## 0.10.1
+
+**A patch for text that showed up twice in the history.** Nothing is added, and no key or
+pairing is touched. If you have seen one copy turn into two rows, this fixes it and removes the
+extra rows the bug already left behind. The relay has a fix of its own for a rarer cause of the
+same symptom; the app works with an old relay, but update the relay too to get both.
+
+- **A copy no longer shows up twice.** Sometimes something you copied appeared as two rows,
+  one above the other. After the list next reloaded, one of the two dropped to the very bottom
+  and stayed there. The relay sends a new entry back to this machine at the same moment it
+  confirms the upload. When the entry came back first, the app did not recognise it as the
+  copy it had just uploaded and saved it as a second row. The app now recognises it, so one
+  copy is one row.
+- **The extra rows go away on the first launch.** The copies this bug left at the bottom of
+  the history are deleted when the new version starts. The relay still holds each one, so
+  nothing you copied is lost. Copies that are still waiting to upload are not touched.
+- **A lost reply no longer makes a second entry (relay).** If the connection dropped just after
+  the relay saved a copy but before its reply arrived, the app sent the copy again and the relay
+  kept both, so every device showed it twice. The relay now recognises the same upload arriving
+  a second time and answers with the entry it already has. This part is in the relay, not the
+  app, so it takes effect when you update your relay.
+- **The phone gets the same fix.** The code that handles this is shared, so the phone has it
+  too. The phone was much less likely to see the problem, because it only talks to the relay
+  when you open it.
+
 ## 0.10.0
 
 **Android only.** Nothing on this machine changes and the relay is not involved, so if you do
