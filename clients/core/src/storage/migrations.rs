@@ -185,6 +185,26 @@ pub(crate) fn run(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch(ENTRIES_CACHE_INDEXES)?;
     rebuild_pending_uploads(conn)?;
     add_missing_columns(conn, "pending_uploads", PENDING_UPLOADS_ADDED_COLUMNS)?;
+    forget_stranded_captures(conn)?;
+    Ok(())
+}
+
+/// Drop the rows an echo that beat its upload's answer left behind.
+///
+/// Such a row is a capture the relay took and never named here: its act left
+/// the queue, and the relay's id went to a second row the echo made. Un-named
+/// and owing nothing is a state no other path reaches, and the prune exempts
+/// every un-named row, so these sat at the bottom of the History and grew
+/// without bound. The relay holds each one, so nothing is lost.
+fn forget_stranded_captures(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "DELETE FROM entries_cache
+          WHERE relay_id IS NULL
+            AND NOT EXISTS (
+                  SELECT 1 FROM pending_uploads p
+                   WHERE p.user_id = entries_cache.user_id
+                     AND p.local_entry_id = entries_cache.local_id)",
+    )?;
     Ok(())
 }
 
@@ -562,6 +582,34 @@ mod tests {
             "INSERT INTO pending_uploads (user_id, kind, entry_id, captured_at) VALUES ('u','use',42,30)",
         )
         .unwrap();
+    }
+
+    /*
+     * The rows an echo that beat its upload's answer stranded go, and only they:
+     * an un-named row with an act still owed is a capture waiting for the relay.
+     */
+    #[test]
+    fn a_capture_stranded_without_its_act_is_forgotten() {
+        let c = fresh();
+        run(&c).unwrap();
+        c.execute_batch(
+            "INSERT INTO entries_cache (local_id, user_id, relay_id, ciphertext, created_at, device_id)
+               VALUES (1, 'u', NULL, x'01', 0, 'd'),
+                      (2, 'u', 7,    x'01', 5, 'd'),
+                      (3, 'u', NULL, x'02', 0, 'd');
+             INSERT INTO pending_uploads (user_id, kind, local_entry_id, ciphertext, captured_at)
+               VALUES ('u', 'capture', 3, x'02', 9);",
+        )
+        .unwrap();
+        run(&c).unwrap();
+        let left: Vec<i64> = c
+            .prepare("SELECT local_id FROM entries_cache ORDER BY local_id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(left, vec![2, 3], "the stranded row goes; the named and the owed rows stay");
     }
 
     #[test]

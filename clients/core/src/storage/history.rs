@@ -807,6 +807,12 @@ pub(crate) fn store(
             |r| r.get(0),
         )
         .optional()?;
+    if held.is_none() {
+        if let Some(local_id) = in_flight(&tx, e.user_id, e.ciphertext)? {
+            tx.commit()?;
+            return Ok(Stored { local_id, first_insert: false, change: Change::reorder(false) });
+        }
+    }
     tx.execute(
         "INSERT INTO entries_cache
             (user_id, relay_id, ciphertext, plaintext, plaintext_sha256, created_at, last_use, device_id)
@@ -970,6 +976,31 @@ pub(crate) fn plaintext_sha256(text: &str) -> String {
     let mut h = Sha256::new();
     h.update(text.as_bytes());
     HEXLOWER.encode(&h.finalize())
+}
+
+/// The row whose capture the relay has just echoed back before answering it.
+///
+/// The relay fans an Entry out before it replies to the upload, so the echo can
+/// reach [`store`] while [`settle`] is still waiting for the reply. The relay's
+/// id is on no row yet; storing the echo under it made a second row, and left
+/// the capture's own row unable to take the id at settle — the same text twice,
+/// with the first row stranded un-named for good.
+///
+/// Matched on ciphertext, which is exact: the relay stores the bytes verbatim,
+/// and `crypto::encrypt` draws a fresh nonce every call, so no other capture
+/// carries them. Nothing is written — naming the row stays [`settle`]'s job.
+fn in_flight(conn: &Connection, user_id: &str, ciphertext: &[u8]) -> Result<Option<i64>, AppError> {
+    let local_id = conn
+        .query_row(
+            "SELECT local_entry_id FROM pending_uploads
+              WHERE user_id = ?1 AND kind = ?2 AND ciphertext = ?3
+                AND local_entry_id IS NOT NULL
+              LIMIT 1",
+            params![user_id, KIND_CAPTURE, ciphertext],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(local_id)
 }
 
 /// Attach what the relay recorded to the row a capture already created.

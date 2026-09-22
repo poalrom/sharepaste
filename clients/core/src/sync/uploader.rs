@@ -1092,6 +1092,71 @@ mod tests {
         );
     }
 
+    /*
+     * The same echo, arriving the other way round. The relay fans the frame out
+     * before it answers the POST, so on a fast link the session ingests the echo
+     * while the flush is still inside its `await`. The relay's id is not on any
+     * row yet, and an echo that inserted one anyway left the capture's own row
+     * unable to take the id at settle — the same text twice, with the first row
+     * stranded un-named at the bottom of the History for good.
+     *
+     * Driven against a transport that blocks, so the echo provably lands first.
+     */
+    #[tokio::test]
+    async fn an_echo_that_beats_the_upload_answer_does_not_add_a_second_row() {
+        let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
+        paired(&conn).await;
+        let key = crate::testing::test_user_key();
+        let local_id = copied(&conn, "echoed before the answer").await;
+        let sealed = {
+            let c = conn.lock().await;
+            match history::next_act(&c, "u").unwrap().unwrap().kind {
+                ActKind::Capture(ciphertext) => ciphertext,
+                ActKind::Use(_) => unreachable!("a capture was queued"),
+            }
+        };
+
+        let relay = QueueRelay::blocking();
+        let (up, sink) = uploader(conn.clone(), relay.clone());
+        let flush = tokio::spawn(async move { up.flush_once().await });
+        relay.wait_until_parked().await;
+
+        // The relay has taken the act and its echo is here first, ingested exactly
+        // as `run_sse_loop` ingests it.
+        let echoed = {
+            let c = conn.lock().await;
+            crate::sync::decryptor::ingest(
+                &c,
+                &key,
+                "u",
+                &EntryRow {
+                    id: 42,
+                    ciphertext: base64_encode(&sealed),
+                    created_at: crate::now_ms(),
+                    device_id: "this-phone".into(),
+                    seq: 42,
+                    last_use: crate::now_ms(),
+                },
+                crate::now_ms(),
+            )
+            .unwrap()
+        };
+        assert!(
+            !echoed.stored.first_insert,
+            "the echo of an act still in flight is not new, or the session emits a second EntryAdded"
+        );
+        assert_eq!(echoed.stored.local_id, local_id, "and it is the row the capture created");
+
+        relay.release.add_permits(1);
+        flush.await.unwrap().unwrap();
+
+        let rows = cached(&conn).await;
+        assert_eq!(rows.len(), 1, "exactly one row for one capture");
+        assert_eq!(rows[0].local_id, local_id, "and it kept the id both shells key on");
+        assert_eq!(rows[0].relay_id, Some(42), "and the settle named it");
+        assert!(sink.entries().is_empty(), "the Entry was announced at capture, and only then");
+    }
+
     #[tokio::test]
     async fn cancelling_a_session_stops_its_uploader() {
         let conn = Arc::new(Mutex::new(open_in_memory().unwrap()));
