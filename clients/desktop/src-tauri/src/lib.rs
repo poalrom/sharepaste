@@ -4,6 +4,8 @@ pub(crate) mod config;
 pub(crate) mod events;
 pub(crate) mod logging;
 mod popover;
+#[cfg(target_os = "macos")]
+mod popover_focus;
 pub(crate) mod state;
 pub(crate) mod update;
 
@@ -212,6 +214,8 @@ fn open_main_window_impl(
     }
     if let Some(win) = app.get_webview_window(WINDOW_LABEL_MAIN) {
         win.set_focus()?;
+        #[cfg(target_os = "macos")]
+        app.run_on_main_thread(crate::popover_focus::clear)?;
         let _ = app.emit_to(
             WINDOW_LABEL_MAIN,
             crate::events::MAIN_NAVIGATE,
@@ -234,6 +238,8 @@ fn open_main_window_impl(
         .resizable(true)
         .decorations(false)
         .build()?;
+    #[cfg(target_os = "macos")]
+    app.run_on_main_thread(crate::popover_focus::clear)?;
 
     #[cfg(target_os = "macos")]
     {

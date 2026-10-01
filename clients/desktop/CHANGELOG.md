@@ -7,6 +7,12 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
+## Unreleased
+
+- **macOS returns focus after Recall.** Press Enter in the Popover to recall an Entry and return to the previous app.
+  Escape and a hotkey dismissal also return focus.
+  Switching apps or opening the Main Window does not restore the previous app.
+
 ## 0.10.1
 
 **A patch for text that showed up twice in the history.** Nothing is added, and no key or

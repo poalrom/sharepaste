@@ -16,7 +16,7 @@ use sharepaste_core::facade::{HistoryCursor, SettingsPatch};
 use sharepaste_core::storage::settings::Settings;
 use sharepaste_core::sync::ConnectionState;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 /// One Pairing as the frontend lists it.
 ///
@@ -317,10 +317,8 @@ pub async fn open_main_window(
 
 #[tauri::command]
 pub async fn hide_popover(app: AppHandle) -> Result<(), AppError> {
-    if let Some(win) = app.get_webview_window("popover") {
-        win.hide().map_err(|e| AppError::BadInput(e.to_string()))?;
-    }
-    Ok(())
+    crate::popover::dismiss_popover(&app)
+        .map_err(|e| AppError::BadInput(e.to_string()))
 }
 
 /// What the Settings pane needs to render the update row without asking the

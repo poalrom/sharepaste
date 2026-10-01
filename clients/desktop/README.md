@@ -141,6 +141,15 @@ root [`README.md`](../../README.md).
    copy a 1Password password (concealed flag), and verify that nothing reaches the server.
 6. Force-quit during an offline-pending burst, restart; verify the pending
    queue flushes once connectivity returns.
+7. Close the Main Window and focus another app, such as cmux or TextEdit.
+   - Open the Popover with the hotkey and press Enter to recall an Entry.
+   - Confirm that the Popover closes and keyboard input reaches the previous app without a click.
+   - Repeat with Escape and with the hotkey used to dismiss the Popover.
+   - Repeat with the Main Window open behind the previous app.
+   - Use `⌘Enter` to recall an Entry and confirm that the Popover keeps focus.
+   - Switch to a different app while the Popover is open.
+   - Confirm that the Popover closes without restoring focus to the earlier app.
+   - Open History from the Popover and confirm that the Main Window keeps focus.
 
 ## Build tools
 

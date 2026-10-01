@@ -33,6 +33,23 @@ pub(crate) fn build_popover_window(app: &mut tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Dismiss the Popover and return focus only after an explicit dismissal.
+pub(crate) fn dismiss_popover(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let Some(win) = app.get_webview_window(WINDOW_LABEL_POPOVER) else {
+        return Ok(());
+    };
+    #[cfg(target_os = "macos")]
+    let was_visible = win.is_visible()?;
+    win.hide()?;
+    #[cfg(target_os = "macos")]
+    if was_visible {
+        // The window hide and activation use the same event-loop queue.
+        // A focus-loss dismissal must never reactivate the previous app.
+        app.run_on_main_thread(crate::popover_focus::restore)?;
+    }
+    Ok(())
+}
+
 /// Show the popover, or hide it if it is already visible.
 ///
 /// `tray_rect` is the rect Tauri handed us with a tray click, if this toggle
@@ -50,8 +67,7 @@ pub(crate) fn toggle_popover(
         return Ok(());
     };
     if win.is_visible().unwrap_or(false) {
-        win.hide()?;
-        return Ok(());
+        return dismiss_popover(app);
     }
     let rect = tray_rect.or_else(|| {
         if !use_cached {
@@ -90,6 +106,8 @@ pub(crate) fn toggle_popover(
             set_popover_position(&win, popover_pos, scale);
         }
     }
+    #[cfg(target_os = "macos")]
+    crate::popover_focus::remember();
     win.show()?;
     win.set_focus()?;
     Ok(())
