@@ -7,7 +7,9 @@ A section is shown twice — on its release page and in the in-app update prompt
 so write it for someone deciding whether to install, not from the commit log.
 `release-gate` refuses to publish a version that has no section here.
 
-## Unreleased
+## 0.10.2
+
+**macOS focus fix.** Windows and Android behavior is unchanged. No pairing or key changes are required.
 
 - **macOS returns focus after Recall.** Press Enter in the Popover to recall an Entry and return to the previous app.
   Escape and a hotkey dismissal also return focus.
